@@ -492,8 +492,9 @@ class Toolbox:
         if not r.get("ok"):
             errs = r.get("report", {}).get("errors") or [r.get("error", "rejected")]
             return "Rule rejected:\n- " + "\n- ".join(errs)
-        ui.out(ui.green(f"\n  ✓ new reflex: {rule.get('rule')} (when {rule.get('when')})"))
-        return "Rule added; it now runs automatically with no model involved."
+        ui.out(ui.green(f"\n  ✓ proposed reflex: {rule.get('rule')} (when {rule.get('when')})"))
+        return ("Rule saved but off: the human has been asked to turn it on. Once they agree it runs automatically, "
+                "with no model involved.")
 
     def t_answer_plan(self, plan_id: str, text: str) -> str:
         r = self._core("answer", plan_id=plan_id, text=text)
@@ -516,7 +517,7 @@ class Toolbox:
                 "steps": [{"ask": question, "opts": options, "as": "a"},
                           {"think": "The human answered your question \"" + question.replace('"', "'") +
                                     "\": {$a}"}]}
-        self._core("submit", plan=plan, source="human")
+        self._core("submit", plan=plan, source="ai")
         return ("(asked the human; their answer will come back to you as a new message. "
                 "End your turn now.)")
 

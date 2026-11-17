@@ -5,8 +5,9 @@ use crate::host;
 use crate::memory::{now, Memory};
 use crate::verbs::{self, Organs};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Sender;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Rules LinuxAI ships with. They are the starting reflexes for running the machine; the AI adds
 /// its own as it learns, and any of them can be switched off.
@@ -36,13 +37,21 @@ pub fn default_rules() -> Vec<Value> {
 }
 
 pub struct Core {
-    pub mem: Mutex<Memory>,
+    pub mem: Memory,
     pub organs: Box<dyn Organs>,
     pub bus: Bus,
     pub state: Mutex<Value>,
     pub subscribers: Mutex<Vec<Sender<Value>>>,
     pub threshold: f64,
+    /// Run event- and timer-triggered work on its own threads (the daemon) instead of inline (tests).
+    pub background: bool,
+    /// Plans being advanced right now. A plan is only ever advanced by one thread at a time.
+    active: Mutex<HashSet<String>>,
+    /// Recent firings per rule, to stop a rule that keeps triggering itself.
+    rule_fires: Mutex<HashMap<String, Vec<f64>>>,
 }
+
+const RULE_MAX_PER_MINUTE: usize = 10;
 
 impl Core {
     pub fn new(mem: Memory, organs: Box<dyn Organs>) -> Self {
@@ -50,27 +59,70 @@ impl Core {
             mem.insert_rule_if_missing(r["rule"].as_str().unwrap(), &r, "linuxai");
         }
         Core {
-            mem: Mutex::new(mem),
+            mem,
             organs,
             bus: Bus::default(),
             state: Mutex::new(Value::Null),
             subscribers: Mutex::new(Vec::new()),
             threshold: 0.8,
+            background: false,
+            active: Mutex::new(HashSet::new()),
+            rule_fires: Mutex::new(HashMap::new()),
         }
     }
 
     fn with_ctx<T>(&self, f: impl FnOnce(&Ctx) -> T) -> T {
-        let mem = self.mem.lock().unwrap();
         let state = self.state.lock().unwrap().clone();
-        let ctx = Ctx { mem: &mem, organs: self.organs.as_ref(), bus: &self.bus, state: &state, threshold: self.threshold };
-        let out = f(&ctx);
-        drop(mem);
+        let ctx = Ctx { mem: &self.mem, organs: self.organs.as_ref(), bus: &self.bus, state: &state };
+        f(&ctx)
+    }
+
+    fn claim(&self, id: &str) -> bool {
+        self.active.lock().unwrap().insert(id.to_string())
+    }
+
+    fn release(&self, id: &str) {
+        self.active.lock().unwrap().remove(id);
+    }
+
+    /// Load a stored plan and advance it, holding its claim. None if it's busy or doesn't exist.
+    fn advance(&self, id: &str, f: impl FnOnce(&mut Exec, &Ctx)) -> Result<Exec, &'static str> {
+        if !self.claim(id) {
+            return Err("that plan is busy right now; try again in a moment");
+        }
+        let out = self.with_ctx(|ctx| {
+            let mut ex = ctx.mem.load_plan(id).and_then(|p| serde_json::from_value::<Exec>(p).ok()).ok_or("no such plan")?;
+            f(&mut ex, ctx);
+            Ok(ex)
+        });
+        self.release(id);
         out
     }
 
+    /// Run a brand-new plan (claimed for the duration).
+    fn run_new(&self, mut ex: Exec, f: impl FnOnce(&mut Exec, &Ctx)) -> Exec {
+        self.claim(&ex.id);
+        self.with_ctx(|ctx| f(&mut ex, ctx));
+        self.release(&ex.id);
+        ex
+    }
+
+    /// Do a piece of work now (inline) or on its own thread (background), then settle its events.
+    fn dispatch(self: &Arc<Self>, job: impl FnOnce(&Arc<Core>) + Send + 'static) {
+        if self.background {
+            let c = self.clone();
+            std::thread::spawn(move || {
+                job(&c);
+                c.settle();
+            });
+        } else {
+            job(self);
+        }
+    }
+
     /// Broadcast events produced while running, then let rules and waiting plans react to them.
-    fn settle(&self) {
-        for _ in 0..50 {
+    fn settle(self: &Arc<Self>) {
+        for _ in 0..200 {
             let pending = self.bus.drain();
             if pending.is_empty() {
                 return;
@@ -87,58 +139,103 @@ impl Core {
     }
 
     /// An event from outside (senses, organs, the human).
-    pub fn emit(&self, kind: &str, data: Value) {
-        {
-            let mem = self.mem.lock().unwrap();
-            self.bus.emit(&mem, kind, data);
+    pub fn emit(self: &Arc<Self>, kind: &str, data: Value) {
+        self.bus.emit(&self.mem, kind, data);
+        self.settle();
+    }
+
+    /// False (and a one-time warning event) when a rule has fired too often in the last minute.
+    fn rule_may_fire(&self, name: &str) -> bool {
+        let t = now();
+        let mut fires = self.rule_fires.lock().unwrap();
+        let list = fires.entry(name.to_string()).or_default();
+        list.retain(|x| t - x < 60.0);
+        if list.len() >= RULE_MAX_PER_MINUTE {
+            if list.len() == RULE_MAX_PER_MINUTE {
+                list.push(t); // mark as warned
+                self.bus.emit(&self.mem, "rule.throttled", json!({"rule": name, "per_minute": RULE_MAX_PER_MINUTE}));
+            }
+            return false;
+        }
+        list.push(t);
+        true
+    }
+
+    fn react(self: &Arc<Self>, kind: &str, ev: &Value) {
+        if kind.starts_with("plan.") || kind.starts_with("action.") || kind == "rule.throttled" {
+            return; // bookkeeping events don't trigger rules
+        }
+        for (rule, enabled, _) in self.mem.rules() {
+            if !enabled || !engine::event_matches(rule["when"].as_str().unwrap_or(""), kind) {
+                continue;
+            }
+            let name = rule["rule"].as_str().unwrap_or("").to_string();
+            if !self.rule_may_fire(&name) {
+                continue;
+            }
+            let ev = ev.clone();
+            self.dispatch(move |c| {
+                let mut plan = rule.clone();
+                plan["plan"] = json!(name);
+                let mut ex = engine::new_exec(&plan, &format!("rule:{name}"));
+                ex.vars.insert("event".into(), ev);
+                let go = match rule.get("where") {
+                    Some(cond) => c.with_ctx(|ctx| engine::eval(cond, &ex.vars, ctx).map(|v| engine::truthy(&v)).unwrap_or(false)),
+                    None => true,
+                };
+                if go {
+                    c.run_new(ex, |ex, ctx| {
+                        ctx.bus.emit(ctx.mem, "plan.started", ex.summary());
+                        engine::run(ex, ctx);
+                    });
+                }
+            });
+        }
+        for st in self.mem.plans_with_status("waiting:event") {
+            if !engine::event_matches(st["wait"]["kind"].as_str().unwrap_or(""), kind) {
+                continue;
+            }
+            let (id, kind, ev) = (st["id"].as_str().unwrap_or("").to_string(), kind.to_string(), ev.clone());
+            self.dispatch(move |c| {
+                let _ = c.advance(&id, |ex, ctx| engine::on_event(ex, &kind, &ev, ctx));
+            });
+        }
+    }
+
+    /// After a restart: carry on with every plan that was mid-way. Steps already carried out are not
+    /// repeated (each action's idempotency key is in the journal).
+    pub fn recover(self: &Arc<Self>) {
+        for st in self.mem.plans_with_status("running") {
+            let id = st["id"].as_str().unwrap_or("").to_string();
+            self.dispatch(move |c| {
+                let _ = c.advance(&id, |ex, ctx| {
+                    ctx.bus.emit(ctx.mem, "plan.resumed", ex.summary());
+                    engine::run(ex, ctx);
+                });
+            });
         }
         self.settle();
     }
 
-    fn react(&self, kind: &str, ev: &Value) {
-        if kind.starts_with("plan.") || kind.starts_with("action.") {
-            return; // bookkeeping events don't trigger rules
-        }
-        self.with_ctx(|ctx| {
-            for (rule, enabled, _) in ctx.mem.rules() {
-                if !enabled || !engine::event_matches(rule["when"].as_str().unwrap_or(""), kind) {
-                    continue;
-                }
-                let mut plan = rule.clone();
-                plan["plan"] = rule["rule"].clone();
-                let mut ex = engine::new_exec(&plan, &format!("rule:{}", rule["rule"].as_str().unwrap_or("")));
-                ex.vars.insert("event".into(), ev.clone());
-                if let Some(cond) = rule.get("where") {
-                    match engine::eval(cond, &ex.vars, ctx) {
-                        Ok(v) if engine::truthy(&v) => {}
-                        _ => continue,
-                    }
-                }
-                ctx.bus.emit(ctx.mem, "plan.started", ex.summary());
-                engine::run(&mut ex, ctx);
-            }
-            for st in ctx.mem.plans_with_status("waiting:event") {
-                if let Ok(mut ex) = serde_json::from_value::<Exec>(st) {
-                    engine::on_event(&mut ex, kind, ev, ctx);
-                }
-            }
-        });
-    }
-
-    pub fn tick(&self) {
+    pub fn tick(self: &Arc<Self>) {
         let t = now();
-        self.with_ctx(|ctx| {
-            for st in ctx.mem.plans_with_status("waiting:") {
-                if let Ok(mut ex) = serde_json::from_value::<Exec>(st) {
-                    engine::on_tick(&mut ex, t, ctx);
-                }
+        for st in self.mem.plans_with_status("waiting:") {
+            let w = &st["wait"];
+            let reminder_due = w["reminders"].as_array().map(|a| a.iter().filter_map(Value::as_f64).any(|r| r <= t)).unwrap_or(false);
+            let deadline_due = w["until"].as_f64().map(|u| u <= t).unwrap_or(false);
+            if !(reminder_due || deadline_due) {
+                continue;
             }
-        });
+            let id = st["id"].as_str().unwrap_or("").to_string();
+            self.dispatch(move |c| {
+                let _ = c.advance(&id, |ex, ctx| engine::on_tick(ex, t, ctx));
+            });
+        }
         self.settle();
     }
 
     /// One pass of the senses.
-    pub fn sense(&self, full: bool) {
+    pub fn sense(self: &Arc<Self>, full: bool) {
         let prev = self.state.lock().unwrap().clone();
         let cur = host::snapshot(full, &prev);
         let events = host::derive_events(&prev, &cur);
@@ -152,64 +249,65 @@ impl Core {
     // API operations
     // ---------------------------------------------------------------------------------------
 
-    pub fn handle(&self, req: &Value) -> Value {
+    pub fn handle(self: &Arc<Self>, req: &Value) -> Value {
         let op = req["op"].as_str().unwrap_or("");
-        let out = match op {
+        match op {
             "ping" => json!({"ok": true, "version": env!("CARGO_PKG_VERSION")}),
             "state" => json!({"ok": true, "state": *self.state.lock().unwrap()}),
             "verbs" => json!({"ok": true, "verbs": verbs::registry_json()}),
             "check" => {
-                let mem = self.mem.lock().unwrap();
                 let source = req["source"].as_str().unwrap_or("ai");
-                let r = engine::check(&req["plan"], &mem, source, self.threshold);
+                let r = engine::check(&req["plan"], &self.mem, source, self.threshold);
                 json!({"ok": r.ok, "report": r})
             }
             "submit" => self.submit(&req["plan"], req["source"].as_str().unwrap_or("ai")),
-            "answer" => self.resume(req, |ex, ctx| engine::answer(ex, req["text"].as_str().unwrap_or(""), ctx)),
-            "resolve" => self.resume(req, |ex, ctx| {
-                let steps = req.get("steps").and_then(Value::as_array).cloned();
-                engine::resolve_thought(ex, steps, ctx)
-            }),
-            "plan" => {
-                let mem = self.mem.lock().unwrap();
-                match mem.load_plan(req["plan_id"].as_str().unwrap_or("")) {
-                    Some(p) => json!({"ok": true, "plan": p}),
-                    None => json!({"ok": false, "error": "no such plan"}),
-                }
+            "answer" => {
+                let text = req["text"].as_str().unwrap_or("").to_string();
+                self.resume(req, |ex, ctx| engine::answer(ex, &text, ctx))
             }
+            "resolve" => self.resolve(req),
+            "plan" => match self.mem.load_plan(req["plan_id"].as_str().unwrap_or("")) {
+                Some(p) => json!({"ok": true, "plan": p}),
+                None => json!({"ok": false, "error": "no such plan"}),
+            },
             "waiting" => {
-                let mem = self.mem.lock().unwrap();
-                let mut list: Vec<Value> = mem.plans_with_status("waiting:").into_iter()
-                    .chain(mem.plans_with_status("needs_thought"))
+                let mut list: Vec<Value> = self.mem.plans_with_status("waiting:").into_iter()
+                    .chain(self.mem.plans_with_status("needs_thought"))
                     .map(|p| json!({"plan_id": p["id"], "plan": p["name"], "status": p["status"], "wait": p["wait"],
                                     "source": p["source"]}))
                     .collect();
                 list.sort_by(|a, b| a["plan_id"].as_str().cmp(&b["plan_id"].as_str()));
                 json!({"ok": true, "plans": list})
             }
-            "journal" => json!({"ok": true, "journal": self.mem.lock().unwrap().journal(req["limit"].as_i64().unwrap_or(30))}),
-            "events" => {
-                let mem = self.mem.lock().unwrap();
-                json!({"ok": true, "events": mem.events_since(req["since"].as_i64().unwrap_or(0), req["limit"].as_i64().unwrap_or(100)),
-                       "last": mem.last_event_id()})
-            }
+            "journal" => json!({"ok": true, "journal": self.mem.journal(req["limit"].as_i64().unwrap_or(30))}),
+            "events" => json!({"ok": true,
+                "events": self.mem.events_since(req["since"].as_i64().unwrap_or(0), req["limit"].as_i64().unwrap_or(100)),
+                "last": self.mem.last_event_id()}),
             "rules" => {
-                let rules: Vec<Value> = self.mem.lock().unwrap().rules().into_iter()
+                let rules: Vec<Value> = self.mem.rules().into_iter()
                     .map(|(r, enabled, source)| json!({"rule": r, "enabled": enabled, "source": source}))
                     .collect();
                 json!({"ok": true, "rules": rules})
             }
             "add_rule" => self.add_rule(&req["rule"], req["source"].as_str().unwrap_or("ai")),
             "enable_rule" => {
-                let ok = self.mem.lock().unwrap().set_rule_enabled(req["name"].as_str().unwrap_or(""), req["enabled"].as_bool().unwrap_or(true));
-                json!({"ok": ok})
+                // Turning a rule OFF is always allowed; turning one on from here is the human's call
+                // (the AI's way to turn one on is a plan, which asks for approval).
+                let on = req["enabled"].as_bool().unwrap_or(true);
+                if on && req["source"].as_str().unwrap_or("ai") == "ai" {
+                    json!({"ok": false, "error": "the AI turns rules on through a plan (enable_rule), which asks the human"})
+                } else {
+                    json!({"ok": self.mem.set_rule_enabled(req["name"].as_str().unwrap_or(""), on)})
+                }
             }
-            "mandates" => json!({"ok": true, "mandates": self.mem.lock().unwrap().mandates()
+            "mandates" => json!({"ok": true, "mandates": self.mem.mandates()
                                    .into_iter().map(|(v, t)| json!({"verb": v, "target": t})).collect::<Vec<_>>()}),
             "save_plan" => {
                 let name = req["name"].as_str().unwrap_or("");
-                if name.is_empty() { json!({"ok": false, "error": "name required"}) } else {
-                    self.mem.lock().unwrap().save_named(name, &req["plan"]);
+                if name.is_empty() {
+                    json!({"ok": false, "error": "name required"})
+                } else {
+                    self.mem.save_named(name, &req["plan"]);
                     json!({"ok": true})
                 }
             }
@@ -238,53 +336,69 @@ impl Core {
                 json!({"ok": true, "state": *self.state.lock().unwrap()})
             }
             _ => json!({"ok": false, "error": format!("unknown op '{op}'")}),
+        }
+    }
+
+    pub fn submit(self: &Arc<Self>, plan: &Value, source: &str) -> Value {
+        let report = engine::check(plan, &self.mem, source, self.threshold);
+        if !report.ok {
+            return json!({"ok": false, "report": report});
+        }
+        let ex = self.run_new(engine::new_exec(plan, source), |ex, ctx| engine::start(ex, &report, ctx));
+        self.settle();
+        json!({"ok": true, "result": ex.summary(), "vars": ex.vars, "explain": report.explain})
+    }
+
+    fn resume(self: &Arc<Self>, req: &Value, f: impl FnOnce(&mut Exec, &Ctx)) -> Value {
+        let r = match self.advance(req["plan_id"].as_str().unwrap_or(""), f) {
+            Ok(ex) => json!({"ok": true, "result": ex.summary(), "vars": ex.vars}),
+            Err(e) => json!({"ok": false, "error": e}),
         };
-        out
-    }
-
-    pub fn submit(&self, plan: &Value, source: &str) -> Value {
-        let result = self.with_ctx(|ctx| {
-            let report = engine::check(plan, ctx.mem, source, ctx.threshold);
-            if !report.ok {
-                return json!({"ok": false, "report": report});
-            }
-            let mut ex = engine::new_exec(plan, source);
-            engine::start(&mut ex, &report, ctx);
-            json!({"ok": true, "result": ex.summary(), "vars": ex.vars, "explain": report.explain})
-        });
         self.settle();
-        result
+        r
     }
 
-    fn resume(&self, req: &Value, f: impl FnOnce(&mut Exec, &Ctx)) -> Value {
+    /// The AI's judgment for a plan stopped at `think`. New steps are checked like any plan, and
+    /// actions the AI isn't trusted with yet go to the human first.
+    fn resolve(self: &Arc<Self>, req: &Value) -> Value {
         let id = req["plan_id"].as_str().unwrap_or("");
-        let result = self.with_ctx(|ctx| match ctx.mem.load_plan(id).and_then(|p| serde_json::from_value::<Exec>(p).ok()) {
-            Some(mut ex) => {
-                f(&mut ex, ctx);
-                json!({"ok": true, "result": ex.summary(), "vars": ex.vars})
+        let steps = req.get("steps").and_then(Value::as_array).cloned().filter(|s| !s.is_empty());
+        let report = match &steps {
+            Some(s) => {
+                let vars = self.mem.load_plan(id).map(|p| p["vars"].clone()).unwrap_or(json!({}));
+                let r = engine::check(&json!({"plan": "resolution", "with": vars, "steps": s}), &self.mem, "ai", self.threshold);
+                if !r.ok {
+                    return json!({"ok": false, "report": r});
+                }
+                Some(r)
             }
-            None => json!({"ok": false, "error": "no such plan"}),
-        });
-        self.settle();
-        result
+            None => None,
+        };
+        self.resume(req, |ex, ctx| engine::resolve_thought(ex, steps, report.as_ref(), ctx))
     }
 
-    fn add_rule(&self, rule: &Value, source: &str) -> Value {
+    fn add_rule(self: &Arc<Self>, rule: &Value, source: &str) -> Value {
         let name = rule["rule"].as_str().unwrap_or("");
         if name.is_empty() || rule["when"].as_str().unwrap_or("").is_empty() {
             return json!({"ok": false, "error": "a rule needs \"rule\" (name), \"when\" (event) and \"steps\""});
         }
-        let mem = self.mem.lock().unwrap();
         let mut as_plan = rule.clone();
         as_plan["plan"] = json!(name);
-        // Rules run unattended, so their effects are checked as if a human approved them.
-        let report = engine::check(&as_plan, &mem, "rule", self.threshold);
+        let report = engine::check(&as_plan, &self.mem, "rule", self.threshold);
         if !report.ok {
             return json!({"ok": false, "report": report});
         }
-        mem.put_rule(name, rule, source, true);
-        drop(mem);
-        self.emit("rule.added", json!({"rule": name, "source": source, "explain": report.explain}));
-        json!({"ok": true, "explain": report.explain})
+        // Rules run unattended with full authority, so one the AI writes stays off until the human agrees.
+        let from_ai = source == "ai";
+        self.mem.put_rule(name, rule, source, !from_ai);
+        self.emit("rule.added", json!({"rule": name, "source": source, "enabled": !from_ai, "explain": report.explain}));
+        if from_ai {
+            let what = format!("when {}: {}", rule["when"].as_str().unwrap_or(""), report.explain.join("; "));
+            let ask = json!({"plan": format!("turn on the rule \"{name}\""), "why": what, "conf": 0.0,
+                             "steps": [{"do": "enable_rule", "name": name}]});
+            let r = self.submit(&ask, "ai");
+            return json!({"ok": true, "enabled": false, "approval": r["result"], "explain": report.explain});
+        }
+        json!({"ok": true, "enabled": true, "explain": report.explain})
     }
 }

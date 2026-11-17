@@ -3,6 +3,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS mandates(id INTEGER PRIMARY KEY, verb TEXT NOT NULL, 
 CREATE TABLE IF NOT EXISTS objects (id TEXT PRIMARY KEY, type TEXT NOT NULL, handle TEXT, fields TEXT NOT NULL,
                                     created REAL NOT NULL, updated REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS objects_type ON objects(type, created);
+CREATE INDEX IF NOT EXISTS plans_status ON plans(status);
 CREATE TABLE IF NOT EXISTS saved   (name TEXT PRIMARY KEY, body TEXT NOT NULL, created REAL NOT NULL);
 "#;
 
@@ -52,8 +54,10 @@ fn base36(mut n: u64) -> String {
     String::from_utf8(s).unwrap()
 }
 
+/// Thread-safe: every method takes the connection lock only for the duration of its own query, so a slow
+/// action in one plan never blocks the rest of the system.
 pub struct Memory {
-    pub db: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl Memory {
@@ -62,28 +66,34 @@ impl Memory {
             let _ = std::fs::create_dir_all(dir);
         }
         let db = Connection::open(path)?;
+        db.busy_timeout(std::time::Duration::from_secs(5))?;
         db.execute_batch(SCHEMA)?;
-        Ok(Memory { db })
+        Ok(Memory { conn: Mutex::new(db) })
+    }
+
+    fn c(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn in_memory() -> Self {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA).unwrap();
-        Memory { db }
+        Memory { conn: Mutex::new(db) }
     }
 
     // ---- events ----
     pub fn add_event(&self, kind: &str, data: &Value) -> i64 {
-        let _ = self.db.execute(
+        let db = self.c();
+        let _ = db.execute(
             "INSERT INTO events(ts, kind, data) VALUES (?1, ?2, ?3)",
             params![now(), kind, data.to_string()],
         );
-        self.db.last_insert_rowid()
+        db.last_insert_rowid()
     }
 
     pub fn events_since(&self, since: i64, limit: i64) -> Vec<Value> {
-        let mut st = self
-            .db
+        let db = self.c();
+        let mut st = db
             .prepare("SELECT id, ts, kind, data FROM events WHERE id > ?1 ORDER BY id LIMIT ?2")
             .unwrap();
         st.query_map(params![since, limit], |r| {
@@ -97,20 +107,23 @@ impl Memory {
     }
 
     pub fn last_event_id(&self) -> i64 {
-        self.db.query_row("SELECT COALESCE(MAX(id),0) FROM events", [], |r| r.get(0)).unwrap_or(0)
+        let db = self.c();
+        db.query_row("SELECT COALESCE(MAX(id),0) FROM events", [], |r| r.get(0)).unwrap_or(0)
     }
 
     // ---- journal ----
     pub fn journal_begin(&self, plan_id: &str, key: &str, verb: &str, args: &Value, explain: &str) -> i64 {
-        let _ = self.db.execute(
+        let db = self.c();
+        let _ = db.execute(
             "INSERT INTO journal(ts, plan_id, step_key, verb, args, explain, status) VALUES (?1,?2,?3,?4,?5,?6,'started')",
             params![now(), plan_id, key, verb, args.to_string(), explain],
         );
-        self.db.last_insert_rowid()
+        db.last_insert_rowid()
     }
 
     pub fn journal_end(&self, id: i64, status: &str, result: &str) {
-        let _ = self.db.execute(
+        let db = self.c();
+        let _ = db.execute(
             "UPDATE journal SET status=?1, result=?2 WHERE id=?3",
             params![status, result, id],
         );
@@ -118,7 +131,8 @@ impl Memory {
 
     /// Status of a previously started step with this idempotency key, if any.
     pub fn journal_status(&self, key: &str) -> Option<(String, String)> {
-        self.db
+        let db = self.c();
+        db
             .query_row(
                 "SELECT status, result FROM journal WHERE step_key=?1 ORDER BY id DESC LIMIT 1",
                 params![key],
@@ -130,8 +144,8 @@ impl Memory {
     }
 
     pub fn journal(&self, limit: i64) -> Vec<Value> {
-        let mut st = self
-            .db
+        let db = self.c();
+        let mut st = db
             .prepare("SELECT ts, plan_id, verb, explain, status, result FROM journal ORDER BY id DESC LIMIT ?1")
             .unwrap();
         st.query_map(params![limit], |r| {
@@ -146,8 +160,9 @@ impl Memory {
 
     // ---- plans ----
     pub fn save_plan(&self, id: &str, name: &str, source: &str, status: &str, state: &Value) {
+        let db = self.c();
         let t = now();
-        let _ = self.db.execute(
+        let _ = db.execute(
             "INSERT INTO plans(id, name, source, status, state, created, updated) VALUES (?1,?2,?3,?4,?5,?6,?6)
              ON CONFLICT(id) DO UPDATE SET status=excluded.status, state=excluded.state, updated=excluded.updated",
             params![id, name, source, status, state.to_string(), t],
@@ -155,7 +170,8 @@ impl Memory {
     }
 
     pub fn load_plan(&self, id: &str) -> Option<Value> {
-        self.db
+        let db = self.c();
+        db
             .query_row("SELECT state FROM plans WHERE id=?1", params![id], |r| r.get::<_, String>(0))
             .optional()
             .ok()
@@ -164,8 +180,8 @@ impl Memory {
     }
 
     pub fn plans_with_status(&self, prefix: &str) -> Vec<Value> {
-        let mut st = self
-            .db
+        let db = self.c();
+        let mut st = db
             .prepare("SELECT state FROM plans WHERE status LIKE ?1 ORDER BY created")
             .unwrap();
         st.query_map(params![format!("{prefix}%")], |r| r.get::<_, String>(0))
@@ -177,7 +193,8 @@ impl Memory {
 
     // ---- rules ----
     pub fn put_rule(&self, name: &str, body: &Value, source: &str, enabled: bool) {
-        let _ = self.db.execute(
+        let db = self.c();
+        let _ = db.execute(
             "INSERT INTO rules(name, body, enabled, source, created) VALUES (?1,?2,?3,?4,?5)
              ON CONFLICT(name) DO UPDATE SET body=excluded.body, enabled=excluded.enabled",
             params![name, body.to_string(), enabled as i64, source, now()],
@@ -185,21 +202,24 @@ impl Memory {
     }
 
     pub fn insert_rule_if_missing(&self, name: &str, body: &Value, source: &str) {
-        let _ = self.db.execute(
+        let db = self.c();
+        let _ = db.execute(
             "INSERT OR IGNORE INTO rules(name, body, enabled, source, created) VALUES (?1,?2,1,?3,?4)",
             params![name, body.to_string(), source, now()],
         );
     }
 
     pub fn set_rule_enabled(&self, name: &str, enabled: bool) -> bool {
-        self.db
+        let db = self.c();
+        db
             .execute("UPDATE rules SET enabled=?1 WHERE name=?2", params![enabled as i64, name])
             .map(|n| n > 0)
             .unwrap_or(false)
     }
 
     pub fn rules(&self) -> Vec<(Value, bool, String)> {
-        let mut st = self.db.prepare("SELECT body, enabled, source FROM rules ORDER BY created").unwrap();
+        let db = self.c();
+        let mut st = db.prepare("SELECT body, enabled, source FROM rules ORDER BY created").unwrap();
         st.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0, r.get::<_, String>(2)?))
         })
@@ -211,22 +231,25 @@ impl Memory {
 
     // ---- mandates (trust learned from conversation) ----
     pub fn add_mandate(&self, verb: &str, target: &str, source: &str) {
-        let _ = self.db.execute(
+        let db = self.c();
+        let _ = db.execute(
             "INSERT OR IGNORE INTO mandates(verb, target, source, created) VALUES (?1,?2,?3,?4)",
             params![verb, target, source, now()],
         );
     }
 
     pub fn mandates(&self) -> Vec<(String, String)> {
-        let mut st = self.db.prepare("SELECT verb, target FROM mandates ORDER BY id").unwrap();
+        let db = self.c();
+        let mut st = db.prepare("SELECT verb, target FROM mandates ORDER BY id").unwrap();
         st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().filter_map(Result::ok).collect()
     }
 
     // ---- objects ----
     pub fn put_object(&self, typ: &str, handle: Option<&str>, fields: &Value) -> String {
+        let db = self.c();
         let id = format!("obj:{typ}/{}", new_id(""));
         let t = now();
-        let _ = self.db.execute(
+        let _ = db.execute(
             "INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,?2,?3,?4,?5,?5)",
             params![id, typ, handle, fields.to_string(), t],
         );
@@ -235,8 +258,8 @@ impl Memory {
 
     /// Objects of a type, newest first. Field filtering happens in the engine.
     pub fn objects_of(&self, typ: &str, limit: i64) -> Vec<Value> {
-        let mut st = self
-            .db
+        let db = self.c();
+        let mut st = db
             .prepare("SELECT id, handle, fields, created FROM objects WHERE type=?1 ORDER BY created DESC LIMIT ?2")
             .unwrap();
         st.query_map(params![typ, limit], |r| {
@@ -259,14 +282,16 @@ impl Memory {
 
     // ---- saved plans (reusable by name) ----
     pub fn save_named(&self, name: &str, body: &Value) {
-        let _ = self.db.execute(
+        let db = self.c();
+        let _ = db.execute(
             "INSERT INTO saved(name, body, created) VALUES (?1,?2,?3) ON CONFLICT(name) DO UPDATE SET body=excluded.body",
             params![name, body.to_string(), now()],
         );
     }
 
     pub fn named(&self, name: &str) -> Option<Value> {
-        self.db
+        let db = self.c();
+        db
             .query_row("SELECT body FROM saved WHERE name=?1", params![name], |r| r.get::<_, String>(0))
             .optional()
             .ok()

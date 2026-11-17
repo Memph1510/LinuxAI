@@ -267,3 +267,52 @@ def test_undecided_plan_reaches_human_via_live_core(env, live_core, tmp_path):
     w = live_core.request("waiting")["plans"][0]
     text = message_for({"kind": "plan.waiting", "data": w})
     assert "Why I'm unsure: 37% above usual" in text
+
+
+def test_core_survives_kill_9_mid_plan(tmp_path):
+    """Kill the real daemon in the middle of a plan; on restart it finishes the plan."""
+    if not CORE_BIN.exists():
+        pytest.skip("build core first")
+    from linuxai.core_client import Core
+    sock, db = str(tmp_path / "s"), str(tmp_path / "core.db")
+
+    def start():
+        p = subprocess.Popen([str(CORE_BIN), "daemon", "--socket", sock, "--db", db, "--interval", "0.3"],
+                             stderr=subprocess.DEVNULL)
+        c = Core(sock, timeout=10)
+        for _ in range(50):
+            if c.available():
+                return p, c
+            time.sleep(0.1)
+        raise RuntimeError("core did not start")
+
+    proc, core = start()
+    plan = {"plan": "slow-job", "steps": [
+        {"do": "run", "program": "sh", "args": ["-c", f"echo started >> {tmp_path}/ran; sleep 3"]},
+        {"do": "run", "program": "sh", "args": ["-c", f"echo second >> {tmp_path}/ran"]},
+        {"tell": "slow job finished"}]}
+    import threading
+    threading.Thread(target=lambda: _ignore(lambda: core.request("submit", plan=plan, source="human")), daemon=True).start()
+    time.sleep(1.0)
+    proc.kill()          # no chance to clean up
+    proc.wait()
+    proc, core = start()  # restart: recovery happens before it serves
+    try:
+        for _ in range(100):
+            evs = core.request("events", since=0, limit=10000)["events"]
+            if any(e["kind"] == "ai.tell" and e["data"].get("text") == "slow job finished" for e in evs):
+                break
+            time.sleep(0.2)
+        else:
+            raise AssertionError("plan was not finished after restart")
+        assert any(e["kind"] == "plan.resumed" for e in evs)
+        assert (tmp_path / "ran").read_text().splitlines()[-1] == "second"
+    finally:
+        proc.terminate()
+
+
+def _ignore(f):
+    try:
+        f()
+    except Exception:  # noqa: BLE001 - the daemon is killed mid-request on purpose
+        pass

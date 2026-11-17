@@ -103,7 +103,10 @@ fn daemon(args: &[String]) -> std::io::Result<()> {
     let db = arg(args, "--db").map(PathBuf::from).unwrap_or_else(default_db);
     let interval: f64 = arg(args, "--interval").and_then(|s| s.parse().ok()).unwrap_or(2.0);
     let mem = memory::Memory::open(&db).map_err(|e| std::io::Error::other(e.to_string()))?;
-    let core = Arc::new(core::Core::new(mem, Box::new(host::LinuxHost)));
+    let mut core = core::Core::new(mem, Box::new(host::LinuxHost));
+    core.background = true;
+    let core = Arc::new(core);
+    core.recover();
 
     if let Some(dir) = socket.parent() {
         std::fs::create_dir_all(dir)?;

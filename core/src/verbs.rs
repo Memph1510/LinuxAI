@@ -46,6 +46,8 @@ pub const VERBS: &[VerbSpec] = &[
     VerbSpec { name: "store", organ: "core", args: &[("type", true), ("fields", true), ("handle", false)],
         effect: Effect::Internal, target: "type", explain: "store a {type} in memory",
         doc: "Create a memory object of a type (bill, person, preference, ...) with fields." },
+    VerbSpec { name: "enable_rule", organ: "core", args: &[("name", true)], effect: Effect::Local, target: "name",
+        explain: "turn on the automatic rule {name}", doc: "Turn on a rule (reflex) so it runs by itself from now on." },
     VerbSpec { name: "set", organ: "host", args: &[("what", true), ("to", true)], effect: Effect::Local,
         target: "what", explain: "set {what} to {to}",
         doc: "Set a machine control. what: power.profile (power-saver|balanced|performance), \

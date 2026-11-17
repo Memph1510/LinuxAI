@@ -74,8 +74,6 @@ pub struct Ctx<'a> {
     pub organs: &'a dyn Organs,
     pub bus: &'a Bus,
     pub state: &'a Value,
-    /// Confidence below which an AI plan with effects must be confirmed even inside a mandate.
-    pub threshold: f64,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -552,6 +550,18 @@ pub fn new_exec(plan: &Value, source: &str) -> Exec {
 /// Start a checked plan. AI plans that need approval first pause with a question to the human.
 pub fn start(exec: &mut Exec, report: &Report, ctx: &Ctx) {
     if report.needs_approval && !exec.approved {
+        request_approval(exec, report, ctx);
+        return;
+    }
+    exec.approved = true;
+    ctx.bus.emit(ctx.mem, "plan.started", exec.summary());
+    run(exec, ctx);
+}
+
+/// Pause the plan and ask the human to OK the actions the AI isn't trusted with yet.
+fn request_approval(exec: &mut Exec, report: &Report, ctx: &Ctx) {
+    exec.approved = false;
+    {
         let lines: Vec<String> = report
             .effects
             .iter()
@@ -568,11 +578,23 @@ pub fn start(exec: &mut Exec, report: &Report, ctx: &Ctx) {
                            "reminders": [t0 + 2.0 * 3600.0, t0 + 8.0 * 3600.0], "asked_at": t0});
         persist(exec, ctx);
         ctx.bus.emit(ctx.mem, "plan.waiting", exec.summary());
-        return;
     }
-    exec.approved = true;
-    ctx.bus.emit(ctx.mem, "plan.started", exec.summary());
-    run(exec, ctx);
+}
+
+/// How a reply to an approval reads: Some(true) for always, Some(false) for a plain yes, None for no.
+/// Anything that isn't clearly a yes is a no.
+pub fn read_approval(text: &str) -> Option<bool> {
+    let low = text.trim().to_lowercase();
+    let words: Vec<&str> = low.split(|c: char| !c.is_alphanumeric() && c != '\'').filter(|w| !w.is_empty()).collect();
+    let negative = ["no", "nope", "nah", "not", "never", "don't", "dont", "stop", "cancel", "wait", "hold"];
+    if words.is_empty() || words.iter().any(|w| negative.contains(w)) {
+        return None;
+    }
+    let yes = ["yes", "y", "yeah", "yep", "ok", "okay", "sure", "go", "approve", "approved", "do", "always", "fine"];
+    if !yes.contains(&words[0]) {
+        return None;
+    }
+    Some(words.contains(&"always"))
 }
 
 fn persist(exec: &Exec, ctx: &Ctx) {
@@ -584,11 +606,9 @@ pub fn answer(exec: &mut Exec, text: &str, ctx: &Ctx) {
     if exec.status != "waiting:answer" {
         return;
     }
-    let low = text.trim().to_lowercase();
     if exec.wait.get("approval").and_then(Value::as_bool).unwrap_or(false) {
-        let yes = ["yes", "y", "ok", "okay", "sure", "go", "go ahead", "do it", "always", "yes always"];
-        if yes.iter().any(|w| low == *w) || low.starts_with("yes") || low.contains("always") {
-            if low.contains("always") {
+        if let Some(always) = read_approval(text) {
+            if always {
                 // Trust learned from conversation: these kinds of actions no longer need asking.
                 for e in exec.wait["effects"].as_array().cloned().unwrap_or_default() {
                     if e["effect"] != "internal" && e["covered"] == false {
@@ -619,7 +639,7 @@ pub fn answer(exec: &mut Exec, text: &str, ctx: &Ctx) {
 }
 
 /// The AI's judgment for a plan that hit `think`: either more steps to run, or stop.
-pub fn resolve_thought(exec: &mut Exec, steps: Option<Vec<Value>>, ctx: &Ctx) {
+pub fn resolve_thought(exec: &mut Exec, steps: Option<Vec<Value>>, report: Option<&Report>, ctx: &Ctx) {
     if exec.status != "needs_thought" {
         return;
     }
@@ -628,7 +648,10 @@ pub fn resolve_thought(exec: &mut Exec, steps: Option<Vec<Value>>, ctx: &Ctx) {
         Some(s) => {
             exec.status = "running".into();
             exec.stack.push(Frame { steps: s, idx: 0, kind: FrameKind::Block });
-            run(exec, ctx);
+            match report {
+                Some(r) if r.needs_approval => request_approval(exec, r, ctx),
+                _ => run(exec, ctx),
+            }
         }
         None => {
             exec.status = "stopped".into();
@@ -690,6 +713,8 @@ pub fn event_matches(pattern: &str, kind: &str) -> bool {
 }
 
 pub fn run(exec: &mut Exec, ctx: &Ctx) {
+    // Saved before anything happens, so a crash during the very first step still leaves a plan to resume.
+    persist(exec, ctx);
     let mut guard = 0u32;
     loop {
         guard += 1;
@@ -904,6 +929,14 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
             let id = ctx.mem.put_object("note", None, &json!({"text": str_arg(a, "text"),
                 "kind": a.get("kind").cloned().unwrap_or(json!("general")), "plan": exec.name}));
             return Ok(json!(id));
+        }
+        "enable_rule" => {
+            let name = str_arg(args.as_object().unwrap(), "name");
+            if !ctx.mem.set_rule_enabled(&name, true) {
+                return Err(format!("no rule named {name}"));
+            }
+            ctx.bus.emit(ctx.mem, "rule.enabled", json!({"rule": name}));
+            return Ok(json!(true));
         }
         "store" => {
             let a = args.as_object().unwrap();
