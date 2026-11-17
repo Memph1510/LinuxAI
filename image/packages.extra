@@ -1,6 +1,7 @@
 # Added to the archiso "releng" package list for LinuxAI.
 python
 power-profiles-daemon
+python-gobject
 scx-scheds
 scx-tools
 sudo
