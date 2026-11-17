@@ -65,15 +65,87 @@ def show_log(memory: Memory) -> None:
                a["detail"].splitlines()[0][:100])
 
 
+YES_NO = {"y": "yes", "yes": "yes", "n": "no", "no": "no", "always": "always", "a": "always"}
+
+
+def connect_core():
+    from .core_client import Core
+
+    core = Core()
+    return core if core.available() else None
+
+
+def follow_activity(core, pending: dict) -> None:
+    """Print what the system is doing as it happens (runs in a background thread)."""
+    import threading
+
+    def show(text: str) -> None:
+        ui.out("\r" + text)
+
+    def loop() -> None:
+        try:
+            for ev in core.follow():
+                kind, data = ev.get("kind", ""), ev.get("data") or {}
+                if kind == "ai.tell":
+                    show(ui.magenta("◆ ") + str(data.get("text", "")))
+                elif kind == "plan.waiting" and (data.get("wait") or {}).get("question"):
+                    w = data["wait"]
+                    pending[data["plan_id"]] = w
+                    opts = " / ".join(w.get("opts") or [])
+                    show(ui.yellow("? ") + ui.bold(w["question"]) + (ui.dim(f"   [{opts}]") if opts else ""))
+                elif kind in ("plan.finished", "plan.stopped", "plan.failed"):
+                    pending.pop(data.get("plan_id"), None)
+                    if kind == "plan.failed":
+                        show(ui.red(f"✗ {data.get('plan')}: {data.get('error')}"))
+                elif kind == "action.done":
+                    show(ui.dim(f"· {data.get('explain')}  ({data.get('plan')})"))
+                elif kind == "action.failed":
+                    show(ui.red(f"· {data.get('explain')} failed: {data.get('error')}"))
+                elif kind in ("rule.added", "trust.granted"):
+                    show(ui.green(f"✓ {kind.replace('.', ' ')}: {data.get('rule') or data.get('plan')}"))
+                elif kind.split(".")[0] in ("power", "battery", "memory", "cpu", "temperature", "service"):
+                    show(ui.dim(f"· noticed {kind}"))
+        except OSError:
+            show(ui.red("· lost connection to the LinuxAI core"))
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
+def route_answer(core, pending: dict, line: str) -> bool:
+    """A short reply to an open question goes straight to the waiting plan, with no model involved."""
+    if not core or not pending:
+        return False
+    plan_id, wait = list(pending.items())[-1]
+    low = line.strip().lower()
+    opts = [o.lower() for o in (wait.get("opts") or [])]
+    answer = YES_NO.get(low) if wait.get("approval") else (line.strip() if low in opts else None)
+    if answer is None and low.isdigit() and 1 <= int(low) <= len(opts):
+        answer = wait["opts"][int(low) - 1]
+    if answer is None:
+        return False
+    core.request("answer", plan_id=plan_id, text=answer)
+    pending.pop(plan_id, None)
+    return True
+
+
 def repl(config: Config) -> None:
     from .agent import Agent
 
     memory = Memory(config)
-    toolbox = Toolbox(config, memory)
+    core = connect_core()
+    toolbox = Toolbox(config, memory, core=core)
     agent = Agent(config, memory, toolbox)
     _setup_readline(config)
-    ui.out(BANNER.format(title=ui.bold("cortex"), mode=config.mode, model=config.model,
+    ui.out(BANNER.format(title=ui.bold("LinuxAI"), mode=config.mode, model=config.model,
                          solutions=len(memory.list_solutions()), notes=len(memory.all_notes())))
+    pending: dict = {}
+    if core:
+        ui.out(ui.dim("connected to the LinuxAI core: you'll see what the system is doing as it happens"))
+        for w in core.request("waiting").get("plans", []):
+            if (w.get("wait") or {}).get("question"):
+                pending[w["plan_id"]] = w["wait"]
+                ui.out(ui.yellow("? ") + w["wait"]["question"])
+        follow_activity(core, pending)
     while True:
         unseen = len(memory.unseen_inbox())
         badge = ui.yellow(f"[{unseen} noticed] ") if unseen else ""
@@ -86,6 +158,8 @@ def repl(config: Config) -> None:
             ui.out()
             continue
         if not line:
+            continue
+        if route_answer(core, pending, line):
             continue
         if line.startswith("!"):
             toolbox.cwd = toolbox._spawn(line[1:], config.command_timeout)[2]
@@ -123,6 +197,67 @@ def repl(config: Config) -> None:
                 ui.out(ui.dim("  unknown command; /help"))
             continue
         agent.turn(line)
+
+
+def mind(config: Config) -> None:
+    """Behind the scenes: handle plans that need judgment and answers to the AI's questions."""
+    import time
+
+    from .agent import Agent
+    from .core_client import Core
+
+    core = Core()
+    while not core.available():
+        time.sleep(3)
+    config.mode = "auto"
+    memory = Memory(config)
+    toolbox = Toolbox(config, memory, core=core, mind=True)
+    agent = Agent(config, memory, toolbox)
+    print("linuxai mind: connected to the core", flush=True)
+
+    def handle(plan_id: str, name: str, note: str) -> None:
+        agent.reset()
+        agent.turn(f"[system] Plan '{name}' ({plan_id}) needs your judgment: {note}\n"
+                   f"Investigate if needed, then call resolve_thought for {plan_id} with the steps to run "
+                   f"(or no steps to end it).")
+
+    for w in core.request("waiting").get("plans", []):
+        if w["status"] == "needs_thought":
+            handle(w["plan_id"], w["plan"], (w.get("wait") or {}).get("note", ""))
+    for ev in core.follow():
+        if ev.get("kind") == "plan.needs_thought":
+            d = ev.get("data") or {}
+            handle(d.get("plan_id", ""), d.get("plan", ""), (d.get("wait") or {}).get("note", ""))
+
+
+def load_env(config: Config) -> None:
+    """Read KEY=value lines from the LinuxAI env file (where the API key is kept)."""
+    path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "linuxai" / "env"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+def ensure_api_key() -> None:
+    """First boot: ask for the API key once and keep it (readable only by this user)."""
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return
+    import getpass
+    import subprocess
+
+    ui.out(ui.bold("LinuxAI needs an Anthropic API key to think.") +
+           ui.dim(" (Get one at console.anthropic.com. It is stored only on this machine.)"))
+    key = getpass.getpass("API key (Enter to skip; the machine still runs on its rules): ").strip()
+    if not key:
+        return
+    path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "linuxai" / "env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(mode=0o600)
+    path.write_text(f"ANTHROPIC_API_KEY={key}\n")
+    os.environ["ANTHROPIC_API_KEY"] = key
+    subprocess.run(["systemctl", "--user", "restart", "linuxai-mind.service"], capture_output=True)
 
 
 USER_UNIT = """\
@@ -164,8 +299,14 @@ def main(argv: list[str] | None = None) -> None:
             setattr(config, k, getattr(args, k))
     config.ensure()
 
+    load_env(config)
     words = args.intent
-    if words == ["observe"]:
+    if words == ["session"]:
+        ensure_api_key()
+        repl(config)
+    elif words == ["mind"]:
+        mind(config)
+    elif words == ["observe"]:
         from .observer import run
         run()
     elif words == ["install-service"]:

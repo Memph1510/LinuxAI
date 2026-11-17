@@ -176,3 +176,70 @@ def test_refusal_runs_nothing(env):
     agent.turn("do it")
     assert not (tmp / "boom").exists()
     assert agent.messages[-1]["role"] == "user"
+
+
+# ---- integration with the real LinuxAI core -------------------------------------------------------
+import shutil
+import subprocess
+import time
+
+CORE_BIN = Path(__file__).resolve().parents[1] / "core" / "target" / "release" / "linuxai-core"
+
+
+@pytest.fixture()
+def live_core(tmp_path):
+    if not CORE_BIN.exists():
+        pytest.skip("build core first: cargo build --release")
+    sock = tmp_path / "core.sock"
+    proc = subprocess.Popen([str(CORE_BIN), "daemon", "--socket", str(sock), "--db", str(tmp_path / "core.db"),
+                             "--interval", "60"], stderr=subprocess.DEVNULL)
+    from linuxai.core_client import Core
+    core = Core(str(sock))
+    for _ in range(50):
+        if core.available():
+            break
+        time.sleep(0.1)
+    yield core
+    proc.terminate()
+
+
+def test_ai_plan_through_core_needs_trust_first(env, live_core):
+    from linuxai.cli import route_answer
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    plan = {"plan": "show-kernel", "why": "human asked", "conf": 0.9,
+            "steps": [{"do": "run", "program": "uname", "args": ["-r"], "as": "k"},
+                      {"tell": "kernel {$k.output}"}]}
+    client = FakeClient([_msg([_tool("t1", "submit_plan", {"plan": plan})], "tool_use"),
+                         _msg([NS(type="text", text="Asked you first.")], "end_turn")])
+    agent = Agent(cfg, mem, tb, client=client)
+    assert "LinuxAI action language" in agent.system
+    agent.turn("what kernel am I on")
+    result = client.requests[1]["messages"][-1]["content"][0]["content"]
+    assert "waiting for the human's approval" in result
+    # The human answers "always" in the session: goes straight to the plan, no model involved.
+    waiting = live_core.request("waiting")["plans"]
+    pending = {waiting[0]["plan_id"]: waiting[0]["wait"]}
+    assert route_answer(live_core, pending, "always")
+    tells = [e for e in live_core.request("events")["events"] if e["kind"] == "ai.tell"]
+    assert tells and tells[-1]["data"]["text"].startswith("kernel ")
+    # Trust learned: the same kind of plan now runs immediately.
+    r = live_core.request("submit", plan=plan, source="ai")
+    assert r["result"]["status"] == "done"
+
+
+def test_mind_resolves_a_thought(env, live_core):
+    cfg, mem, tb, tmp = env
+    tb.core, tb.mind = live_core, True
+    live_core.request("submit", source="human",
+                      plan={"plan": "odd", "steps": [{"think": "something odd happened"}]})
+    w = live_core.request("waiting")["plans"][0]
+    assert w["status"] == "needs_thought"
+    client = FakeClient([
+        _msg([_tool("t1", "resolve_thought", {"plan_id": w["plan_id"],
+                                              "steps": [{"tell": "Looked into it; all fine."}]})], "tool_use"),
+        _msg([NS(type="text", text="done")], "end_turn")])
+    Agent(cfg, mem, tb, client=client).turn("[system] resolve it")
+    assert live_core.request("waiting")["plans"] == []
+    # Behind the scenes, changes must go through plans, not raw commands.
+    assert "read-only" in tb.t_run_command("touch /tmp/x", "t")

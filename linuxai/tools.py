@@ -187,17 +187,78 @@ TOOLS = [
 ]
 TOOL_NAMES = {t["name"] for t in TOOLS}
 
+# Tools that exist when the LinuxAI core is running: acting through the action language.
+CORE_TOOLS = [
+    _tool("submit_plan",
+          "Submit a plan in the LinuxAI action language to the core. This is the main way to act on the machine. "
+          "The core checks it and runs it at machine speed. Write the whole job at once, with branches for "
+          "likely outcomes. If the plan does something you aren't yet trusted to do, the core asks the human "
+          "first and the result says so. Returns the check report or the run result.",
+          {"plan": {"type": "object", "description": "The plan: {plan, why, conf, steps:[...]}."}},
+          ["plan"]),
+    _tool("add_rule",
+          "Teach the system a reflex: a rule {rule, when, where?, steps} that runs on an event, with no model "
+          "involved. Only add rules the human has agreed to.",
+          {"rule": {"type": "object"}}, ["rule"]),
+    _tool("answer_plan",
+          "Pass the human's answer to a plan that is waiting on a question (see <waiting_plans>).",
+          {"plan_id": {"type": "string"}, "text": {"type": "string"}}, ["plan_id", "text"]),
+    _tool("resolve_thought",
+          "A plan stopped at `think` and needs your judgment. Give it more steps to run, or omit steps to end it.",
+          {"plan_id": {"type": "string"},
+           "steps": {"type": "array", "items": {"type": "object"}, "description": "Steps to run next."}},
+          ["plan_id"]),
+    _tool("tell_human", "Send the human a short message (shown on their screen, later by text).",
+          {"text": {"type": "string"}}, ["text"]),
+]
+CORE_TOOL_NAMES = {t["name"] for t in CORE_TOOLS}
+
+LANGUAGE_REFERENCE = """\
+## LinuxAI action language (for submit_plan / add_rule)
+A plan is JSON: {"plan": "<name>", "why": "<one line>", "conf": <0-1, your confidence>, "steps": [...]}.
+Steps (one keyword each):
+  {"let": "x", "value"|"calc"|"find": ...}       name a value. calc takes an expression.
+  {"let": "x", "do": <verb>, ...args}           run a verb and keep its result
+  {"do": <verb>, ...args, "as": "x"?}           run a verb
+  {"if": <expr>, "then": [...], "else": [...]}
+  {"each": <list expr>, "as": "x", "steps": [...]}
+  {"expect": <expr>, "else": "stop"|"think"}
+  {"try": [...], "else": [...]}                 $error holds the failure message
+  {"ask": "<question>", "opts": [...], "as": "x"}   pauses durably until the human answers
+  {"tell": "<message>"}
+  {"wait": "<event kind>", "max": "1h"} | {"wait": "10m"}   ($timed_out tells which happened)
+  {"think": "<note>"}                           hand back to you for judgment
+  {"call": "<saved plan name>", "with": {...}}
+Expressions: "$var.path" reads a variable ($state = live machine state, $event = triggering event);
+"{$var}" inside text interpolates; prefix lists compute: ["=", a, b] [">", a, b] ["and", ...] ["+", a, b]
+["*", a, b] ["avg", "field", list] ["sum", list] ["count", list] ["pct", a, b] ["has", a, b] ["exists", a].
+{"find": {"type": T, "from": "@handle", "where": {field: value | [op, value]}, "pick": "newest", "last": N}}
+queries memory objects.
+Rules: {"rule": "<name>", "when": "<event kind or prefix.*>", "where": <expr>?, "steps": [...]}.
+Host events: system.started power.unplugged power.plugged battery.low battery.critical memory.pressure
+cpu.pressure temperature.high service.failed service.recovered human.said.
+"""
+
 
 # ---------------------------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------------------------
 
 class Toolbox:
-    def __init__(self, config: Config, memory: Memory, asker: Callable[[str, list[str]], str] | None = None):
+    def __init__(self, config: Config, memory: Memory, asker: Callable[[str, list[str]], str] | None = None,
+                 core: Any = None, mind: bool = False):
         self.config = config
         self.memory = memory
         self.cwd = os.getcwd()
-        self.asker = asker or self._ask_terminal
+        self.asker = asker or (self._ask_via_core if mind else self._ask_terminal)
+        self.core = core          # linuxai.core_client.Core when the LinuxAI core is running
+        self.mind = mind          # behind the scenes: no terminal, changes go through plans
+
+    def tools(self) -> list[dict]:
+        tools = TOOLS + (CORE_TOOLS if self.core else [])
+        if self.mind:
+            tools = [t for t in tools if t["name"] not in ("write_file", "edit_file")]
+        return tools
 
     # -- dispatch --
     def execute(self, name: str, args: Any) -> tuple[str, bool]:
@@ -205,7 +266,7 @@ class Toolbox:
         if not isinstance(args, dict):
             return "Error: tool input must be a JSON object.", True
         handler = getattr(self, f"t_{name}", None)
-        if name not in TOOL_NAMES or handler is None:
+        if name not in {t["name"] for t in self.tools()} or handler is None:
             return f"Error: unknown tool {name}", True
         try:
             return handler(**args), False
@@ -237,6 +298,9 @@ class Toolbox:
     def t_run_command(self, command: str, why: str = "", timeout: int | None = None) -> str:
         if not _str(command) or not command.strip():
             raise _Invalid("command must be a non-empty string")
+        if self.mind and not is_read_only(command):
+            return ("Working behind the scenes, run_command only runs read-only commands. To change anything, "
+                    "submit_plan (use the `run` verb for ordinary programs); the core gets approval if needed.")
         ui.out(f"\n{cyan_arrow()} {ui.bold(command)}")
         if why:
             ui.out(ui.dim(f"  {why}   [{self.cwd}]"))
@@ -348,7 +412,9 @@ class Toolbox:
 
     def t_ask_human(self, question: str, options: list[str] | None = None) -> str:
         answer = self.asker(question, [o for o in (options or []) if _str(o)])
-        self.memory.log_action("question", question, "answered", None, answer)
+        self.memory.log_action("question", question, "asked" if self.mind else "answered", None, answer)
+        if self.mind:
+            return answer
         return f"The human answered: {answer}" if answer.strip() else "The human gave no answer."
 
     @staticmethod
@@ -385,7 +451,70 @@ class Toolbox:
         return "Noted."
 
     def t_system_state(self) -> str:
+        if self.core:
+            try:
+                return json.dumps(self.core.request("sense")["state"], indent=1)
+            except Exception as e:  # noqa: BLE001 - fall back to local probing
+                ui.out(ui.dim(f"  (core unavailable: {e})"))
         return sysinfo.snapshot()
+
+    # -- acting through the core --
+    def _core(self, op: str, **kw: Any) -> dict:
+        if not self.core:
+            raise _Invalid("the LinuxAI core is not running")
+        return self.core.request(op, **kw)
+
+    def t_submit_plan(self, plan: Any) -> str:
+        if not isinstance(plan, dict):
+            raise _Invalid("plan must be an object")
+        r = self._core("submit", plan=plan, source="ai")
+        if not r.get("ok"):
+            errs = r.get("report", {}).get("errors") or [r.get("error", "rejected")]
+            ui.out(ui.red(f"\n  ✗ plan '{plan.get('plan', '?')}' rejected: {errs[0]}"))
+            return "The core rejected the plan. Fix these and resubmit:\n- " + "\n- ".join(errs)
+        res = r["result"]
+        ui.out(f"\n{cyan_arrow()} plan {ui.bold(res['plan'])} " + ui.dim(f"[{res['status']}]"))
+        for line in r.get("explain", [])[:12]:
+            ui.out(ui.dim(f"  │ {line}"))
+        if res["status"] == "waiting:answer" and (res.get("wait") or {}).get("approval"):
+            return (f"Plan {res['plan_id']} is waiting for the human's approval (you aren't yet trusted for "
+                    "these actions). The human has been asked; their answer goes straight to the plan. End your "
+                    "turn unless there is something else to do.")
+        return json.dumps({"result": res, "vars": {k: v for k, v in r.get("vars", {}).items()
+                                                    if k not in ("state",)}}, default=str)[:6000]
+
+    def t_add_rule(self, rule: Any) -> str:
+        r = self._core("add_rule", rule=rule, source="ai")
+        if not r.get("ok"):
+            errs = r.get("report", {}).get("errors") or [r.get("error", "rejected")]
+            return "Rule rejected:\n- " + "\n- ".join(errs)
+        ui.out(ui.green(f"\n  ✓ new reflex: {rule.get('rule')} (when {rule.get('when')})"))
+        return "Rule added; it now runs automatically with no model involved."
+
+    def t_answer_plan(self, plan_id: str, text: str) -> str:
+        r = self._core("answer", plan_id=plan_id, text=text)
+        return json.dumps(r.get("result", r), default=str)
+
+    def t_resolve_thought(self, plan_id: str, steps: list | None = None) -> str:
+        r = self._core("resolve", plan_id=plan_id, **({"steps": steps} if steps else {}))
+        return json.dumps(r.get("result", r), default=str)
+
+    def t_tell_human(self, text: str) -> str:
+        if self.core and self.mind:
+            self._core("tell", text=text, **{"from": "mind"})
+        else:
+            ui.out("\n" + ui.magenta("◆ ") + text)
+        return "Sent."
+
+    def _ask_via_core(self, question: str, options: list[str]) -> str:
+        """Behind the scenes there's no terminal: ask through a durable plan; the answer comes back later."""
+        plan = {"plan": "question", "why": "asked by the AI", "conf": 1,
+                "steps": [{"ask": question, "opts": options, "as": "a"},
+                          {"think": "The human answered your question \"" + question.replace('"', "'") +
+                                    "\": {$a}"}]}
+        self._core("submit", plan=plan, source="human")
+        return ("(asked the human; their answer will come back to you as a new message. "
+                "End your turn now.)")
 
 
 class _Invalid(Exception):

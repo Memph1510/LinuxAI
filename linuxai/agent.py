@@ -10,7 +10,7 @@ import anthropic
 from . import sysinfo, ui
 from .config import Config
 from .memory import Memory
-from .tools import TOOLS, Toolbox, format_recall, time_ago
+from .tools import LANGUAGE_REFERENCE, Toolbox, format_recall, time_ago
 
 SYSTEM = """\
 You are Cortex, the mind of this Linux machine. You are not an assistant sitting on top of the operating \
@@ -49,6 +49,24 @@ summary of what changed and anything they should know. Do not narrate every step
 see your commands and their output.
 """
 
+CORE_SECTION = """
+You have a LinuxAI core: the system service that runs this machine. Act on the machine mainly by writing \
+plans in the LinuxAI action language (submit_plan). Plan whole jobs at once, with branches for likely outcomes, \
+so the machine can carry them out at full speed without coming back to you each step. Use the `run` verb for \
+ordinary programs. When you have handled the same kind of situation the same way a few times, offer the human \
+a rule (add_rule) so it happens automatically from then on. Trust is learned: if a plan does something you \
+aren't trusted for yet, the core asks the human and their "always" grants it. Your confidence (`conf`) should be \
+honest: low when you are guessing about what the human wants.
+"""
+
+MIND_SECTION = """
+You are working behind the scenes: the human is not watching this conversation. Messages here come from the \
+system (events, plans that need judgment, answers to your questions). Investigate with read-only commands, act \
+through submit_plan, and keep the human informed with tell_human only when something matters to them: a short, \
+plain message. If you need the human's input, use ask_human: the question reaches them and the answer comes back \
+to you later as a new message.
+"""
+
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5"}
 
 
@@ -58,6 +76,18 @@ class Agent:
         self.memory = memory
         self.toolbox = toolbox
         self.client = client or anthropic.Anthropic()
+        self.system = SYSTEM
+        if toolbox.core:
+            self.system += CORE_SECTION + "\n" + LANGUAGE_REFERENCE
+            try:
+                verbs = toolbox.core.request("verbs")["verbs"]
+                self.system += "Verbs:\n" + "\n".join(
+                    f"  {v['verb']}({', '.join(a['name'] + ('' if a['required'] else '?') for a in v['args'])})"
+                    f" [{v['effect']}]: {v['doc']}" for v in verbs)
+            except Exception:  # noqa: BLE001 - the verb list is a convenience
+                pass
+        if toolbox.mind:
+            self.system += MIND_SECTION
         self.messages: list[dict] = []
         self.usage = {"input": 0, "output": 0, "cache_read": 0}
 
@@ -83,6 +113,16 @@ class Agent:
                 f"- [{time_ago(i['ts'])}, {i['source']}] {i['message']}" for i in inbox[-20:]) +
                 "\n</noticed_while_idle>")
             self.memory.mark_inbox_seen()
+        if self.toolbox.core:
+            try:
+                waiting = self.toolbox.core.request("waiting")["plans"]
+            except Exception:  # noqa: BLE001
+                waiting = []
+            if waiting:
+                parts.append("<waiting_plans>\n" + "\n".join(
+                    f"- {w['plan_id']} {w['plan']} [{w['status']}]: "
+                    f"{(w.get('wait') or {}).get('question') or (w.get('wait') or {}).get('note') or ''}"
+                    for w in waiting) + "\n</waiting_plans>")
         parts.append(f"<cwd>{self.toolbox.cwd}</cwd>")
         return "\n\n".join(parts)
 
@@ -101,8 +141,8 @@ class Agent:
         kwargs: dict[str, Any] = dict(
             model=self.config.model,
             max_tokens=64000,
-            system=SYSTEM,
-            tools=TOOLS,
+            system=self.system,
+            tools=self.toolbox.tools(),
             messages=self.messages,
             thinking={"type": "adaptive", "display": "summarized"},
             output_config={"effort": self.config.effort},
