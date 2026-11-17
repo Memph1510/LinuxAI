@@ -73,6 +73,15 @@ class Serial:
                 pass
         raise TimeoutError(f"waited {timeout:.0f}s for {pattern!r}; last output:\n{self.buf[-800:]}")
 
+    def login(self) -> None:
+        """Log in as root on the serial console and wait until the shell is ready."""
+        self.send("root\n")
+        time.sleep(15)
+        self.send("\n")
+        self.read_until(r"(#|\$) *(\x1b\[[0-9;?]*[a-zA-Z])*$", 180)
+        time.sleep(2)
+        self.buf = ""
+
     def send(self, text: str) -> None:
         self.s.sendall(text.encode())
 
@@ -128,8 +137,7 @@ def main() -> int:
         print(f"booting ({accel})...", flush=True)
         con.read_until(r"login:", args.boot_timeout)
         print(f"  booted to a login prompt in {time.time() - t0:.0f}s", flush=True)
-        con.send("root\n")
-        con.read_until(r"[#$] $", 120)
+        con.login()
         con.run("export TERM=dumb PS1='# '; stty -echo cols 200", 30)
         state = con.run("timeout 240 systemctl is-system-running --wait; systemctl list-jobs --no-legend | head -5", 300)
         print(f"  system state: {' / '.join(state.split())[:200]}", flush=True)
