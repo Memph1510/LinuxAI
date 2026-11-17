@@ -292,7 +292,7 @@ fn find(spec: &Value, vars: &Map<String, Value>, ctx: &Ctx) -> Result<Value, Str
 // ---------------------------------------------------------------------------------------------
 
 const STEP_KINDS: &[&str] = &["let", "do", "if", "each", "expect", "try", "ask", "tell", "wait", "think", "call"];
-const BUILTIN_VARS: &[&str] = &["state", "event", "answer", "error", "result", "now", "timed_out"];
+const BUILTIN_VARS: &[&str] = &["state", "event", "answer", "error", "result", "now", "timed_out", "answered_by"];
 
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
@@ -453,7 +453,8 @@ fn check_block(steps: &[Value], path: &str, defined: &mut Vec<String>, mandates:
             }
             "ask" => {
                 defined.push(m.get("as").and_then(Value::as_str).unwrap_or("answer").to_string());
-                r.explain.push(format!("{pad}ask you: {}", display(&m["ask"])));
+                let fb = m.get("fallback").map(|f| format!(" (no answer by {}: {})", display(m.get("deadline").unwrap_or(&json!("the deadline"))), display(f))).unwrap_or_default();
+                r.explain.push(format!("{pad}ask you: {}{fb}", display(&m["ask"])));
             }
             "tell" => r.explain.push(format!("{pad}tell you: {}", display(&m["tell"]))),
             "wait" => r.explain.push(format!("{pad}wait for {}", display(&m["wait"]))),
@@ -560,8 +561,11 @@ pub fn start(exec: &mut Exec, report: &Report, ctx: &Ctx) {
         let why = if exec.why.is_empty() { String::new() } else { format!(" ({})", exec.why) };
         let question = format!("I'd like to {}{}:\n{}\nOK?", exec.name, why, lines.join("\n"));
         exec.status = "waiting:answer".into();
+        let t0 = now();
         exec.wait = json!({"question": question, "opts": ["yes", "no", "always"], "approval": true,
-                           "effects": report.effects});
+                           "effects": report.effects,
+                           "why": "You haven't told me I can do these on my own yet. Answer \"always\" and I won't ask about them again.",
+                           "reminders": [t0 + 2.0 * 3600.0, t0 + 8.0 * 3600.0], "asked_at": t0});
         persist(exec, ctx);
         ctx.bus.emit(ctx.mem, "plan.waiting", exec.summary());
         return;
@@ -646,6 +650,30 @@ pub fn on_event(exec: &mut Exec, kind: &str, event: &Value, ctx: &Ctx) {
 }
 
 pub fn on_tick(exec: &mut Exec, t: f64, ctx: &Ctx) {
+    if exec.status == "waiting:answer" {
+        // Follow up on schedule; at the deadline, take the fallback answer (and say so) if there is one.
+        let due: Vec<f64> = exec.wait["reminders"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let (fired, left): (Vec<f64>, Vec<f64>) = due.into_iter().partition(|r| *r <= t);
+        let deadline = exec.wait.get("until").and_then(Value::as_f64).filter(|u| t >= *u);
+        if fired.is_empty() && deadline.is_none() {
+            return;
+        }
+        exec.wait["reminders"] = json!(left);
+        if deadline.is_some() {
+            exec.wait["until"] = Value::Null;
+            if let Some(fb) = exec.wait.get("fallback").and_then(Value::as_str).map(String::from) {
+                let q = display(&exec.wait["question"]);
+                ctx.bus.emit(ctx.mem, "ai.tell", json!({"plan": exec.name, "plan_id": exec.id,
+                    "text": format!("I didn't hear back on \"{q}\" in time, so I went with \"{fb}\" as planned. Tell me if you want it changed.")}));
+                exec.vars.insert("answered_by".into(), json!("fallback"));
+                answer(exec, &fb, ctx);
+                return;
+            }
+        }
+        persist(exec, ctx);
+        ctx.bus.emit(ctx.mem, "plan.reminder", exec.summary());
+        return;
+    }
     let until = exec.wait.get("until").and_then(Value::as_f64);
     if let Some(u) = until {
         if t >= u && (exec.status == "waiting:time" || exec.status == "waiting:event") {
@@ -802,11 +830,21 @@ fn exec_step(exec: &mut Exec, step: &Value, ctx: &Ctx) -> Result<Flow, String> {
         return Ok(Flow::Push(Frame { steps, idx: 0, kind: FrameKind::Try { otherwise } }));
     }
     if let Some(q) = m.get("ask") {
+        // Undecided: reach out with the question and the reason, follow up, and fall back if time matters.
         let question = display(&eval(q, &vars, ctx)?);
         let opts = m.get("opts").cloned().unwrap_or(json!([]));
         let var = m.get("as").and_then(Value::as_str).unwrap_or("answer");
+        let text = |k: &str| -> Result<Value, String> {
+            Ok(m.get(k).map(|v| eval(v, &vars, ctx)).transpose()?.map(|v| json!(display(&v))).unwrap_or(Value::Null))
+        };
+        let t0 = now();
+        let reminders: Vec<Value> = m.get("remind").and_then(Value::as_array).map(|a| {
+            a.iter().filter_map(|d| parse_duration(&display(d))).map(|s| json!(t0 + s)).collect()
+        }).unwrap_or_default();
+        let deadline = m.get("deadline").map(display).and_then(|d| parse_duration(&d)).map(|s| t0 + s);
         exec.status = "waiting:answer".into();
-        exec.wait = json!({"question": question, "opts": opts, "as": var});
+        exec.wait = json!({"question": question, "opts": opts, "as": var, "why": text("why")?, "lean": text("lean")?,
+                           "reminders": reminders, "until": deadline, "fallback": text("fallback")?, "asked_at": t0});
         return Ok(Flow::Pause);
     }
     if let Some(t) = m.get("tell") {

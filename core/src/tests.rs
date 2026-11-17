@@ -184,3 +184,37 @@ fn real_host_snapshot_does_not_panic() {
     let s = host::snapshot(true, &Value::Null);
     assert!(s["memory"]["total_mb"].as_u64().unwrap_or(0) > 0);
 }
+
+#[test]
+fn undecided_reaches_out_follows_up_and_falls_back() {
+    let (c, fake) = core();
+    let plan = json!({"plan": "freight-offer", "steps": [
+        {"ask": "Broker offers $1,780 ($2.28/mi), under your floor. Take it?", "opts": ["take", "hold at floor"],
+         "why": "It matches your weekend-home exception, but it's further under the floor than you've accepted before.",
+         "lean": "take", "remind": ["0s"], "deadline": "0s", "fallback": "hold at floor", "as": "ans"},
+        {"if": ["=", "$ans", "take"], "then": [{"do": "set", "what": "power.profile", "to": "accepted"}],
+         "else": [{"tell": "Holding at your floor ({$answered_by})."}]}]});
+    let r = c.submit(&plan, "human");
+    let w = &r["result"]["wait"];
+    assert_eq!(r["result"]["status"], "waiting:answer");
+    assert!(w["why"].as_str().unwrap().contains("weekend-home exception"));
+    assert_eq!(w["lean"], "take");
+    c.tick();   // reminder fires and the deadline passes → the fallback is taken, and the human is told
+    let ev = c.handle(&json!({"op": "events", "since": 0}));
+    let kinds: Vec<String> = ev["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap().to_string()).collect();
+    let tells: Vec<String> = ev["events"].as_array().unwrap().iter().filter(|e| e["kind"] == "ai.tell")
+        .map(|e| e["data"]["text"].as_str().unwrap().to_string()).collect();
+    assert!(tells.iter().any(|t| t.contains("went with \"hold at floor\"")), "{tells:?}");
+    assert!(tells.iter().any(|t| t.contains("Holding at your floor (fallback)")), "{tells:?}");
+    assert!(kinds.contains(&"plan.finished".to_string()), "{kinds:?}");
+    assert!(calls(&fake).is_empty());
+}
+
+#[test]
+fn approval_says_why_and_schedules_follow_ups() {
+    let (c, _) = core();
+    let r = c.submit(&json!({"plan": "p", "conf": 0.9, "steps": [{"do": "restart", "unit": "x.service"}]}), "ai");
+    let w = &r["result"]["wait"];
+    assert!(w["why"].as_str().unwrap().contains("on my own"));
+    assert_eq!(w["reminders"].as_array().unwrap().len(), 2);
+}

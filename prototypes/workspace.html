@@ -128,6 +128,10 @@ pre { margin: 6px 0 0; padding: 10px; background: var(--bg); border: 1px solid v
 .chg { display: grid; gap: 2px; font-size: 13px; }
 .chg b { font-weight: 600; }
 .chg .old { color: var(--fg-faint); text-decoration: line-through; }
+.sms { background: var(--bg); border: 1px solid var(--line); border-radius: 14px 14px 14px 4px; padding: 10px 12px; font-size: 13.5px; white-space: pre-wrap; }
+.reach-m { font: 11.5px var(--font-mono); color: var(--fg-dim); display: grid; gap: 2px; }
+.meanwhile { margin: 0; padding-left: 18px; color: var(--fg-dim); font-size: 13px; }
+.task-why { font-size: 12.5px; color: var(--fg-dim); line-height: 1.35; }
 .prin { display: grid; gap: 6px; padding: 0 10px 12px; }
 .prin-i { border-left: 2px solid var(--you); padding: 2px 0 2px 9px; display: grid; gap: 1px; }
 .prin-i span { font-size: 13px; line-height: 1.35; }
@@ -160,7 +164,7 @@ pre { margin: 6px 0 0; padding: 10px; background: var(--bg); border: 1px solid v
       <span class="vital"><span class="dot"></span>core <b>running</b></span>
       <span class="vital">power <b>on battery · 64% · saver</b></span>
       <span class="vital">cpu policy <b>efficiency</b></span>
-      <span class="vital"><span class="dot you"></span><b id="waitingCount">2</b> need you</span>
+      <span class="vital"><span class="dot you"></span><b id="waitingCount">2</b> undecided · you've been texted</span>
     </div>
     <div class="mode" id="mode">prototype · example data</div>
   </header>
@@ -238,7 +242,11 @@ let tasks = [
           { label: "Accept $1,780", score: 0.66, chosen: true, why: "Truck home for the weekend, almost no deadhead. Beats driving home empty, which costs about $640 in fuel and time." },
           { label: "Hold at $1,875 (your floor)", score: 0.41, why: "Dana may find room, but she said the shipper capped it." },
           { label: "Deadhead home empty", score: 0.12, why: "No revenue and about $640 in cost." } ],
-        applied: ["p1", "p2"], parents: ["r4", "r1"] },
+        applied: ["p1", "p2"], parents: ["r4", "r1"],
+        reach: { sent: "11:04", channel: "text", reminder: "11:34", deadline: "1:00pm", fallback: "Hold at $1,875 and keep looking",
+          why: "It fits your weekend-home exception, but $2.28/mi is further under your floor than you've ever accepted ($2.34 was the lowest).",
+          lean: "Accept $1,780", opts: ["Accept $1,780", "Hold at $1,875", "Counter $1,820"],
+          meanwhile: ["Searching backup loads out of Dallas: 3 found, best $2.19/mi", "Checked Hollis Logistics: pays in 2 days, good credit"] } },
       { id: "a2", kind: "action", author: "ai", status: "waiting", title: "Accept and sign the rate confirmation",
         summary: "Needs your OK: it's below your floor rate.",
         raw: { plan: "accept-hollis-load", conf: 0.66, steps: [
@@ -288,6 +296,9 @@ let tasks = [
         parents: ["d2"] },
       { id: "a2", kind: "action", author: "ai", status: "waiting", title: "Book flights + hotel ($718)",
         summary: "This is the first trip I'm booking for you, so I'm asking before paying. It fits your $900 travel budget.",
+        reach: { sent: "9:20", channel: "text", reminder: "5:00pm", deadline: "tomorrow 9:00am (when the seat hold expires)", fallback: "Release the hold and tell you",
+          why: "It's the first trip I'm booking for you, and it costs $718.", lean: "Book it",
+          opts: ["Book it", "Change something"], meanwhile: ["Watching the fare (unchanged since 9:14)", "Drafted your calendar entries and check-in reminders"] },
         raw: { plan: "book-sam-wedding", conf: 0.74, steps: [
           { do: "book", what: "$hold", within: "budget:travel" },
           { do: "book", what: "hotel", with: { hotel: "@courtyard-denver-downtown", nights: 3, rate: "wedding-block" }, within: "budget:travel" },
@@ -315,7 +326,11 @@ let tasks = [
         applied: ["p4"], parents: ["r1"] },
       { id: "a1", kind: "action", author: "ai", status: "waiting", title: "Asked you by text",
         summary: "“Verizon is $112.40, about 37% above the usual $82. There's a new $29.99 International Pass. Pay it?”",
-        raw: { ask: "Verizon is ${$bill.amount}… Pay it?", opts: ["pay", "hold", "dispute"], as: "ans" }, parents: ["d1"] },
+        raw: { ask: "Verizon is ${$bill.amount}… Pay it?", opts: ["pay", "hold", "dispute"], as: "ans", why: "37% above usual", remind: ["1d"], deadline: "Nov 27", fallback: "pay" },
+        reach: { sent: "8:41", channel: "text", reminder: "tomorrow 9:00am", deadline: "Nov 27 (the day before it's due)", fallback: "Pay it in full so it isn't late, and flag the $29.99 for you",
+          why: "It's 37% above usual, with a new $29.99 International Pass you may not have meant to keep.", lean: "Dispute the $29.99, then pay $82.41",
+          opts: ["Pay $112.40", "Dispute the $29.99", "Hold"], meanwhile: ["Matched the charge to your Toronto trip, Oct 19–22"] },
+        parents: ["d1"] },
       { id: "o1", kind: "result", author: "ai", status: "waiting", title: "Waiting for your answer",
         summary: "Due Nov 28. I'll remind you on Nov 25 if I haven't heard back.", parents: ["a1"] },
     ],
@@ -382,7 +397,7 @@ function reach(t, id, dir) {
   return [...seen];
 }
 const pct = (x) => (x == null ? "" : Math.round(x * 100) + "%");
-const statusWord = { done: "done", running: "running", waiting: "needs you", stale: "out of date", proposed: "proposed", failed: "failed" };
+const statusWord = { done: "done", running: "running", waiting: "undecided", stale: "out of date", proposed: "proposed", failed: "failed" };
 
 // ---------------------------------------------------------------------------------------------
 // Render: stream
@@ -390,13 +405,15 @@ const statusWord = { done: "done", running: "running", waiting: "needs you", sta
 function renderStream() {
   const waiting = tasks.filter((t) => t.status === "waiting");
   const rest = tasks.filter((t) => t.status !== "waiting");
+  const reachOf = (t) => t.nodes.find((n) => n.reach && n.status === "waiting")?.reach;
   const item = (t) => `
     <button class="task ${t.id === current ? "on" : ""}" data-task="${t.id}">
       <span class="task-t">${esc(t.title)}</span>
-      <span class="task-m"><span class="pill s-${t.status}">${statusWord[t.status]}</span><span class="src">${esc(t.source)} · ${esc(t.when)}</span></span>
+      ${t.status === "waiting" && reachOf(t) ? `<span class="task-why">${esc(reachOf(t).why)}</span>` : ""}
+      <span class="task-m"><span class="pill s-${t.status}">${statusWord[t.status]}</span><span class="src">${t.status === "waiting" && reachOf(t) ? `texted you ${esc(reachOf(t).sent)}` : `${esc(t.source)} · ${esc(t.when)}`}</span></span>
     </button>`;
   $("stream").innerHTML =
-    (waiting.length ? `<div class="label group-l">Needs you</div>${waiting.map(item).join("")}` : "") +
+    (waiting.length ? `<div class="label group-l">Undecided · I've reached you</div>${waiting.map(item).join("")}` : "") +
     `<div class="label group-l">Recent</div>${rest.map(item).join("")}` +
     `<div class="label group-l" style="margin-top:8px">Learned from you</div><div class="prin">${principles.map((p) =>
       `<div class="prin-i ${p.isNew ? "new" : ""}"><span>${esc(p.text)}</span><small>${esc(p.scope)} · ${esc(p.from)}${p.uses ? ` · used ${p.uses}×` : ""}</small></div>`).join("")}</div>`;
@@ -450,6 +467,8 @@ function renderGraph() {
   }).join("");
   $("graph").style.width = w + "px"; $("graph").style.height = h + "px";
   $("graph").innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${edges}</svg>${nodes}`;
+  const sp = pos[selected], wrap = $("graphWrap");
+  if (sp && (sp.x < wrap.scrollLeft || sp.x + NODE_W > wrap.scrollLeft + wrap.clientWidth)) wrap.scrollLeft = Math.max(0, sp.x - wrap.clientWidth / 2 + NODE_W / 2);
   $("graphTitle").textContent = t.title;
   $("graphMeta").textContent = t.source;
 }
@@ -478,7 +497,16 @@ function renderInspector() {
         <div class="opt-why">${esc(o.why)}</div>
       </div>`).join("")}</div></div>`;
   if (n.raw) html += `<details class="sec"><summary>What runs behind the scenes (LinuxAI action language)</summary><pre>${esc(JSON.stringify(n.raw, null, 2))}</pre></details>`;
-  if (n.status === "waiting" && n.kind === "action") html += `<div class="actions-row"><button class="btn amber" data-approve="${n.id}">Approve</button><button class="btn" data-decline="${n.id}">Not now</button></div>`;
+  if (n.reach && n.status === "waiting") {
+    const r = n.reach;
+    const msg = `LinuxAI needs you: ${n.title}\nWhy I'm unsure: ${r.why}\nI'd lean: ${r.lean}\nReply: ${r.opts.join(" / ")}\nIf I don't hear back by ${r.deadline}, I'll ${r.fallback.replace(/^./, (c) => c.toLowerCase())}.`;
+    html += `<div class="sec"><div class="label">Sent to you by ${esc(r.channel)} · ${esc(r.sent)}</div><div class="sms">${esc(msg)}</div>
+      <div class="reach-m"><span>follow-up: ${esc(r.reminder)}</span><span>if no answer by ${esc(r.deadline)}: ${esc(r.fallback)}</span></div>
+      <div class="label" style="margin-top:4px">Reply (same as replying to the text)</div>
+      <div class="actions-row">${r.opts.map((o, i) => `<button class="btn ${i === 0 ? "amber" : ""}" data-reply="${n.id}" data-i="${i}">${esc(o)}</button>`).join("")}</div>
+      ${r.meanwhile?.length ? `<div class="label" style="margin-top:4px">Still working on, meanwhile</div><ul class="meanwhile">${r.meanwhile.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
+    </div>`;
+  } else if (n.status === "waiting" && n.kind === "action") html += `<div class="actions-row"><button class="btn amber" data-approve="${n.id}">Approve</button><button class="btn" data-decline="${n.id}">Not now</button></div>`;
   if (ups.length || downs.length) html += `<div class="sec">${ups.length ? `<div class="label">Comes from</div><div class="links">${linkList(ups)}</div>` : ""}${downs.length ? `<div class="label" style="margin-top:6px">Leads to</div><div class="links">${linkList(downs)}</div>` : ""}</div>`;
   if (n.history?.length) html += `<div class="sec"><div class="label">Earlier versions</div><div class="history">${n.history.map((h) => `<span><s>${esc(h.title)}</s> · changed after: “${esc(h.after)}”</span>`).join("")}</div></div>`;
 
@@ -641,6 +669,15 @@ document.addEventListener("click", (e) => {
     const t = task(), n = node(t, ap.dataset.approve);
     n.status = "done"; n.comments = [...(n.comments || []), { who: "ai", text: "Approved. Done, and recorded in the journal." }];
     for (const c of reach(t, n.id, "down")) node(t, c).status = "done";
+    t.status = t.nodes.some((x) => x.status === "waiting") ? "waiting" : "done";
+    render(); return;
+  }
+  const rp = e.target.closest("[data-reply]");
+  if (rp) {
+    const t = task(), n = node(t, rp.dataset.reply), choice = n.reach.opts[+rp.dataset.i];
+    n.status = "done";
+    n.comments = [...(n.comments || []), { who: "you", text: choice }, { who: "ai", text: `Got it: ${choice}. Continuing from here.` }];
+    for (const c of reach(t, n.id, "down")) { const x = node(t, c); if (x.status === "waiting" && !x.reach) x.status = "done"; }
     t.status = t.nodes.some((x) => x.status === "waiting") ? "waiting" : "done";
     render(); return;
   }

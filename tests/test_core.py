@@ -243,3 +243,27 @@ def test_mind_resolves_a_thought(env, live_core):
     assert live_core.request("waiting")["plans"] == []
     # Behind the scenes, changes must go through plans, not raw commands.
     assert "read-only" in tb.t_run_command("touch /tmp/x", "t")
+
+
+def test_reach_messages_explain_why(tmp_path):
+    from linuxai.reach import message_for, send
+    ev = {"kind": "plan.waiting", "data": {"plan_id": "p1", "plan": "freight", "wait": {
+        "question": "Take $1,780 ($2.28/mi)?", "opts": ["take", "hold"], "why": "Further under your floor than before.",
+        "lean": "take", "fallback": "hold", "until": None}}}
+    text = message_for(ev)
+    assert "LinuxAI needs you: Take $1,780" in text and "Why I'm unsure: Further under" in text
+    assert "I'd lean: take" in text and "Reply: take / hold" in text and "I'll go with: hold" in text
+    assert message_for({"kind": "plan.reminder", "data": ev["data"]}).startswith("Reminder: ")
+    assert message_for({"kind": "action.done", "data": {}}) is None
+    out = tmp_path / "sms.txt"
+    assert send(text, f"cat > {out}") and out.read_text() == text
+
+
+def test_undecided_plan_reaches_human_via_live_core(env, live_core, tmp_path):
+    from linuxai.reach import message_for
+    plan = {"plan": "q", "steps": [{"ask": "Pay Verizon $112.40?", "why": "37% above usual", "lean": "ask about the new charge first",
+                                    "opts": ["pay", "hold"]}]}
+    live_core.request("submit", plan=plan, source="human")
+    w = live_core.request("waiting")["plans"][0]
+    text = message_for({"kind": "plan.waiting", "data": w})
+    assert "Why I'm unsure: 37% above usual" in text

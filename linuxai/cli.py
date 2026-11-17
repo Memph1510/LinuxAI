@@ -88,11 +88,18 @@ def follow_activity(core, pending: dict) -> None:
                 kind, data = ev.get("kind", ""), ev.get("data") or {}
                 if kind == "ai.tell":
                     show(ui.magenta("◆ ") + str(data.get("text", "")))
-                elif kind == "plan.waiting" and (data.get("wait") or {}).get("question"):
+                elif kind in ("plan.waiting", "plan.reminder") and (data.get("wait") or {}).get("question"):
                     w = data["wait"]
                     pending[data["plan_id"]] = w
                     opts = " / ".join(w.get("opts") or [])
-                    show(ui.yellow("? ") + ui.bold(w["question"]) + (ui.dim(f"   [{opts}]") if opts else ""))
+                    prefix = "reminder: " if kind == "plan.reminder" else ""
+                    show(ui.yellow("? " + prefix) + ui.bold(w["question"]) + (ui.dim(f"   [{opts}]") if opts else ""))
+                    if w.get("why"):
+                        show(ui.dim(f"  why I'm unsure: {w['why']}"))
+                    if w.get("lean"):
+                        show(ui.dim(f"  I'd lean: {w['lean']}"))
+                    if w.get("fallback"):
+                        show(ui.dim(f"  if I don't hear back in time: {w['fallback']}"))
                 elif kind in ("plan.finished", "plan.stopped", "plan.failed"):
                     pending.pop(data.get("plan_id"), None)
                     if kind == "plan.failed":
@@ -306,6 +313,9 @@ def main(argv: list[str] | None = None) -> None:
         repl(config)
     elif words == ["mind"]:
         mind(config)
+    elif words == ["reach"]:
+        from .reach import run as reach_run
+        reach_run()
     elif words == ["observe"]:
         from .observer import run
         run()

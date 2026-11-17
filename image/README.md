@@ -9,6 +9,7 @@ There is no desktop. The first screen is the AI.
 |---|---|
 | `linuxai-core` (system service, starts at boot) | Senses the machine (power, battery, CPU/memory/I/O pressure, temperature, failed services, scheduler state) and controls it through the kernel's steering surfaces: power profiles, the sched_ext CPU scheduler policy, cgroup resource shares, services, sysctl. Runs plans in the LinuxAI action language and its built-in rules. Keeps its memory in `/var/lib/linuxai`. |
 | LinuxAI session (tty1, automatic login) | Where you land. You talk in English. You see what the system is doing as it happens, and you answer its questions. |
+| `linuxai-reach` (user service) | Reaches you when the AI is undecided or a follow-up is due. Set `LINUXAI_NOTIFY_CMD` in `~/.config/linuxai/env` to any command that sends a message from stdin (an SMS gateway, a push service), e.g. `LINUXAI_NOTIFY_CMD=curl -s -d @- https://ntfy.sh/<your-topic>`. |
 | `linuxai-mind` (user service) | The AI working behind the scenes. It handles anything the rules hand it ("a service failed, figure it out"). It starts once an API key is set. |
 | Linux kernel + drivers, `scx-scheds`/`scx-tools`, `power-profiles-daemon` | The hardware layer and the kernel controls the core uses |
 

@@ -58,6 +58,33 @@ On a phone the three areas stack, and the graph scrolls sideways.
 
 Every comment and change is recorded.
 
+## Undecided means it reaches out; it never just waits
+
+The flow is: **(1) your intent → (2) the AI does the work → (3) you, only when needed → back to (2).** Step 3
+is a short conversation that lets step 2 continue. It is never a queue of things you have to go and find. When
+the AI is undecided, it:
+
+1. **Reaches you right away** by text (later, the LinuxAI app). The message carries the question, **why it's
+   undecided**, what it leans toward, how to reply, and what it will do if it doesn't hear back.
+2. **Keeps working** on everything that doesn't depend on your answer, and lists that as "still working on,
+   meanwhile" (backup loads, fare watching).
+3. **Follows up** on a schedule. When time matters and there's a safe default, it **falls back** at the
+   deadline and tells you what it did ("No answer by 1pm, so I held at $1,875").
+4. **Continues from exactly that point** the moment you reply: by text, on the screen, or by voice later.
+
+On the screen, these appear as **Undecided · I've reached you**, each with its reason and when you were
+texted, instead of a passive "needs you" list.
+
+In the system (built):
+
+- The action language's `ask` step takes `why`, `lean`, `remind`, `deadline` and `fallback`.
+- The core sends follow-ups (a `plan.reminder` event). At the deadline it takes the fallback, tells you, and
+  continues the plan.
+- Approvals also say why they're asked, and they schedule follow-ups.
+- `cortex reach` (the `linuxai-reach` service) turns these into messages and sends them through
+  `LINUXAI_NOTIFY_CMD`, which can be any SMS gateway, push service or chat bot, until the LinuxAI Android app
+  exists. No AI model is needed for this, so it works even when the AI is offline.
+
 ## The human improves the machine: lessons
 
 This is the reverse cyborg from the original vision. The AI shows its reasoning *so that you can improve it*, not

@@ -1,0 +1,11 @@
+[Unit]
+Description=LinuxAI reach (tells you when the AI needs you)
+
+[Service]
+EnvironmentFile=-%h/.config/linuxai/env
+ExecStart=/usr/local/bin/cortex reach
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

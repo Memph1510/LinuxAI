@@ -224,7 +224,11 @@ Steps (one keyword each):
   {"each": <list expr>, "as": "x", "steps": [...]}
   {"expect": <expr>, "else": "stop"|"think"}
   {"try": [...], "else": [...]}                 $error holds the failure message
-  {"ask": "<question>", "opts": [...], "as": "x"}   pauses durably until the human answers
+  {"ask": "<question>", "opts": [...], "as": "x", "why": "<why you're undecided>", "lean": "<what you'd pick>",
+   "remind": ["1h", "4h"], "deadline": "6h", "fallback": "<answer to take at the deadline>"}
+      Undecided: the human is reached right away (text) with the question, why, and your lean; the plan pauses
+      durably. Use deadline+fallback when time matters and a default is safe. Keep doing other work meanwhile:
+      submit separate plans for anything that doesn't depend on the answer.
   {"tell": "<message>"}
   {"wait": "<event kind>", "max": "1h"} | {"wait": "10m"}   ($timed_out tells which happened)
   {"think": "<note>"}                           hand back to you for judgment
