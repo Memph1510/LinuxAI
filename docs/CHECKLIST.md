@@ -18,8 +18,15 @@ within each stage.
 - [ ] Verify the sched_ext policy switch on real hardware
 - [ ] Soak test: run the daemon for days; watch memory, database size and thread count
 - [ ] Prune old events and finished plans (summarize them into the AI's memory first)
-- [ ] Authenticate who is talking to the core (the human's session vs. the AI) instead of trusting the
-      `source` field. Today both run as the same user, so the AI could claim to be the human.
+- [ ] **Tasks, micro and macro**: you hand the OS a task of any size. It breaks big ones into subtasks
+      (run by itself or by subagents), tracks what depends on what, and coordinates the parts that need a
+      human: an **action** (something only you can do, like signing a paper or making a call), an
+      **evaluation** (is this result good?), a **critique** (how would you improve it?), or a **decision**.
+      It reaches you for each one with context, and continues as soon as you respond. The interface stays
+      mostly invisible: you see a task's state only when you look or when you're needed.
+
+Deliberately **not** planned: separating the human's commands from the AI's. The OS is one mind that you
+steer, subagents included. Security hardening waits until something sensitive is actually at risk.
 
 ## Stage 2: install
 
