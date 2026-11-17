@@ -32,7 +32,9 @@ logging into the AI.
 |---|---|
 | Name | **LinuxAI** (the OS and the AI) |
 | What "OS" means | A real bootable distro. Login = logging into the AI. Built from the base up with memory, tasks and budgets in mind. |
-| Base | Arch-based (in the spirit of Omarchy) |
+| Foundation | **Our own system, with Linux only as the hardware-driver layer.** Everything above the kernel (no apps, memory instead of files, intent instead of commands, the views) is ours. Our system interface is designed to be kernel-independent, so Linux can be swapped out later without a redesign. |
+| Base packages | Arch (in the spirit of Omarchy), used only for the kernel, drivers and low-level plumbing |
+| Language | **LinuxAI gets its own action language**: what the AI writes to act, which the OS carries out exactly, and which the human can read step by step. It replaces bash and Python as the AI's way of doing things. |
 | Install | Dual boot next to Windows on your laptop. **Developed in a VM first**, then dual boot once it's stable. |
 | Models | Cloud models for now (Claude for the hard thinking; cheap models such as DeepSeek for bulk work). Local models later if useful. The laptop has no strong GPU. |
 | Always-on listener | Either the Android tablet server you already have, or a small cloud server. Decide when we get to it. |
@@ -41,6 +43,27 @@ logging into the AI.
 | Money | Budgets per month, week, task or category (flights, hotels). It learns normal patterns (for example the usual Verizon bill) and flags anomalies. Few purchases for now; mainly bills. |
 | Visibility | You open the computer and see what it's doing through its views, or you ask it. Exactly what the views look like is to be designed together. |
 | First milestone | **A functioning OS first, features later.** The first bootable version has to work as an operating system. How each feature works will take a lot of discussion. |
+
+## Not limited to Linux
+
+Linux is a tool here, not a constraint. What it gives us is **drivers**: decades of code for real hardware (wifi,
+graphics, battery, sleep), which the AI needs, above all to stay online. It does not decide how the system works.
+So the split is:
+
+```
+ ┌───────────────────────────────────────────────────────────┐
+ │  LinuxAI: ours, kernel-independent                        │
+ │  the AI core · memory (instead of files) · action language│
+ │  events · views (instead of apps) · budgets · tasks       │
+ ├───────────────────────────────────────────────────────────┤
+ │  LinuxAI system interface (the contract we define)        │
+ ├───────────────────────────────────────────────────────────┤
+ │  Kernel + drivers: Linux today, replaceable later         │
+ └───────────────────────────────────────────────────────────┘
+```
+
+A LinuxAI-native kernel stays possible as a later research track. It would only have to implement the system
+interface.
 
 ## The kernel question
 
@@ -81,6 +104,13 @@ get built on.
 
 Built and tested in a VM on Windows.
 
+0. **The system interface and action language (the foundation).** Before code, write down the contract:
+   - what a *memory object* is (replacing files);
+   - what an *action* is, and the first draft of the action language;
+   - what an *event* is;
+   - what a *view* is (replacing apps).
+
+   Everything else is built on it.
 1. **The image.** A LinuxAI ISO, built reproducibly from this repo (Arch packages via `archiso` or `mkosi`).
    It installs and boots in a VM.
 2. **Boot into the AI.** Boot → login → the LinuxAI session. There is no Windows-style desktop. The first
