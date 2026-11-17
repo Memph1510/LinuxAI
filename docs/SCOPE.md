@@ -134,6 +134,17 @@ Built and tested in a VM on Windows.
 **v0.1 is done when** it boots in a VM to the LinuxAI session, the core is visibly making scheduling, power and
 service decisions that you can watch and question, and it keeps working (degraded) when offline.
 
+**Status (2026-11-17): first bootable build passes its boot test.** The ISO boots in QEMU in about 3 minutes
+under software emulation (much faster in a real VM). The core starts, senses the machine and loads its rules. A
+plan runs through the core. A simulated unplug really switches the power profile, and plugging back in restores
+it. The human lands in the LinuxAI session on tty1:
+
+![LinuxAI first screen](img/v0.1-first-screen.png)
+
+Not yet verified: running against the real AI model inside the image (it needs your API key), the sched_ext
+policy switch on real hardware, and installing to disk. Next: try it in a VM on your laptop, then install to
+disk and set up dual boot.
+
 ## After v0.1 (each needs its own design discussion)
 
 - **The parts**: email (imported mailbox), the Android messaging app, files and projects as memory,
