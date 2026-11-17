@@ -1,53 +1,46 @@
 # LinuxAI
 
-An AI-native operating system, built from the inside out. A persistent AI mind (**Cortex**) runs the machine:
-Linux is its body, and the terminal and GUI are implants a human uses to step inside and steer it. You supply the
-intent and act as the guardrail. The AI does the work and asks you when it's stuck. It writes down how each problem
-was solved, so the system grows into its own OS over time.
+An operating system where the AI is the system. You turn the computer on, log in, and you're inside the AI. You
+talk to it in plain English, it runs the machine, and you're the intent and the guardrail. Linux is used only as
+the hardware-driver layer; everything above it is LinuxAI.
 
-See [docs/SCOPE.md](docs/SCOPE.md) for what we are building and in what order, and [docs/BLUEPRINT.md](docs/BLUEPRINT.md) for the technical architecture.
+- **[docs/SCOPE.md](docs/SCOPE.md)**: what we're building and in what order
+- **[docs/SYSTEM_INTERFACE.md](docs/SYSTEM_INTERFACE.md)**: objects, events, actions and views (the foundation)
+- **[docs/ACTION_LANGUAGE.md](docs/ACTION_LANGUAGE.md)**: the language the AI uses to run the machine
+- **[image/README.md](image/README.md)**: the bootable ISO, and how to try it in a VM on Windows
+- [docs/BLUEPRINT.md](docs/BLUEPRINT.md): the original technical blueprint
 
-## What works today (Phase 1, v0)
+## v0.1: it works as an OS
 
-- **`cortex`**: an interactive shell where you type intent ("get my wifi to survive suspend", "set up a Rust dev
-  environment", "why is boot slow?"). The AI inspects the machine, runs commands, edits configs and uses `sudo`
-  (you type the password). Every command and every diff is shown live.
-- **You are the guardrail.** At each action you can press Enter to run it, `n` to skip it, `e` to edit the
-  command, or `a` to always allow commands like it. You can also type a sentence to redirect the AI. Ctrl-C stops
-  whatever it is doing.
-- **Trust that grows.** Mode `trusted` (the default) runs read-only commands, plus anything you've marked "always
-  allow", without asking. `ask` confirms everything. `auto` runs everything while you watch.
-- **It asks instead of flailing.** When your intent is ambiguous, or you probably know something it would take
-  many steps to discover, it asks you a question.
-- **It learns.** Solved problems become playbooks (`record_solution`), and facts about your machine and
-  preferences become notes (`remember`). Both are searched automatically on every new request. Readable
-  Markdown copies are in `~/.local/share/linuxai/mind/`.
-- **Background senses.** `cortex observe` (or the systemd user unit) watches failed units, full disks and journal
-  errors without using any model tokens. Cortex mentions what it noticed the next time you talk to it.
+| Part | Where | What it does |
+|---|---|---|
+| **LinuxAI core** | `core/` (Rust) | The system service that runs the machine. It senses power, battery, CPU/memory/I/O pressure, temperature, failed services and the scheduler, and turns changes into events. It controls the machine through the kernel's steering surfaces: power profiles, the sched_ext scheduler policy, cgroup resource shares via systemd, services and sysctl. It runs plans in the **LinuxAI action language**: it checks them first, runs them at machine speed, records every step, and lets plans pause for days waiting for your answer and resume after a reboot. Built-in **rules** handle routine situations with no AI model (unplugged → save power). |
+| **The AI** | `linuxai/` (Python) | Claude, connected to the core. It plans whole jobs at once in the action language, asks you when it's unsure, records how problems were solved, and learns your preferences. Trust starts at zero: your answers ("yes, always") become what it's allowed to do on its own. |
+| **The session** | `cortex session` | Your screen when you log in: talk to it, see what the system is doing as it happens, answer its questions. |
+| **The mind** | `cortex mind` | The AI working behind the scenes on what the rules hand it ("this service failed, find out why"). |
+| **The image** | `image/` | An Arch-based live ISO that boots into the LinuxAI session. Built by GitHub Actions on every push. |
 
-## Install and run
+## Running it
+
+**As an OS:** download the ISO from the latest GitHub Actions run (or `./image/build.sh`) and boot it in a VM.
+See [image/README.md](image/README.md).
+
+**On an existing Linux machine (development):**
 
 ```bash
-pip install -e .                      # Python 3.10+
-export ANTHROPIC_API_KEY=...          # or: ant auth login
-cortex                                # interactive
-cortex "update the system and tell me if anything needs a reboot"   # one-shot
-cortex install-service && systemctl --user enable --now cortex-observer.service
+cd core && cargo build --release && ./target/release/linuxai-core daemon &   # the core
+pip install -e .                                                             # the AI layer
+export ANTHROPIC_API_KEY=...
+cortex session                                                                # step inside
 ```
 
-Settings (environment variables or flags): `LINUXAI_MODEL` (default `claude-opus-5-5`), `LINUXAI_EFFORT`
-(`high`), `LINUXAI_MODE` (`trusted`), `LINUXAI_HOME`.
+Without the core running, `cortex` falls back to the earlier prototype: a terminal agent that runs commands with
+your approval.
 
-In the shell: `/mode`, `/inbox`, `/solutions`, `/notes`, `/log`, `/allow`, `/new`, and `!cmd` to run a command
-yourself.
+## Tests
 
-## Layout
-
-```
-linuxai/agent.py     the mind: context, model loop, thinking stream, refusal and interrupt handling
-linuxai/tools.py     motor nerves: commands, files, ask_human, memory tools, and the human gate
-linuxai/memory.py    SQLite + FTS5: solutions, notes, action log, learned trust, inbox
-linuxai/observer.py  background senses (no LLM)
-linuxai/cli.py       the terminal implant
-tests/               offline tests driving the real loop with a scripted model
+```bash
+cd core && cargo test          # engine, trust, durable plans, rules, senses
+pytest -q                      # AI layer, plus integration with a live core
+python3 image/test-boot.py out/linuxai-*.iso   # boots the ISO in QEMU and checks it works as an OS
 ```

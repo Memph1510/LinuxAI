@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Core (Rust) tests
+        run: cd core && cargo test --locked && cargo build --release --locked
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: AI layer (Python) tests
+        run: pip install -e . pytest && pytest -q
+
+  iso:
+    needs: test
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the LinuxAI ISO
+        run: SRC="$GITHUB_WORKSPACE" OUT="$GITHUB_WORKSPACE/out" WORK=/tmp/work bash image/build-in-arch.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linuxai-iso
+          path: out/*.iso
+          retention-days: 14
+          compression-level: 0

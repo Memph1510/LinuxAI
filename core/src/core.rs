@@ -213,6 +213,16 @@ impl Core {
                     json!({"ok": true})
                 }
             }
+            "event" => {
+                // An organ (mail, sms, a test harness...) reporting something that happened.
+                let kind = req["kind"].as_str().unwrap_or("");
+                if kind.is_empty() || kind.starts_with("plan.") || kind.starts_with("action.") {
+                    json!({"ok": false, "error": "event needs a kind (plan.* and action.* are reserved)"})
+                } else {
+                    self.emit(kind, req.get("data").cloned().unwrap_or(json!({})));
+                    json!({"ok": true})
+                }
+            }
             "tell" => {
                 // The AI (outside a plan) telling the human something.
                 self.emit("ai.tell", json!({"text": req["text"], "from": req["from"]}));

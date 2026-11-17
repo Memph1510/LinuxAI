@@ -1,0 +1,7 @@
+# Added to the archiso "releng" package list for LinuxAI.
+python
+power-profiles-daemon
+scx-scheds
+scx-tools
+sudo
+git
