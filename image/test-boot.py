@@ -40,6 +40,12 @@ CHECKS = [
      "linuxai-core ctl '{\"op\":\"event\",\"kind\":\"power.plugged\",\"data\":{}}' >/dev/null;"
      " sleep 2; powerprofilesctl get", r"^balanced"),
     ("AI layer installed", "sudo -u linuxai cortex --version", r"^0\."),
+    ("playbooks are markdown you can edit",
+     "linuxai-core ctl '{\"op\":\"playbook_put\",\"category\":\"freight/negotiate\",\"text\":\"# Negotiating\\n\",\"reason\":\"boot test\"}' >/dev/null;"
+     " sudo -u linuxai test -w /home/linuxai/playbooks/freight/negotiate.md && echo yes", r"^yes"),
+    ("a task's decision step waits on the human",
+     "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
+     "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
 ]
 
 

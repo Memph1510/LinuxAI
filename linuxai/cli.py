@@ -108,6 +108,12 @@ def follow_activity(core, pending: dict) -> None:
                     show(ui.dim(f"· {data.get('explain')}  ({data.get('plan')})"))
                 elif kind == "action.failed":
                     show(ui.red(f"· {data.get('explain')} failed: {data.get('error')}"))
+                elif kind in ("task.created", "task.done", "task.failed"):
+                    color = ui.red if kind == "task.failed" else ui.green
+                    show(color(f"◇ task {kind.split('.')[1]}: {data.get('title')}") +
+                         (ui.dim(f"  ({data.get('error')})") if data.get("error") else ""))
+                elif kind == "playbook.updated":
+                    show(ui.green(f"✓ playbook {data.get('category')}: {data.get('reason')}"))
                 elif kind in ("rule.added", "trust.granted"):
                     show(ui.green(f"✓ {kind.replace('.', ' ')}: {data.get('rule') or data.get('plan')}"))
                 elif kind.split(".")[0] in ("power", "battery", "memory", "cpu", "temperature", "service"):
@@ -231,10 +237,34 @@ def mind(config: Config) -> None:
     for w in core.request("waiting").get("plans", []):
         if w["status"] == "needs_thought":
             handle(w["plan_id"], w["plan"], (w.get("wait") or {}).get("note", ""))
+    def plan_task(d: dict) -> None:
+        agent.reset()
+        books = "\n\n".join(f"=== {p['category']} ===\n{p['text']}" for p in d.get("playbooks") or []) or "(no playbook yet)"
+        agent.turn(f"[system] Task {d.get('task')} needs a plan: {d.get('title')}\n"
+                   f"Category: {d.get('category')}\nContext: {json.dumps(d.get('context') or {})}\n"
+                   + (f"Problem with the last plan: {d['problem']}\n" if d.get("problem") else "")
+                   + f"Playbooks:\n{books}\n\nLook at similar past cases (find_cases) if useful, then call plan_task "
+                   f"(or create subtasks / finish_task if that fits better). Use a human step for anything you can't decide.")
+
+    def reflect(d: dict) -> None:
+        agent.reset()
+        agent.turn(f"[system] Task finished ({'done' if d.get('error') is None else 'failed'}): {d.get('title')} "
+                   f"[{d.get('category')}]\nResult: {json.dumps(d.get('result'), default=str)[:3000]}\n"
+                   f"Error: {d.get('error')}\nLook at the task (task_status {d.get('task')}). Record the case "
+                   f"(record_case) and, if anything new was learned, especially from the human's answers, update the "
+                   f"category's playbook. Be brief; don't contact the human unless something needs them.")
+
+    for t in core.request("tasks").get("needs_plan", []):
+        plan_task({"task": t["id"], "title": t["title"], "category": t.get("category"), "context": t.get("context"),
+                   "playbooks": core.request("playbook", category=t.get("category") or "general").get("chain")})
     for ev in core.follow():
-        if ev.get("kind") == "plan.needs_thought":
-            d = ev.get("data") or {}
+        kind, d = ev.get("kind"), ev.get("data") or {}
+        if kind == "plan.needs_thought":
             handle(d.get("plan_id", ""), d.get("plan", ""), (d.get("wait") or {}).get("note", ""))
+        elif kind == "task.needs_plan":
+            plan_task(d)
+        elif kind in ("task.done", "task.failed") and d.get("parent") is None:
+            reflect(d)
 
 
 def load_env(config: Config) -> None:

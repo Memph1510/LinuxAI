@@ -192,7 +192,7 @@ def live_core(tmp_path):
         pytest.skip("build core first: cargo build --release")
     sock = tmp_path / "core.sock"
     proc = subprocess.Popen([str(CORE_BIN), "daemon", "--socket", str(sock), "--db", str(tmp_path / "core.db"),
-                             "--interval", "60"], stderr=subprocess.DEVNULL)
+                             "--playbooks", str(tmp_path / "playbooks"), "--interval", "60"], stderr=subprocess.DEVNULL)
     from linuxai.core_client import Core
     core = Core(str(sock))
     for _ in range(50):
@@ -316,3 +316,47 @@ def _ignore(f):
         f()
     except Exception:  # noqa: BLE001 - the daemon is killed mid-request on purpose
         pass
+
+
+def test_ai_plans_a_task_from_its_playbook_then_learns(env, live_core, tmp_path):
+    cfg, mem, tb, tmp = env
+    tb.core, tb.mind = live_core, True
+    live_core.request("playbook_put", category="freight/negotiate", reason="your floor rule",
+                      text="# Negotiating\n## How I decide\n- Floor $2.40/mi.\n")
+    r = live_core.request("task_create", source="ai", spec={
+        "title": "Negotiate the Hollis load", "category": "freight/negotiate/hollis",
+        "context": {"broker": "@hollis", "offer_per_mile": 2.10, "weather": "clear"}})
+    task_id = r["task"]
+    assert r["tree"]["status"] == "needs_plan"
+    client = FakeClient([
+        _msg([_tool("t1", "read_playbook", {"category": "freight/negotiate/hollis"}),
+              _tool("t2", "find_cases", {"category": "freight/negotiate"})], "tool_use"),
+        _msg([_tool("t3", "plan_task", {"task_id": task_id, "plan": {"steps": [
+            {"ask": "Hollis offers $2.10/mi. Counter at $2.50?", "opts": ["yes", "no"], "why": "Below your $2.40 floor",
+             "lean": "yes", "as": "go"},
+            {"tell": "Countering Hollis at $2.50/mi"}]}})], "tool_use"),
+        _msg([NS(type="text", text="Asked the human.")], "end_turn"),
+        # reflection after the task finishes
+        _msg([_tool("t4", "record_case", {"category": "freight/negotiate", "variables": {"broker": "@hollis", "weather": "clear",
+                                                                                         "offer_per_mile": 2.10},
+                                          "decision": "countered at $2.50", "outcome": "human approved"}),
+              _tool("t5", "update_playbook", {"category": "freight/negotiate/hollis", "reason": "first Hollis negotiation",
+                                              "text": "# Hollis\n## What matters\n- Opens around $2.10/mi; counter at $2.50.\n"})], "tool_use"),
+        _msg([NS(type="text", text="Learned.")], "end_turn"),
+    ])
+    agent = Agent(cfg, mem, tb, client=client)
+    agent.turn(f"[system] Task {task_id} needs a plan")
+    # The playbook reached the model, and the task now waits on the human's decision.
+    first_results = client.requests[1]["messages"][-1]["content"]
+    assert "Floor $2.40/mi" in first_results[0]["content"]
+    tree = live_core.request("task", task=task_id)["tree"]
+    assert tree["status"] == "waiting"
+    plan_id = tree["plan_id"]
+    assert live_core.request("answer", plan_id=plan_id, text="yes")["result"]["status"] == "done"
+    assert live_core.request("task", task=task_id)["tree"]["status"] == "done"
+    agent.reset()
+    agent.turn("[system] Task finished: reflect")
+    chain = live_core.request("playbook", category="freight/negotiate/hollis")["chain"]
+    assert [p["category"] for p in chain] == ["freight/negotiate", "freight/negotiate/hollis"]
+    cases = live_core.request("find", spec={"type": "case", "where": {"broker": "@hollis"}})["found"]
+    assert cases and cases[0]["decision"] == "countered at $2.50"

@@ -18,7 +18,8 @@ within each stage.
 - [ ] Verify the sched_ext policy switch on real hardware
 - [ ] Soak test: run the daemon for days; watch memory, database size and thread count
 - [ ] Prune old events and finished plans (summarize them into the AI's memory first)
-- [ ] **Tasks, micro and macro**: you hand the OS a task of any size. It breaks big ones into subtasks
+- [x] **Tasks, micro and macro** (see [TASKS.md](TASKS.md)), plus category **playbooks** (markdown, editable,
+      with history) and **cases** (situations with their variables, for learning by repetition): you hand the OS a task of any size. It breaks big ones into subtasks
       (run by itself or by subagents), tracks what depends on what, and coordinates the parts that need a
       human: an **action** (something only you can do, like signing a paper or making a call), an
       **evaluation** (is this result good?), a **critique** (how would you improve it?), or a **decision**.

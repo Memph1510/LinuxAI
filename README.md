@@ -7,6 +7,7 @@ the hardware-driver layer; everything above it is LinuxAI.
 - **[docs/SCOPE.md](docs/SCOPE.md)**: what we're building and in what order
 - **[docs/CHECKLIST.md](docs/CHECKLIST.md)**: what's done and what's next (core first, then install, the Workspace screen, the Android app)
 - **[docs/SYSTEM_INTERFACE.md](docs/SYSTEM_INTERFACE.md)**: objects, events, actions and views (the foundation)
+- **[docs/TASKS.md](docs/TASKS.md)**: tasks of any size, the human steps (action, evaluation, critique, decision), playbooks and cases
 - **[docs/ACTION_LANGUAGE.md](docs/ACTION_LANGUAGE.md)**: the language the AI uses to run the machine
 - **[docs/VIEWS.md](docs/VIEWS.md)**: the Workspace screen (tasks, decisions, reasoning, comments that change things); prototype in `prototypes/`
 - **[image/README.md](image/README.md)**: the bootable ISO, and how to try it in a VM on Windows

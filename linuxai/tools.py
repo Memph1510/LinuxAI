@@ -210,6 +210,38 @@ CORE_TOOLS = [
           ["plan_id"]),
     _tool("tell_human", "Send the human a short message (shown on their screen, later by text).",
           {"text": {"type": "string"}}, ["text"]),
+    _tool("create_task",
+          "Hand the system a task of any size. Break big ones into subtasks; give each a category (e.g. "
+          "freight/negotiate/hollis) so the right playbooks govern it. Leaves are either work (with a plan, or "
+          "without one and you'll be asked to plan it when it's ready) or a human step: kind action (only the "
+          "human can do it), evaluation, critique or decision, with an optional ask {question, opts, why, lean, "
+          "deadline, fallback}. Use key/after for order between siblings. Context holds the situation's variables.",
+          {"task": {"type": "object", "description": "{title, category?, kind?, context?, plan?, ask?, key?, after?, subtasks?}"}},
+          ["task"]),
+    _tool("task_status", "See a task tree (with task_id) or the list of tasks and what is waiting on whom.",
+          {"task_id": {"type": "string"}}, []),
+    _tool("plan_task", "Give a task that needs a plan its plan (LinuxAI action language). It runs right away.",
+          {"task_id": {"type": "string"}, "plan": {"type": "object"}}, ["task_id", "plan"]),
+    _tool("finish_task", "Mark a task done (with its result) or failed (with why), when you finished it without a plan.",
+          {"task_id": {"type": "string"}, "done": {"type": "boolean"}, "result": {"type": "string"}}, ["task_id", "done"]),
+    _tool("read_playbook",
+          "Read the playbooks (markdown) that govern a category, broadest first (freight, then freight/negotiate, "
+          "then freight/negotiate/hollis).",
+          {"category": {"type": "string"}}, ["category"]),
+    _tool("update_playbook",
+          "Rewrite a category's playbook (full markdown) when you learn something: from repetition, a new "
+          "situation, or the human's answers and critiques. Keep it short and practical with these sections: "
+          "## What matters (the variables), ## How I decide (rules of thumb), ## Exceptions, ## Open questions. "
+          "Credit the human where a point came from them. Say why it changed.",
+          {"category": {"type": "string"}, "text": {"type": "string"}, "reason": {"type": "string"}},
+          ["category", "text", "reason"]),
+    _tool("record_case",
+          "Record one real situation: its variables (e.g. broker, weather, destination, trip length, days to "
+          "complete, rate), what was decided, and how it turned out. Cases are what playbooks are learned from.",
+          {"category": {"type": "string"}, "variables": {"type": "object"}, "decision": {"type": "string"},
+           "outcome": {"type": "string"}}, ["category", "variables", "decision"]),
+    _tool("find_cases", "Find past cases in a category, optionally filtered by variables ({field: value} or {field: [op, value]}).",
+          {"category": {"type": "string"}, "where": {"type": "object"}, "last": {"type": "integer"}}, ["category"]),
 ]
 CORE_TOOL_NAMES = {t["name"] for t in CORE_TOOLS}
 
@@ -504,6 +536,58 @@ class Toolbox:
         r = self._core("resolve", plan_id=plan_id, **({"steps": steps} if steps else {}))
         return json.dumps(r.get("result", r), default=str)
 
+    # -- tasks, playbooks, cases --
+    def t_create_task(self, task: Any) -> str:
+        r = self._core("task_create", spec=task, source="ai")
+        if not r.get("ok"):
+            return f"Error: {r.get('error')}"
+        ui.out(ui.green(f"\n  ✓ task: {task.get('title')}") + ui.dim(f" [{r['tree']['status']}]"))
+        return json.dumps(_slim_tree(r["tree"]))
+
+    def t_task_status(self, task_id: str = "") -> str:
+        r = self._core("task", task=task_id) if task_id else self._core("tasks")
+        if task_id:
+            return json.dumps(_slim_tree(r.get("tree")))
+        return json.dumps({"tasks": [_slim_tree(t) for t in r.get("tasks", [])],
+                           "needs_plan": [t["id"] + " " + t["title"] for t in r.get("needs_plan", [])],
+                           "waiting_on_human": [t["id"] + " " + t["title"] for t in r.get("waiting_on_human", [])]})
+
+    def t_plan_task(self, task_id: str, plan: Any) -> str:
+        r = self._core("task_plan", task=task_id, plan=plan)
+        if not r.get("ok"):
+            return f"Error: {r.get('error')}"
+        tree = r["tree"]
+        if tree.get("status") == "needs_plan":
+            return f"The plan didn't check out: {tree.get('error')}. Fix it and call plan_task again."
+        return json.dumps(_slim_tree(tree))
+
+    def t_finish_task(self, task_id: str, done: bool, result: str = "") -> str:
+        r = self._core("task_done", task=task_id, result=result) if done else self._core("task_fail", task=task_id, error=result)
+        return "OK" if r.get("ok") else f"Error: {r}"
+
+    def t_read_playbook(self, category: str) -> str:
+        r = self._core("playbook", category=category)
+        if not r.get("ok"):
+            return f"Error: {r.get('error')}"
+        chain = r.get("chain") or []
+        return "\n\n".join(f"=== {p['category']} ===\n{p['text']}" for p in chain) or f"No playbook yet for {category}."
+
+    def t_update_playbook(self, category: str, text: str, reason: str) -> str:
+        r = self._core("playbook_put", category=category, text=text, reason=reason)
+        if r.get("ok") and r.get("changed"):
+            ui.out(ui.green(f"\n  ✓ playbook {category} updated: {reason}"))
+        return "Saved." if r.get("ok") else f"Error: {r.get('error')}"
+
+    def t_record_case(self, category: str, variables: Any, decision: str, outcome: str = "") -> str:
+        fields = {"category": category, "decision": decision, "outcome": outcome, **(variables if isinstance(variables, dict) else {})}
+        r = self._core("object_put", type="case", fields=fields)
+        return f"Recorded {r.get('id')}." if r.get("ok") else f"Error: {r.get('error')}"
+
+    def t_find_cases(self, category: str, where: Any = None, last: int = 20) -> str:
+        cond = {"category": category, **(where if isinstance(where, dict) else {})}
+        r = self._core("find", spec={"type": "case", "where": cond, "last": last})
+        return json.dumps(r.get("found", r), default=str)[:8000]
+
     def t_tell_human(self, text: str) -> str:
         if self.core and self.mind:
             self._core("tell", text=text, **{"from": "mind"})
@@ -520,6 +604,16 @@ class Toolbox:
         self._core("submit", plan=plan, source="ai")
         return ("(asked the human; their answer will come back to you as a new message. "
                 "End your turn now.)")
+
+
+def _slim_tree(t: Any) -> Any:
+    """A task tree without the noise, for the model."""
+    if not isinstance(t, dict):
+        return t
+    keep = {k: t[k] for k in ("id", "title", "kind", "category", "status", "result", "error", "context") if t.get(k) not in (None, {}, [])}
+    if t.get("children"):
+        keep["subtasks"] = [_slim_tree(c) for c in t["children"]]
+    return keep
 
 
 class _Invalid(Exception):

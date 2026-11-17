@@ -10,6 +10,7 @@ mod core;
 mod engine;
 mod host;
 mod memory;
+mod tasks;
 mod verbs;
 
 use serde_json::{json, Value};
@@ -105,6 +106,10 @@ fn daemon(args: &[String]) -> std::io::Result<()> {
     let mem = memory::Memory::open(&db).map_err(|e| std::io::Error::other(e.to_string()))?;
     let mut core = core::Core::new(mem, Box::new(host::LinuxHost));
     core.background = true;
+    core.playbook_dir = arg(args, "--playbooks").map(PathBuf::from)
+        .or_else(|| std::env::var("LINUXAI_PLAYBOOKS").ok().map(PathBuf::from))
+        .unwrap_or_else(|| db.parent().map(|d| d.join("playbooks")).unwrap_or_else(|| "playbooks".into()));
+    core.file_gid = arg(args, "--group").or_else(|| std::env::var("LINUXAI_GROUP").ok()).as_deref().and_then(group_id);
     let core = Arc::new(core);
     core.recover();
 

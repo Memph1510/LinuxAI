@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS objects (id TEXT PRIMARY KEY, type TEXT NOT NULL, han
 CREATE INDEX IF NOT EXISTS objects_type ON objects(type, created);
 CREATE INDEX IF NOT EXISTS plans_status ON plans(status);
 CREATE TABLE IF NOT EXISTS saved   (name TEXT PRIMARY KEY, body TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS tasks   (id TEXT PRIMARY KEY, parent TEXT, status TEXT NOT NULL, body TEXT NOT NULL,
+                                    created REAL NOT NULL, updated REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent);
+CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status);
+CREATE TABLE IF NOT EXISTS playbook_history (id INTEGER PRIMARY KEY, category TEXT NOT NULL, text TEXT NOT NULL,
+                                    reason TEXT NOT NULL, ts REAL NOT NULL);
 "#;
 
 pub fn now() -> f64 {
@@ -297,5 +303,80 @@ impl Memory {
             .ok()
             .flatten()
             .and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    // ---- tasks ----
+    /// Insert or replace a task (its `id`, `parent` and `status` are read from the body).
+    pub fn save_task(&self, t: &Value) {
+        let db = self.c();
+        let now_ = now();
+        let _ = db.execute(
+            "INSERT INTO tasks(id, parent, status, body, created, updated) VALUES (?1,?2,?3,?4,?5,?5)
+             ON CONFLICT(id) DO UPDATE SET status=excluded.status, body=excluded.body, updated=excluded.updated",
+            params![t["id"].as_str().unwrap_or(""), t["parent"].as_str(), t["status"].as_str().unwrap_or("pending"),
+                    t.to_string(), now_],
+        );
+    }
+
+    pub fn load_task(&self, id: &str) -> Option<Value> {
+        let db = self.c();
+        db.query_row("SELECT body FROM tasks WHERE id=?1", params![id], |r| r.get::<_, String>(0))
+            .optional().ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    /// Atomically move a task from one of `from` to `to`, merging `patch` into it. False if it wasn't in
+    /// one of those states (someone else got there first).
+    pub fn transition_task(&self, id: &str, from: &[&str], to: &str, patch: &Value) -> Option<Value> {
+        let db = self.c();
+        let body: String = db.query_row("SELECT body FROM tasks WHERE id=?1", params![id], |r| r.get(0)).ok()?;
+        let mut t: Value = serde_json::from_str(&body).ok()?;
+        if !from.contains(&t["status"].as_str().unwrap_or("")) {
+            return None;
+        }
+        t["status"] = json!(to);
+        if let (Value::Object(m), Value::Object(p)) = (&mut t, patch) {
+            for (k, v) in p {
+                m.insert(k.clone(), v.clone());
+            }
+        }
+        db.execute("UPDATE tasks SET status=?1, body=?2, updated=?3 WHERE id=?4",
+                   params![to, t.to_string(), now(), id]).ok()?;
+        Some(t)
+    }
+
+    pub fn task_children(&self, parent: &str) -> Vec<Value> {
+        let db = self.c();
+        let mut st = db.prepare("SELECT body FROM tasks WHERE parent=?1 ORDER BY created, rowid").unwrap();
+        st.query_map(params![parent], |r| r.get::<_, String>(0)).unwrap()
+            .filter_map(Result::ok).filter_map(|s| serde_json::from_str(&s).ok()).collect()
+    }
+
+    pub fn tasks_with_status(&self, status: &str) -> Vec<Value> {
+        let db = self.c();
+        let mut st = db.prepare("SELECT body FROM tasks WHERE status=?1 ORDER BY created, rowid").unwrap();
+        st.query_map(params![status], |r| r.get::<_, String>(0)).unwrap()
+            .filter_map(Result::ok).filter_map(|s| serde_json::from_str(&s).ok()).collect()
+    }
+
+    pub fn root_tasks(&self, limit: i64) -> Vec<Value> {
+        let db = self.c();
+        let mut st = db.prepare("SELECT body FROM tasks WHERE parent IS NULL ORDER BY created DESC LIMIT ?1").unwrap();
+        st.query_map(params![limit], |r| r.get::<_, String>(0)).unwrap()
+            .filter_map(Result::ok).filter_map(|s| serde_json::from_str(&s).ok()).collect()
+    }
+
+    // ---- playbook history (the files themselves live on disk, as markdown) ----
+    pub fn playbook_archive(&self, category: &str, old_text: &str, reason: &str) {
+        let db = self.c();
+        let _ = db.execute("INSERT INTO playbook_history(category, text, reason, ts) VALUES (?1,?2,?3,?4)",
+                           params![category, old_text, reason, now()]);
+    }
+
+    pub fn playbook_history(&self, category: &str, limit: i64) -> Vec<Value> {
+        let db = self.c();
+        let mut st = db.prepare("SELECT text, reason, ts FROM playbook_history WHERE category=?1 ORDER BY id DESC LIMIT ?2").unwrap();
+        st.query_map(params![category, limit], |r| Ok(json!({"previous_text": r.get::<_, String>(0)?,
+            "replaced_because": r.get::<_, String>(1)?, "ts": r.get::<_, f64>(2)?}))).unwrap()
+            .filter_map(Result::ok).collect()
     }
 }

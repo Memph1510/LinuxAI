@@ -48,7 +48,7 @@ pub struct Exec {
 impl Exec {
     pub fn summary(&self) -> Value {
         json!({"plan_id": self.id, "plan": self.name, "status": self.status, "wait": self.wait,
-               "error": self.error, "source": self.source})
+               "error": self.error, "source": self.source, "task": self.plan.get("task")})
     }
 }
 
@@ -250,7 +250,24 @@ fn apply_op(op: &str, a: &[Value]) -> Result<Value, String> {
 
 /// `{"find": {"type": "bill", "from": "@verizon", "where": {"status": "unpaid"}, "pick": "newest", "last": 6}}`
 fn find(spec: &Value, vars: &Map<String, Value>, ctx: &Ctx) -> Result<Value, String> {
-    let spec = eval(spec, vars, ctx)?;
+    // Evaluate the spec, except that a where-condition [op, value] keeps its operator and only the value
+    // is evaluated (["<", "$floor"] compares against $floor; it isn't itself an expression).
+    let mut spec = spec.clone();
+    if let Some(Value::Object(w)) = spec.get_mut("where") {
+        for v in w.values_mut() {
+            match v {
+                Value::Array(x) if x.len() == 2 && x[0].as_str().map(|s| OPS.contains(&s)).unwrap_or(false) => {
+                    x[1] = eval(&x[1], vars, ctx)?;
+                }
+                other => *other = eval(other, vars, ctx)?,
+            }
+        }
+    }
+    let where_ = spec.as_object_mut().and_then(|m| m.remove("where"));
+    let mut spec = eval(&spec, vars, ctx)?;
+    if let Some(w) = where_ {
+        spec["where"] = w;
+    }
     let typ = spec.get("type").and_then(Value::as_str).ok_or("find needs a type")?;
     let mut items = ctx.mem.objects_of(typ, 5000);
     if let Some(from) = spec.get("from").and_then(Value::as_str) {

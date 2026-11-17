@@ -49,6 +49,10 @@ pub struct Core {
     active: Mutex<HashSet<String>>,
     /// Recent firings per rule, to stop a rule that keeps triggering itself.
     rule_fires: Mutex<HashMap<String, Vec<f64>>>,
+    /// Where the playbooks (one markdown file per task category) live.
+    pub playbook_dir: std::path::PathBuf,
+    /// Group that owns playbook files, so the human can edit them directly.
+    pub file_gid: Option<u32>,
 }
 
 const RULE_MAX_PER_MINUTE: usize = 10;
@@ -68,6 +72,8 @@ impl Core {
             background: false,
             active: Mutex::new(HashSet::new()),
             rule_fires: Mutex::new(HashMap::new()),
+            playbook_dir: std::env::var("LINUXAI_PLAYBOOKS").map(Into::into).unwrap_or_else(|_| "playbooks".into()),
+            file_gid: None,
         }
     }
 
@@ -121,7 +127,7 @@ impl Core {
     }
 
     /// Broadcast events produced while running, then let rules and waiting plans react to them.
-    fn settle(self: &Arc<Self>) {
+    pub(crate) fn settle(self: &Arc<Self>) {
         for _ in 0..200 {
             let pending = self.bus.drain();
             if pending.is_empty() {
@@ -162,6 +168,9 @@ impl Core {
     }
 
     fn react(self: &Arc<Self>, kind: &str, ev: &Value) {
+        if matches!(kind, "plan.finished" | "plan.failed" | "plan.stopped") && ev["data"]["task"].is_string() {
+            self.task_on_plan_end(kind, &ev["data"]);
+        }
         if kind.starts_with("plan.") || kind.starts_with("action.") || kind == "rule.throttled" {
             return; // bookkeeping events don't trigger rules
         }
@@ -214,6 +223,8 @@ impl Core {
                 });
             });
         }
+        self.settle();
+        self.task_recover();
         self.settle();
     }
 
@@ -335,6 +346,9 @@ impl Core {
                 self.sense(true);
                 json!({"ok": true, "state": *self.state.lock().unwrap()})
             }
+            op if op.starts_with("task") => self.task_op(op, req),
+            op if op.starts_with("playbook") => self.playbook_op(op, req),
+            "object_put" | "find" => self.object_op(op, req),
             _ => json!({"ok": false, "error": format!("unknown op '{op}'")}),
         }
     }

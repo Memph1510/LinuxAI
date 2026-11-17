@@ -6,7 +6,7 @@ Wants=dbus.service
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/linuxai-core daemon --group linuxai
+ExecStart=/usr/local/bin/linuxai-core daemon --group linuxai --playbooks /home/linuxai/playbooks
 Restart=always
 RestartSec=2
 RuntimeDirectory=linuxai
