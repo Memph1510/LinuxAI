@@ -622,3 +622,70 @@ fn resolving_a_blocker_needs_an_assessment_too() {
     assert_eq!(r["ok"], false, "{r}");
     assert!(r["report"]["errors"][0].as_str().unwrap().contains("assess"));
 }
+
+// ---- pruning ------------------------------------------------------------------------------------
+
+#[test]
+fn old_history_becomes_daily_digests_and_nothing_in_progress_is_lost() {
+    let (c, _) = core();
+    let day = 86400.0;
+    let old = crate::memory::now() - 40.0 * day;
+    for i in 0..50 { c.mem.add_event_at(old + i as f64, "power.unplugged", &json!({})); }
+    c.mem.add_event_at(old + 100.0, "ai.tell", &json!({"text": "Battery is low"}));
+    c.mem.add_event_at(old + 200.0, "task.failed", &json!({"title": "Book hotel", "error": "sold out"}));
+    // A plan that's still waiting (old) and one that finished long ago.
+    let w = c.submit(&json!({"plan": "still-waiting", "steps": [{"ask": "ok?"}]}), "human");
+    let f = c.submit(&json!({"plan": "long-done", "steps": [{"tell": "hi"}]}), "human");
+    let fin_id = f["result"]["plan_id"].as_str().unwrap().to_string();
+    let (w_id, mut fin) = (w["result"]["plan_id"].as_str().unwrap().to_string(), c.mem.load_plan(&fin_id).unwrap());
+    fin["status"] = json!("done");
+    c.mem.save_plan(&fin_id, "long-done", "human", "done", &fin);
+    let dry = c.handle(&json!({"op": "prune", "dry_run": true}))["pruned"].clone();
+    assert_eq!(dry["events"], 52);
+    assert_eq!(c.handle(&json!({"op": "stats"}))["stats"]["events"].as_i64().unwrap() >= 52, true, "dry run must not delete");
+    let r = c.handle(&json!({"op": "prune"}))["pruned"].clone();
+    assert_eq!(r["events"], 52);
+    assert_eq!(r["digests"], 1);
+    let digests = c.mem.objects_of("digest", 10);
+    assert_eq!(digests[0]["counts"]["power.unplugged"], 50);
+    let notable: Vec<String> = digests[0]["notable"].as_array().unwrap().iter().map(|n| n["kind"].as_str().unwrap().to_string()).collect();
+    assert!(notable.contains(&"ai.tell".to_string()) && notable.contains(&"task.failed".to_string()));
+    assert!(!notable.contains(&"power.unplugged".to_string()), "routine events are counted, not listed");
+    // Recent events stay; the waiting plan is untouched.
+    assert!(c.mem.load_plan(&w_id).is_some());
+    assert_eq!(c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn finished_plans_and_old_playbook_versions_are_pruned() {
+    let (c, _, _) = core_with_playbooks();
+    let mut ret = c.retention.clone();
+    ret.plans_days = 0.0;
+    ret.playbook_versions = 3;
+    for i in 0..6 {
+        c.handle(&json!({"op": "playbook_put", "category": "freight", "text": format!("v{i}"), "reason": "r"}));
+    }
+    let done = c.submit(&json!({"plan": "d", "steps": [{"tell": "x"}]}), "human");
+    let waiting = c.submit(&json!({"plan": "w", "steps": [{"ask": "?"}]}), "human");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let r = c.mem.prune(&ret, false);
+    assert_eq!(r["plans"], 1, "{r}");
+    assert!(c.mem.load_plan(done["result"]["plan_id"].as_str().unwrap()).is_none());
+    assert!(c.mem.load_plan(waiting["result"]["plan_id"].as_str().unwrap()).is_some());
+    assert_eq!(c.handle(&json!({"op": "playbook_history", "category": "freight"}))["history"].as_array().unwrap().len(), 3);
+    assert_eq!(c.handle(&json!({"op": "playbook", "category": "freight"}))["own"], "v5");
+}
+
+#[test]
+fn repeated_prunes_merge_into_one_digest_per_day() {
+    let (c, _) = core();
+    let mut ret = c.retention.clone();
+    ret.events_days = 0.0;
+    c.mem.add_event_at(crate::memory::now() - 10.0, "test.a", &json!({}));
+    c.mem.prune(&ret, false);
+    c.mem.add_event_at(crate::memory::now() - 5.0, "test.a", &json!({}));
+    c.mem.prune(&ret, false);
+    let d = c.mem.objects_of("digest", 10);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(d[0]["counts"]["test.a"], 2);
+}

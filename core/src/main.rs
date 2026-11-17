@@ -137,6 +137,11 @@ fn daemon(args: &[String]) -> std::io::Result<()> {
         loop {
             c.sense(n % 5 == 0);
             c.tick();
+            // Prune old history at startup and then about once an hour.
+            let every = std::env::var("LINUXAI_PRUNE_EVERY_SECS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(3600.0);
+            if n % ((every / interval).max(1.0) as u64) == 0 {
+                c.handle(&serde_json::json!({"op": "prune"}));
+            }
             n += 1;
             std::thread::sleep(Duration::from_secs_f64(interval));
         }

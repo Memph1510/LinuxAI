@@ -16,8 +16,15 @@ within each stage.
 - [x] **Soundness pass** (see below)
 - [ ] Run against the real Claude model inside the image (needs an API key in the VM)
 - [ ] Verify the sched_ext policy switch on real hardware
-- [ ] Soak test: run the daemon for days; watch memory, database size and thread count
-- [ ] Prune old events and finished plans (summarize them into the AI's memory first)
+- [x] Prune old history: raw events become daily digests (counts plus notable moments) before removal;
+      finished plans, old journal entries and old playbook versions expire; nothing in progress is touched.
+      Defaults: events 30 days, finished plans 14 days, journal 365 days, 50 playbook versions
+      (`LINUXAI_KEEP_*`)
+- [x] Soak harness (`tests/soak.py`): days of activity compressed into minutes, with crashes, pruning,
+      invariants and resource tracking
+- [ ] Multi-day soak on the real laptop (same harness, `--minutes 4320`)
+- [x] Second look before acting: assessments required; unknowns, low confidence and first-time situations go
+      to the human; first-time situations need research
 - [x] **Tasks, micro and macro** (see [TASKS.md](TASKS.md)), plus category **playbooks** (markdown, editable,
       with history) and **cases** (situations with their variables, for learning by repetition): you hand the OS a task of any size. It breaks big ones into subtasks
       (run by itself or by subagents), tracks what depends on what, and coordinates the parts that need a

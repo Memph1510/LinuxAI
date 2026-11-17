@@ -379,4 +379,136 @@ impl Memory {
             "replaced_because": r.get::<_, String>(1)?, "ts": r.get::<_, f64>(2)?}))).unwrap()
             .filter_map(Result::ok).collect()
     }
+
+    // ---- pruning: old raw history is condensed into daily digests, then removed ----
+    #[cfg(test)]
+    pub fn add_event_at(&self, ts: f64, kind: &str, data: &Value) {
+        let db = self.c();
+        let _ = db.execute("INSERT INTO events(ts, kind, data) VALUES (?1, ?2, ?3)", params![ts, kind, data.to_string()]);
+    }
+
+    /// Remove history older than the retention windows. Whole days of events become one `digest` object
+    /// each (counts by kind, plus the notable moments) before they're deleted. Nothing that is in progress
+    /// or waiting is ever removed.
+    pub fn prune(&self, r: &Retention, dry_run: bool) -> Value {
+        let db = self.c();
+        let t = now();
+        let day = 86400.0;
+        // Whole UTC days when keeping a day or more; exact (for testing and soak runs) when keeping less.
+        let raw_cutoff = t - r.events_days * day;
+        let events_cutoff = if r.events_days >= 1.0 { (raw_cutoff / day).floor() * day } else { raw_cutoff };
+        let plans_cutoff = t - r.plans_days * day;
+        let journal_cutoff = t - r.journal_days * day;
+        let count = |sql: &str, p: f64| -> i64 { db.query_row(sql, params![p], |row| row.get(0)).unwrap_or(0) };
+        let n_events = count("SELECT COUNT(*) FROM events WHERE ts < ?1", events_cutoff);
+        let n_plans = count("SELECT COUNT(*) FROM plans WHERE status IN ('done','stopped','failed') AND updated < ?1", plans_cutoff);
+        let n_journal = count("SELECT COUNT(*) FROM journal WHERE ts < ?1", journal_cutoff);
+        let n_versions: i64 = db.query_row(
+            "SELECT COUNT(*) FROM playbook_history h WHERE (SELECT COUNT(*) FROM playbook_history n
+             WHERE n.category = h.category AND n.id > h.id) >= ?1", params![r.playbook_versions], |row| row.get(0)).unwrap_or(0);
+        let mut digests = 0;
+        if !dry_run && n_events > 0 {
+            // One digest per day: how many of each kind of event, and what stood out.
+            let notable = ["ai.tell", "plan.failed", "task.failed", "task.done", "service.failed", "rule.throttled",
+                           "playbook.updated", "trust.granted", "battery.critical", "temperature.high"];
+            let mut st = db.prepare("SELECT CAST(ts / 86400 AS INTEGER) AS d, kind, data, ts FROM events WHERE ts < ?1 ORDER BY id").unwrap();
+            let rows: Vec<(i64, String, String, f64)> = st.query_map(params![events_cutoff], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+                .unwrap().filter_map(Result::ok).collect();
+            drop(st);
+            let mut by_day: std::collections::BTreeMap<i64, (serde_json::Map<String, Value>, Vec<Value>)> = Default::default();
+            for (d, kind, data, ts) in rows {
+                let e = by_day.entry(d).or_default();
+                let n = e.0.get(&kind).and_then(Value::as_i64).unwrap_or(0) + 1;
+                e.0.insert(kind.clone(), json!(n));
+                let same_kind = e.1.iter().filter(|x| x["kind"] == json!(kind)).count();
+                if notable.contains(&kind.as_str()) && same_kind < 5 && e.1.len() < 40 {
+                    let data: Value = serde_json::from_str(&data).unwrap_or(Value::Null);
+                    let what = data.get("text").or(data.get("title")).or(data.get("unit")).or(data.get("plan"))
+                        .or(data.get("category")).cloned().unwrap_or(Value::Null);
+                    e.1.push(json!({"ts": ts, "kind": kind, "what": what, "error": data.get("error")}));
+                }
+            }
+            for (d, (counts, notable)) in by_day {
+                // One digest per day: merge into it if an earlier prune already started that day's digest.
+                let existing: Option<(String, String)> = db.query_row(
+                    "SELECT id, fields FROM objects WHERE type='digest' AND json_extract(fields, '$.day') = ?1",
+                    params![d * 86400], |row| Ok((row.get(0)?, row.get(1)?))).optional().ok().flatten();
+                match existing {
+                    Some((id, old)) => {
+                        let mut f: Value = serde_json::from_str(&old).unwrap_or(json!({}));
+                        for (k, v) in &counts {
+                            let n = f["counts"][k].as_i64().unwrap_or(0) + v.as_i64().unwrap_or(0);
+                            f["counts"][k] = json!(n);
+                        }
+                        let mut list = f["notable"].as_array().cloned().unwrap_or_default();
+                        for n in notable {
+                            let same = list.iter().filter(|x| x["kind"] == n["kind"]).count();
+                            if same < 5 && list.len() < 40 {
+                                list.push(n);
+                            }
+                        }
+                        f["notable"] = json!(list);
+                        let _ = db.execute("UPDATE objects SET fields=?1, updated=?2 WHERE id=?3", params![f.to_string(), t, id]);
+                    }
+                    None => {
+                        let id = format!("obj:digest/{}", new_id(""));
+                        let fields = json!({"day": d * 86400, "counts": counts, "notable": notable});
+                        let _ = db.execute("INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,'digest',NULL,?2,?3,?3)",
+                                           params![id, fields.to_string(), t]);
+                        digests += 1;
+                    }
+                }
+            }
+            let _ = db.execute("DELETE FROM events WHERE ts < ?1", params![events_cutoff]);
+        }
+        if !dry_run {
+            let _ = db.execute("DELETE FROM plans WHERE status IN ('done','stopped','failed') AND updated < ?1", params![plans_cutoff]);
+            let _ = db.execute("DELETE FROM journal WHERE ts < ?1", params![journal_cutoff]);
+            let _ = db.execute("DELETE FROM playbook_history WHERE id IN (SELECT h.id FROM playbook_history h WHERE
+                (SELECT COUNT(*) FROM playbook_history n WHERE n.category = h.category AND n.id > h.id) >= ?1)", params![r.playbook_versions]);
+            // Give the space back when a lot was freed.
+            let pages: i64 = db.query_row("PRAGMA page_count", [], |row| row.get(0)).unwrap_or(0);
+            let free: i64 = db.query_row("PRAGMA freelist_count", [], |row| row.get(0)).unwrap_or(0);
+            if pages > 0 && free * 4 > pages {
+                let _ = db.execute_batch("VACUUM;");
+            }
+            let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+        json!({"dry_run": dry_run, "events": n_events, "digests": digests, "plans": n_plans, "journal": n_journal,
+               "playbook_versions": n_versions})
+    }
+
+    pub fn stats(&self) -> Value {
+        let db = self.c();
+        let mut out = serde_json::Map::new();
+        for t in ["events", "journal", "plans", "rules", "mandates", "objects", "tasks", "playbook_history"] {
+            let n: i64 = db.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |row| row.get(0)).unwrap_or(-1);
+            out.insert(t.into(), json!(n));
+        }
+        let pages: i64 = db.query_row("PRAGMA page_count", [], |row| row.get(0)).unwrap_or(0);
+        let size: i64 = db.query_row("PRAGMA page_size", [], |row| row.get(0)).unwrap_or(0);
+        out.insert("db_bytes".into(), json!(pages * size));
+        Value::Object(out)
+    }
+}
+
+/// How long raw history is kept. Settable with LINUXAI_KEEP_* environment variables.
+#[derive(Clone, Debug)]
+pub struct Retention {
+    pub events_days: f64,
+    pub plans_days: f64,
+    pub journal_days: f64,
+    pub playbook_versions: i64,
+}
+
+impl Retention {
+    pub fn from_env() -> Self {
+        let get = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        Retention {
+            events_days: get("LINUXAI_KEEP_EVENTS_DAYS", 30.0),
+            plans_days: get("LINUXAI_KEEP_PLANS_DAYS", 14.0),
+            journal_days: get("LINUXAI_KEEP_JOURNAL_DAYS", 365.0),
+            playbook_versions: get("LINUXAI_KEEP_PLAYBOOK_VERSIONS", 50.0) as i64,
+        }
+    }
 }

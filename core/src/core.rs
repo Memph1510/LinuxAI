@@ -53,6 +53,7 @@ pub struct Core {
     pub playbook_dir: std::path::PathBuf,
     /// Group that owns playbook files, so the human can edit them directly.
     pub file_gid: Option<u32>,
+    pub retention: crate::memory::Retention,
 }
 
 const RULE_MAX_PER_MINUTE: usize = 10;
@@ -74,6 +75,7 @@ impl Core {
             rule_fires: Mutex::new(HashMap::new()),
             playbook_dir: std::env::var("LINUXAI_PLAYBOOKS").map(Into::into).unwrap_or_else(|_| "playbooks".into()),
             file_gid: None,
+            retention: crate::memory::Retention::from_env(),
         }
     }
 
@@ -343,6 +345,15 @@ impl Core {
                 self.emit("human.said", json!({"text": req["text"]}));
                 json!({"ok": true})
             }
+            "prune" => {
+                let r = self.mem.prune(&self.retention, req["dry_run"].as_bool().unwrap_or(false));
+                if !req["dry_run"].as_bool().unwrap_or(false) {
+                    self.emit("memory.pruned", r.clone());
+                }
+                json!({"ok": true, "pruned": r})
+            }
+            "stats" => json!({"ok": true, "stats": self.mem.stats(), "active_plans": self.active.lock().unwrap().len(),
+                              "subscribers": self.subscribers.lock().unwrap().len()}),
             "sense" => {
                 self.sense(true);
                 json!({"ok": true, "state": *self.state.lock().unwrap()})
