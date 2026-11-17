@@ -131,7 +131,8 @@ def main() -> int:
         con.send("root\n")
         con.read_until(r"[#$] $", 120)
         con.run("export TERM=dumb PS1='# '; stty -echo cols 200", 30)
-        con.run("systemctl is-system-running --wait >/dev/null 2>&1 || true", 600)
+        state = con.run("timeout 240 systemctl is-system-running --wait; systemctl list-jobs --no-legend | head -5", 300)
+        print(f"  system state: {' / '.join(state.split())[:200]}", flush=True)
         for name, cmd, expect in CHECKS:
             out = con.run(cmd, 180)
             ok = re.search(expect, out, re.M) is not None
