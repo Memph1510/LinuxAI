@@ -22,6 +22,8 @@ class Config:
     effort: str = field(default_factory=lambda: os.environ.get("LINUXAI_EFFORT", "high"))
     # ask: confirm every change | trusted: auto-run read-only + learned commands | auto: run everything
     mode: str = field(default_factory=lambda: os.environ.get("LINUXAI_MODE", "trusted"))
+    # Web search and fetch for research (server-side tools). LINUXAI_WEB=0 turns them off.
+    web: bool = field(default_factory=lambda: os.environ.get("LINUXAI_WEB", "1") != "0")
     command_timeout: int = field(default_factory=lambda: int(os.environ.get("LINUXAI_TIMEOUT", "600")))
     max_output_chars: int = 8000
 

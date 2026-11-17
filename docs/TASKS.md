@@ -105,3 +105,15 @@ The AI never acts on a guess, whether or not it was given direct instructions.
 Answering "always" only extends trust to *actions*. It never skips the second look for a new or uncertain
 *situation*. As experience builds up (cases, playbooks), situations stop being new, and the second look
 happens less often.
+
+## Research includes the internet
+
+Research for a first-time or uncertain situation isn't limited to what's on the machine. The AI uses web search
+and web fetch (Anthropic's server-side tools; `LINUXAI_WEB=0` turns them off) for rates, weather, regulations,
+reputations and documentation, and cites the URLs it relied on in the assessment.
+
+Credible sources are decided as they're encountered. Each website the AI relies on is rated for a category
+(**trusted**, **useful**, **doubtful**, **blocked**) with the reason, and with whether the rating came from you or
+from the AI. Your rating always wins. Ratings for broader categories apply to narrower ones. Before researching,
+the AI checks what's already rated, prefers trusted sources, and corroborates doubtful or unrated ones. Blocked
+sites are excluded from searches automatically.

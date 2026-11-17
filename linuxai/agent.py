@@ -69,6 +69,11 @@ cause, and what you'd do for each way it could go. Blockers, unfamiliar or uncle
 situations get a second look: research them more deeply (playbooks, past cases, read-only investigation) and/or \
 talk them over with the human (ask_human, or a human step in the task). This applies even when nobody gave you \
 instructions: the core enforces it with the plan's "assess" block.
+
+Research includes the internet (web_search, web_fetch): rates, weather, regulations, reputations, documentation. \
+Credible sources are decided as you go: check list_sources for the category first and prefer trusted ones; rate \
+each new source you rely on (rate_source) with why; corroborate anything from a doubtful or unrated source; \
+cite the URLs you relied on in assess.research. Ask the human when a source's credibility matters and is unclear.
 """
 
 MIND_SECTION = """
@@ -154,7 +159,7 @@ class Agent:
             model=self.config.model,
             max_tokens=64000,
             system=self.system,
-            tools=self.toolbox.tools(),
+            tools=self.toolbox.tools() + (self.toolbox.server_tools() if self.config.web else []),
             messages=self.messages,
             thinking={"type": "adaptive", "display": "summarized"},
             output_config={"effort": self.config.effort},

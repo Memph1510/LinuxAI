@@ -242,6 +242,16 @@ CORE_TOOLS = [
           "complete, rate), what was decided, and how it turned out. Cases are what playbooks are learned from.",
           {"category": {"type": "string"}, "variables": {"type": "object"}, "decision": {"type": "string"},
            "outcome": {"type": "string"}}, ["category", "variables", "decision"]),
+    _tool("rate_source",
+          "Record how credible a website is for a category of work, as you encounter it: trusted (rely on it), "
+          "useful (good but double-check), doubtful (only with corroboration), blocked (never use). Say why. "
+          "Set from_human when the rating came from the human; theirs override yours.",
+          {"domain": {"type": "string", "description": "e.g. dat.com"}, "category": {"type": "string"},
+           "credibility": {"type": "string", "enum": ["trusted", "useful", "doubtful", "blocked"]},
+           "why": {"type": "string"}, "from_human": {"type": "boolean"}},
+          ["domain", "category", "credibility", "why"]),
+    _tool("list_sources", "The websites already rated for a category (and its broader categories), best first.",
+          {"category": {"type": "string"}}, ["category"]),
     _tool("find_cases", "Find past cases in a category, optionally filtered by variables ({field: value} or {field: [op, value]}).",
           {"category": {"type": "string"}, "where": {"type": "object"}, "last": {"type": "integer"}}, ["category"]),
 ]
@@ -595,6 +605,52 @@ class Toolbox:
         fields = {"category": category, "decision": decision, "outcome": outcome, **(variables if isinstance(variables, dict) else {})}
         r = self._core("object_put", type="case", fields=fields)
         return f"Recorded {r.get('id')}." if r.get("ok") else f"Error: {r.get('error')}"
+
+    def t_rate_source(self, domain: str, category: str, credibility: str, why: str, from_human: bool = False) -> str:
+        domain = re.sub(r"^https?://", "", str(domain)).split("/")[0].lower().removeprefix("www.")
+        if credibility not in ("trusted", "useful", "doubtful", "blocked") or not domain:
+            raise _Invalid("credibility must be trusted, useful, doubtful or blocked, and domain a hostname")
+        r = self._core("object_put", type="source", handle=domain, fields={
+            "domain": domain, "category": category, "credibility": credibility, "why": why,
+            "by": "human" if from_human else "ai"})
+        ui.out(ui.dim(f"\n  source {domain} [{category}]: {credibility}"))
+        return "Recorded." if r.get("ok") else f"Error: {r.get('error')}"
+
+    def t_list_sources(self, category: str) -> str:
+        found = self.sources(category)
+        if not found:
+            return f"No sources rated yet for {category}. Rate the ones you use (rate_source)."
+        return "\n".join(f"- {s['domain']}: {s['credibility']} ({s['category']}, by {s['by']}) - {s['why']}" for s in found)
+
+    def sources(self, category: str | None = None) -> list[dict]:
+        """Current rating per domain (and category): the human's rating wins, then the newest."""
+        if not self.core:
+            return []
+        try:
+            rows = self.core.request("find", spec={"type": "source"}).get("found") or []
+        except Exception:  # noqa: BLE001
+            return []
+        if category:
+            cats = {"/".join(category.split("/")[:i]) for i in range(1, len(category.split("/")) + 1)}
+            rows = [r for r in rows if r.get("category") in cats]
+        best: dict[tuple, dict] = {}
+        for r in rows:  # newest first
+            key = (r.get("domain"), r.get("category"))
+            if key not in best or (r.get("by") == "human" and best[key].get("by") != "human"):
+                best[key] = r
+        order = {"trusted": 0, "useful": 1, "doubtful": 2, "blocked": 3}
+        return sorted(best.values(), key=lambda r: order.get(r.get("credibility"), 9))
+
+    def server_tools(self) -> list[dict]:
+        """Web search and fetch (run on Anthropic's side), excluding blocked sources."""
+        blocked = sorted({s["domain"] for s in self.sources() if s.get("credibility") == "blocked"})
+        tools = []
+        for typ, name in (("web_search_20260209", "web_search"), ("web_fetch_20260209", "web_fetch")):
+            t: dict = {"type": typ, "name": name}
+            if blocked:
+                t["blocked_domains"] = blocked
+            tools.append(t)
+        return tools
 
     def t_find_cases(self, category: str, where: Any = None, last: int = 20) -> str:
         cond = {"category": category, **(where if isinstance(where, dict) else {})}

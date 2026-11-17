@@ -375,3 +375,27 @@ def test_unassessed_ai_plan_is_sent_back_with_instructions(env, live_core):
     tb.core = live_core
     out = tb.t_submit_plan({"plan": "x", "steps": [{"do": "run", "program": "true"}]})
     assert "rejected" in out and "assess" in out
+
+
+def test_web_research_tools_and_source_ratings(env, live_core):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    client = FakeClient([_msg([NS(type="text", text="ok")], "end_turn")])
+    agent = Agent(cfg, mem, tb, client=client)
+    agent.turn("what's the going rate Dallas to Atlanta?")
+    names = [t.get("name") for t in client.requests[0]["tools"]]
+    assert "web_search" in names and "web_fetch" in names
+    assert "Research includes the internet" in agent.system
+    # Sources are rated as encountered; the human's rating wins; blocked ones are excluded from search.
+    tb.t_rate_source("https://www.dat.com/trends", "freight", "trusted", "industry load board data")
+    tb.t_rate_source("rumors-truckers.example", "freight/negotiate", "useful", "forum, sometimes right")
+    tb.t_rate_source("rumors-truckers.example", "freight/negotiate", "blocked", "made-up rates", from_human=True)
+    listed = tb.t_list_sources("freight/negotiate/hollis")
+    assert listed.splitlines()[0].startswith("- dat.com: trusted")
+    assert "rumors-truckers.example: blocked" in listed and "by human" in listed
+    search = next(t for t in tb.server_tools() if t["name"] == "web_search")
+    assert search["blocked_domains"] == ["rumors-truckers.example"]
+    cfg.web = False
+    client2 = FakeClient([_msg([NS(type="text", text="ok")], "end_turn")])
+    Agent(cfg, mem, tb, client=client2).turn("hi")
+    assert "web_search" not in [t.get("name") for t in client2.requests[0]["tools"]]
