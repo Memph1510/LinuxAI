@@ -1,266 +1,152 @@
-# LinuxAI Action Language: Draft 1
+# LinuxAI Action Language: Draft 2
 
-> Status: **first draft for discussion.** Syntax, keywords and the name can all change.
-> Working name: **the action language**. Naming it is an open question.
+> Status: **draft for discussion.** Name: **LinuxAI** (the language shares the system's name).
 > Companion document: [SYSTEM_INTERFACE.md](SYSTEM_INTERFACE.md).
 
 ## In plain terms
 
-This is the language the AI uses to *do* things. Most of it will be written by the AI and read by you, so it is
-designed for three things:
+There are two languages in LinuxAI, and they have different jobs:
 
-1. **You can read it.** A plan reads close to English, and the system can show any plan as plain sentences.
-2. **The system can check it before it runs.** Do the things it mentions exist, does it fit your budget and your
-   standing directions, which steps cost money or reach the outside world?
-3. **It does exactly what it says.** There are no hidden side effects. Only verbs change anything, and every
-   change is recorded.
+| | Between you and the AI | Between the AI and the computer |
+|---|---|---|
+| Language | **English**, by text or voice, like a normal conversation | **The LinuxAI action language** (this document) |
+| Built for | You | The AI and the machine, for speed, precision and reliability |
+| Do you see it? | Yes, it's how you talk | Only if you ask. The system explains any of it in English on request ("what did you just do?", "why?"). |
 
-It is deliberately small. The AI's intelligence goes into *choosing* the plan; the language just has to say the
-plan clearly and safely.
+This document is about the second one. You never have to read or write it.
 
-## A first look
+## Design goal: as efficient as possible for the AI
 
+"Efficient" here means four things.
+
+1. **Few round trips.** Today's AI agents (including the `cortex` prototype) think, run one command, read the
+   output, think again, run the next command. Every step costs a full model call: seconds and money. In LinuxAI
+   the AI writes a **whole plan at once**, with branches for the likely outcomes ("if the bill is unusually high,
+   ask; otherwise pay"). The machine then runs it at machine speed. The AI is only woken up again when something
+   happens that the plan didn't cover.
+2. **No mistakes in form.** AI models are most reliable when they produce **structured data that matches a strict
+   schema**. The API enforces the shape, so a plan can never be malformed. Inventing a brand-new text syntax would
+   cost tokens to teach and cause errors. So the language is a **typed data structure** (JSON), not text code.
+3. **Few tokens.** Plans refer to things by short handles and ids (`@verizon`, `budget:bills`), not prose. Plans
+   that worked are saved and reused by name, so the AI doesn't rewrite them every time. Keys stay short but
+   meaningful: cryptic encodings save little and make the model err more.
+4. **Free when possible.** Plans the AI has learned become **rules** that run with no AI model at all: instantly,
+   offline, at no cost. Over time most routine work runs this way.
+
+## What a plan looks like
+
+The AI writes this (through one strictly-typed tool call):
+
+```json
+{
+  "plan": "pay-verizon",
+  "why": "bill arrived by email; due 2026-11-28",
+  "conf": 0.9,
+  "steps": [
+    {"let": "bill",  "find": {"type": "bill", "from": "@verizon", "where": {"status": "unpaid"}, "pick": "newest"}},
+    {"let": "usual", "calc": ["avg", "amount", {"find": {"type": "bill", "from": "@verizon", "last": 6}}]},
+    {"if": [">", "$bill.amount", ["*", "$usual", 1.2]],
+     "then": [
+       {"ask": "Verizon is {$bill.amount}, about {pct($bill.amount,$usual)} above the usual {$usual}. Pay it?",
+        "opts": ["pay", "hold"], "as": "ans"},
+       {"expect": ["=", "$ans", "pay"], "else": "stop"}
+     ]},
+    {"do": "pay", "what": "$bill", "from": "budget:bills"},
+    {"do": "remember", "text": "Paid Verizon {$bill.amount} on {today}"}
+  ]
+}
 ```
-plan "Pay the Verizon bill"
-  because "bill arrived by email; due Nov 28"
-  confidence 0.9
 
-  let bill = find bill from @verizon where status = unpaid, newest
-  let usual = average amount of (find bill from @verizon, last 6)
+If you ask what it did, you get:
 
-  if bill.amount > usual by more than 20%:
-    ask "Verizon is ${bill.amount}, about {percent(bill.amount, usual)} above the usual ${usual}. Pay it?"
-      options "pay", "hold", "I'll look"
-    expect answer is "pay" otherwise stop
-
-  pay bill from budget:bills
-  remember "Paid Verizon ${bill.amount} on {today}"
-```
-
-Shown to you as:
-
-> **Pay the Verizon bill** (because the bill arrived by email; due Nov 28)
-> 1. Find the newest unpaid Verizon bill.
-> 2. Compare it with the average of the last 6 Verizon bills.
-> 3. If it is more than 20% above that, ask you before paying.
-> 4. Pay it from the bills budget. 💳 *costs money: $112.40 · within mandate "Bills"*
-> 5. Remember the payment.
-
----
+> I paid the Verizon bill ($84.12) from the bills budget. It was in the normal range, so I didn't need to check
+> with you.
 
 ## 1. Values
 
-| Kind | Examples |
+| Kind | Form |
 |---|---|
-| text | `"Sam's wedding"` |
-| number | `3`, `0.8`, `20%` |
-| money | `$84.12`, `€40`, `$900` (currency is part of the value; adding $ to € is an error) |
-| time | `today`, `tomorrow 9am`, `2026-06-14`, `next Friday`, `in 3 days`, `6 months ago` |
-| duration | `3 days`, `2h`, `45 minutes` |
-| yes/no | `yes`, `no` |
-| references | `@verizon` (handle), `#denver-trip` (tag or project), `budget:bills`, `obj:bill/01JDQ8K3...` |
-| lists | `["aisle", "window"]` |
-| records | `{ from: DEN, to: AUS, date: 2027-06-12 }` |
+| text, number, yes/no | JSON `"…"`, `3.5`, `true` |
+| money | `{"$": 84.12}` or `"$84.12"`, with currency (USD by default) |
+| time | ISO dates/times, or relative forms the engine resolves at check time: `"today"`, `"+3d"`, `"-6mo"`, `"next fri 9:00"` |
+| references | `"@verizon"` (handle), `"#denver-trip"` (tag/project), `"budget:bills"`, `"obj:bill/01JDQ8K3..."` |
+| variables | `"$name"`, `"$name.field"` |
+| expressions | prefix lists: `[">", "$a", 10]`, `["*", "$usual", 1.2]`, `["avg", "amount", <list>]` |
 
-Times are resolved against your time zone and calendar when the plan is checked, so `next Friday` becomes a
-concrete date you can see before anything runs.
+## 2. Step kinds
 
-## 2. Finding things
+| Step | Purpose |
+|---|---|
+| `let` + `find` / `calc` / value | Look things up in memory, compute, name the result |
+| `do` | Use a **verb** (an action an organ provides): `pay`, `send`, `book`, `schedule`, `set`, `limit`, `restart`, `install`, `run`, `remember`, `believe`, … |
+| `if` / `then` / `else` | Branch |
+| `each` | Repeat over a list (always finite) |
+| `expect` + `else` | Check a condition; on failure `stop`, `ask`, or `think` (see below) |
+| `try` / `else` | Handle a failing step |
+| `ask` | Ask you something. The plan **pauses durably**, through days and reboots, until you answer by text or on screen. |
+| `tell` | Send you a message and continue |
+| `wait` | Wait for an event (`{"wait": "payment.settled", "about": "$bill", "max": "3d"}`) or a time |
+| `think` | Hand back to the AI model with the current state: "something unexpected happened, decide what to do next". This is how a plan asks the AI for judgment only when it's needed. |
+| `call` | Run a saved plan or solution by name, with arguments |
 
-`find` queries the memory:
+## 3. Verbs
 
-```
-find bill from @verizon where status = unpaid, newest
-find message where channel = email and from = @landlord, last 10
-find appointment between today and next Sunday
-find anything about "the Denver wedding"            -- search by meaning
-find people linked to #denver-trip
-```
+Every verb is declared by an organ with a typed signature:
 
-- `where` filters, `, newest` / `, oldest` / `, last N` / `, sorted by <field>` shape the result.
-- A `find` that should return one thing but returns none or several is an error at check time, unless the plan
-  handles it (`if none:` / `pick one`). The AI can't act on a guess without saying so.
-
-Simple calculations: `count`, `sum`, `average`, `min`, `max`, `percent`, and the usual `+ - * /` and comparisons.
-
-## 3. Doing things: verbs
-
-A verb is an action an organ provides. The general shape is:
-
-```
-<verb> <thing> [preposition value]...
+```json
+{"verb": "pay", "organ": "payments",
+ "args": {"what": "bill|money", "from": "budget", "using": "card?"},
+ "effect": ["external", "money"], "undo": null,
+ "explain": "pay {what} from {from}"}
 ```
 
-```
-pay bill from budget:bills
-send message to @mom saying "Landed, see you at 6"
-reply to message saying "Thanks, Tuesday works"
-book flight { from: DEN, to: AUS, date: 2027-06-12, seat: aisle } within budget:travel
-schedule appointment "Dentist" at next Tuesday 3pm for 1h
-move document "lease.pdf" to #apartment
-set power profile to "saver"
-set cpu policy to "efficiency"
-limit program @steam memory to 4GB
-restart service @networkmanager
-run program "git" with ["pull"] in #linuxai          -- the programs organ: escape hatch to ordinary software
-```
+- `effect` tells the engine what kind of change this is: none, local, external, money.
+- `undo` names the reverse verb when there is one.
+- `explain` is the template used to describe the step to you in English.
 
-Each verb has a declared signature (what it takes, what it returns, what kind of effect it has, whether it can be
-undone). The checker uses that to validate the call and to show you the plain-language version.
+**Escape hatch:** the `run` verb (programs organ) runs any ordinary program or shell command. It stays
+**unlimited** for now, so the AI is never stuck while the set of verbs grows. When the AI keeps using `run` for
+the same job, that's a signal to add a proper verb.
 
-## 4. Talking with you
+## 4. Rules
 
-```
-tell "Booked: Southwest 1432, Jun 12, 8:05am, aisle, $214."
+A rule is a plan triggered by an event. It runs without the AI model:
 
-ask "Which dates for Denver?" options "Jun 11–15", "Jun 12–14"
-let dates = answer
-
-ask "Anything I should know about this trip?"           -- free-form answer
+```json
+{"rule": "unplugged-save-power",
+ "when": "power.unplugged",
+ "steps": [
+   {"do": "set", "what": "power.profile", "to": "saver"},
+   {"do": "set", "what": "cpu.policy",    "to": "efficiency"}
+ ]}
 ```
 
-- `ask` **pauses the plan durably**. It waits through hours, days and reboots for your reply, by text or on screen,
-  then continues from that exact point.
-- `tell` sends a message and continues.
-- `answer` holds the reply. The plan can use it like any other value.
+The AI creates rules from what it has learned. It tells you in English ("From now on, when you unplug, I'll
+switch to power-saving automatically"), and you can say no.
 
-## 5. Control
+## 5. How a plan runs
 
-```
-let x = ...                     -- name a value
+1. **Receive.** The plan arrives from the model as schema-checked data, so its shape is always valid.
+2. **Check.** References resolve, types match, verbs exist, relative times become exact, money is charged against
+   budgets, and steps outside what the AI is trusted to do are marked (see "Trust" in SYSTEM_INTERFACE.md).
+   Problems go straight back to the model to fix, before anything happens.
+3. **Run.** Steps execute at machine speed. Outside-world steps carry idempotency keys, so a crash can't pay or
+   send twice. `ask` and `wait` pause the plan durably.
+4. **Journal.** Each step is recorded with intent, result, cost and undo. This is what the AI uses to explain
+   itself to you in English.
+5. **Learn.** Outcomes update memory. Repeated successes become rules.
 
-if <condition>:                 -- branches
-  ...
-else:
-  ...
+## 6. Implementation notes
 
-for each m in find message where needs_reply:
-  ...
+- The plan schema is a JSON Schema, given to the model as a strict tool definition.
+- The engine (checker + runner + rule matcher) is written in Rust, inside the LinuxAI core.
+- Plans, rules and saved solutions are stored as objects in memory, so they're searchable, versioned and
+  reusable like everything else.
+- An optional compact text form can come later for debugging. The canonical form is the data structure.
 
-expect <condition> otherwise stop                -- a check; if it fails, stop and report
-expect <condition> otherwise ask "…"             -- or ask you what to do
+## 7. Open questions
 
-try:
-  book hotel ...
-otherwise:                                       -- what to do if a step fails
-  tell "That hotel is full; holding two alternatives."
-
-wait for payment.settled about bill up to 3 days
-wait until 2026-11-27 9am
-```
-
-There are no general-purpose loops that can run forever, and no user-defined functions in draft 1. A plan always
-has a clear, finite shape the checker can reason about. (Reusable pieces come from rules and solutions, below.)
-
-## 6. Plans
-
-Every multi-step action is a `plan` with a header:
-
-```
-plan "Book flights for Sam's wedding"
-  because "wedding Jun 14 in Denver (invite email Nov 2); you said 'book it'"
-  confidence 0.75
-  budget budget:travel up to $600
-  ...
-```
-
-- **because** is required. Every plan says why it exists, in one line, so the journal reads as a story.
-- **confidence** is the AI's own estimate. Below your threshold, the checker turns the first external or
-  money-costing step into an `ask`.
-- **budget** reserves an amount up front, so several plans can't overspend the same budget at once.
-
-## 7. Rules: what the system learns to do on its own
-
-A rule is a plan that runs when an event happens:
-
-```
-when power.unplugged:
-  set power profile to "saver"
-  set cpu policy to "efficiency"
-
-when bill.arrived from @verizon:
-  run plan "Pay the Verizon bill"
-
-when message.received where from = @mom and mentions "call":
-  tell "Mom asked you to call."
-```
-
-- Rules run **without the AI model**: instantly, offline, at no cost.
-- The AI proposes rules after it has handled the same situation more than once. You accept, edit or decline
-  them. Accepted rules are listed, readable and switchable at any time.
-
-## 8. Mandates
-
-Your standing directions, in the same language (see SYSTEM_INTERFACE.md §4.3):
-
-```
-mandate "Bills"
-  allow pay for bill from @verizon, @xfinity, @state-farm
-  within budget:bills
-  when amount is within 20% of usual
-
-mandate "Machine"
-  allow set, limit, restart, install for host        -- the AI runs the computer
-```
-
-When a plan is checked, every effectful step must be covered by a mandate. Any step that isn't becomes a question
-to you.
-
-## 9. Remembering
-
-```
-remember "Paid Verizon $112.40 on 2026-11-20"
-believe "Prefers aisle seats" confidence 0.85 because find booking where seat = aisle
-learn solution "Wifi drops after suspend" steps ...
-```
-
-These create `note`, `preference`/`belief` and `solution` objects linked to the plan that produced them.
-
-## 10. How a plan runs
-
-1. **Parse** into a structure (stored as data, so plans can be saved, replayed, compared and turned into rules).
-2. **Check:**
-   - every reference resolves, every value has the right type, and every verb exists with valid arguments;
-   - times are resolved to concrete values;
-   - money is estimated and charged against budgets;
-   - every effectful step is covered by a mandate;
-   - confidence is compared with your threshold.
-   The result is either *ready* or a list of problems. The AI fixes its own mistakes here, before anything runs.
-3. **Run** step by step. External steps carry idempotency keys. `ask` and `wait` pause the plan durably.
-4. **Journal** each step: intent, inputs, result, cost, and undo where available.
-5. **Finish** with a `plan.finished` or `plan.failed` event, and a one-line summary to the activity view.
-
-## 11. Grammar sketch (draft 1)
-
-```
-plan        := "plan" TEXT header* block
-header      := "because" TEXT | "confidence" NUMBER | "budget" REF ("up to" MONEY)?
-rule        := "when" EVENT_PATTERN ("where" cond)? ":" block
-mandate     := "mandate" TEXT ("allow" verb_list "for" target_list)+ ("within" REF)? ("when" cond)?
-block       := INDENT stmt+ DEDENT
-stmt        := let | if | for | expect | try | wait | ask | tell | verb_call | remember | believe | learn
-let         := "let" NAME "=" expr
-if          := "if" cond ":" block ("else:" block)?
-for         := "for each" NAME "in" expr ":" block
-expect      := "expect" cond "otherwise" ("stop" | ask)
-try         := "try:" block "otherwise:" block
-wait        := "wait for" EVENT_PATTERN ("about" expr)? ("up to" DURATION)? | "wait until" TIME
-ask         := "ask" TEXT ("options" TEXT ("," TEXT)*)?
-tell        := "tell" TEXT
-verb_call   := VERB expr? (PREP expr)* record?
-expr        := find | REF | literal | NAME ("." NAME)* | expr OP expr | FUNC "(" args ")" | "answer"
-find        := "find" TYPE ("from" REF)? ("where" cond)? ("," shape)*
-```
-
-Text in `"…"` can embed values with `{name}` and money with `${name}`.
-
-## 12. Questions to settle together
-
-1. **Name.** What should the language be called?
-2. **Feel.** Is the English-like style right, or would you prefer something shorter and more symbolic?
-3. **Should you write it too?** Draft 1 assumes the AI writes and you read, edit and approve. Do you also want to
-   write mandates and rules by hand?
-4. **Escape hatch.** The `run program` verb lets the AI fall back to ordinary software and shell commands for
-   anything the language doesn't cover yet. Keep it unlimited while the language grows, or restrict it?
-5. **First verbs.** For v0.1 (the OS working as an OS), the first verbs are the host verbs: power, CPU policy,
-   memory limits, services, devices, network, install and update. Anything you want on day one beyond those?
+1. First verbs for v0.1. The proposal is the host verbs (power, CPU policy, memory limits, services, devices,
+   network, install and update) plus `run`, `ask`, `tell`, `remember`. Anything else?
+2. When should a repeated pattern become a rule? Proposal: after the AI has handled the same situation 3 times
+   with the same outcome, it offers the rule.

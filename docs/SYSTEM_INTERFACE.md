@@ -1,6 +1,6 @@
 # LinuxAI System Interface: Draft 1
 
-> Status: **first draft for discussion.** Every name and shape here can still change.
+> Status: **draft 2 for discussion.** Every name and shape here can still change.
 > Companion document: [ACTION_LANGUAGE.md](ACTION_LANGUAGE.md).
 
 ## In plain terms
@@ -51,7 +51,9 @@ Two more pieces connect these four to you and to the world:
    readable history of the machine and of the AI's work.
 3. **The AI acts only through the action language.** It does not run raw shell commands as its normal way of
    working. Programs and shell commands are still available, as one organ among others, for jobs no verb covers yet.
-4. **Readable by the human.** Every object, event, action and plan can be shown in plain language.
+4. **English with the human, efficiency behind the scenes.** You and the AI talk in plain English (text or
+   voice). Internally, everything is built for speed and precision, not for human reading, but the AI can
+   explain any of it in English when you ask.
 5. **Kernel-independent.** The interface is a protocol (messages between the core and the organs). Linux is
    simply the first *host* that implements the kernel organ. A LinuxAI-native kernel could implement the same
    protocol later.
@@ -129,7 +131,18 @@ Memory is searched in three ways at once, using the same `find` that the action 
 - **by meaning:** `find anything about "the wedding in Denver"` (semantic search over text and media)
 - **by connection:** `find people linked to #denver-trip`
 
-### 2.5 Legacy files
+### 2.5 Two kinds of storage
+
+| | **Your things** | **The AI's own memory** |
+|---|---|---|
+| What | Paperwork, photos, documents, email, messages, projects | Notes, summaries, beliefs, preferences, solved-problem playbooks, the event log and journal |
+| Who manages it | You. It stays exactly as it is until you delete it, like files on any computer. | The AI. It writes, condenses, reorganizes and summarizes it itself. You can read, correct or delete any of it. |
+| Kept | Until you delete it | Managed by the AI. Old raw history can be condensed into summaries while what was learned is kept. |
+
+The AI reads and links your things, but never changes or deletes them unless you ask. Its own memory is its
+workspace, kept as structured objects plus readable text (Markdown) summaries.
+
+### 2.6 Legacy files
 
 Ordinary programs still expect files. A `document` or `media` object can be **materialized** as a normal file
 when a program needs it, and changes to that file flow back into the object as a new version. Files become a
@@ -204,27 +217,20 @@ it: sending, booking), `costs-money`.
    if it can be undone.
 6. **Learn.** Results feed back into memory: new beliefs, solutions and preferences.
 
-### 4.3 Mandates: your standing directions
+### 4.3 Trust: learned from conversation, not configured
 
-A mandate is how you say "this is yours to handle". You can say it in normal words; the AI writes it in the
-action language and shows you the result to confirm.
+You never have to write rules or permissions. Trust grows the way it would with a new human assistant:
 
-```
-mandate "Bills"
-  allow pay for bill from @verizon, @xfinity, @state-farm
-  within budget:bills
-  when amount is within 20% of usual
-```
+- **It starts at zero.** On day one the AI knows nothing about you, so almost everything becomes a conversation:
+  "Your Verizon bill came in at $84. Want me to pay it from the bills budget?"
+- **Your answers become its permissions.** "Yes, always pay that" or "you don't need to ask about bills under $100"
+  are stored as standing permissions (called *mandates* inside the system). A plain "yes" counts as one instance of
+  evidence. After enough consistent yeses, the AI offers to stop asking.
+- **You can always ask** "what are you allowed to do on your own?" and get a plain-English list, and change
+  anything by saying so.
 
-```
-mandate "Travel"
-  allow search, hold, book for flight, hotel
-  within budget:travel, max $900 per trip
-  prefer airline: @southwest, seat: aisle
-```
-
-Anything a plan does outside every mandate becomes a question to you. You can answer with a one-time yes, or
-with "yes, and from now on…", which updates the mandate.
+Internally a mandate is an object: which verbs, on what, within which budget, under which conditions. That
+detail stays behind the scenes.
 
 ### 4.4 Budgets
 
@@ -234,10 +240,11 @@ are how "monthly, weekly or per task" works.
 
 ### 4.5 Confidence
 
-Every plan carries the AI's own **confidence** (0–1) and a one-line **reason**. Below your threshold (for
-example 0.7), it asks even inside a mandate. Early on, confidence will be low and it will ask a lot. As beliefs
-and solutions build up, it asks less. This is the "less waiting, more understanding" you described, and it is
-earned rather than switched on.
+Every plan carries the AI's own **confidence** (0–1) and a one-line **reason**. Confidence starts at
+**zero**: in the beginning the system is mostly conversation, because it doesn't yet know how you want things
+done. Each answer, correction and successful outcome raises it for that kind of situation. As beliefs and solutions
+build up, it asks less. This is the "less waiting, more understanding" you described, and it is earned rather than
+switched on.
 
 ### 4.6 Anomalies
 
@@ -376,13 +383,17 @@ the foundation.
 - **How the model writes plans:** the language reference sits in the model's (cached) instructions. The model
   submits a plan through one tool. The checker returns errors the model fixes before anything runs.
 
-## 11. Questions to settle together
+## 11. Settled so far
 
-1. Do the four ideas (objects, events, actions, views) match how you picture it? Is anything missing?
-2. Mandates: do you want to set them by talking ("handle my bills") and confirming what the AI writes, or edit
-   them directly?
-3. What confidence level should mean "go ahead" when the AI is inside a mandate? (Proposal: start at 0.8 and lower
-   it as trust grows.)
-4. Which views matter most on day one? (Proposal: activity, conversation with the AI, then everything else.)
-5. Should the history of everything be kept forever, or should you be able to set retention (e.g. delete raw
-   messages after 2 years and keep what was learned from them)?
+- Objects, events, actions and views match the picture so far. They'll be refined as we go.
+- You talk to the AI in English. The internal language is built for efficiency, not human reading (see
+  ACTION_LANGUAGE.md). It is called **LinuxAI**.
+- Trust starts at zero and is learned through conversation. You never write mandates; your answers become them.
+- The fallback to ordinary programs (`run`) stays unlimited for now.
+- Storage works like a normal computer for your things (kept until you delete them). The AI manages its own
+  memory.
+
+## 12. Still open
+
+1. Which views matter most on day one? (Proposal: the conversation with the AI and the live activity view.)
+2. Exactly how the AI condenses its own memory over time (what gets summarized, and when).
