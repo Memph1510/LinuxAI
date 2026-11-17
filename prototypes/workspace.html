@@ -128,6 +128,15 @@ pre { margin: 6px 0 0; padding: 10px; background: var(--bg); border: 1px solid v
 .chg { display: grid; gap: 2px; font-size: 13px; }
 .chg b { font-weight: 600; }
 .chg .old { color: var(--fg-faint); text-decoration: line-through; }
+.prin { display: grid; gap: 6px; padding: 0 10px 12px; }
+.prin-i { border-left: 2px solid var(--you); padding: 2px 0 2px 9px; display: grid; gap: 1px; }
+.prin-i span { font-size: 13px; line-height: 1.35; }
+.prin-i small { font: 11px var(--font-mono); color: var(--fg-faint); }
+.prin-i.new { background: var(--you-soft); }
+.applied { display: grid; gap: 4px; }
+.applied span { font-size: 13px; color: var(--fg-dim); border-left: 2px solid var(--you); padding-left: 8px; }
+.lesson { display: grid; gap: 6px; border-top: 1px solid rgba(232,176,74,.35); padding-top: 8px; }
+.lesson label { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
 .thinking { color: var(--accent); font: 12px var(--font-mono); }
 @media (prefers-reduced-motion: no-preference) {
   .thinking::after { content: " ●"; animation: blink 1s infinite; }
@@ -187,7 +196,61 @@ pre { margin: 6px 0 0; padding: 10px; background: var(--bg); border: 1px solid v
 const KINDS = ["intent", "reasoning", "decision", "action", "result"];
 const KIND_LABEL = { intent: "Intent", reasoning: "Reasoning", decision: "Decision", action: "Action", result: "Result" };
 
+// What the AI has learned from the human: ways to think, applied to future decisions.
+let principles = [
+  { id: "p1", text: "Don't haul loaded miles under $2.40/mi.", scope: "freight", from: "You set this in September", uses: 23 },
+  { id: "p2", text: "Going under the floor is OK when the load gets the truck home for the weekend with little deadhead.", scope: "freight", from: "Your comment on a Memphis load, Oct 18", uses: 4 },
+  { id: "p3", text: "Never book Frontier.", scope: "travel", from: "Your text, Mar 3", uses: 2 },
+  { id: "p4", text: "Ask before paying a bill more than 20% above its usual amount.", scope: "bills", from: "You set this Oct 4", uses: 1 },
+];
+
 let tasks = [
+  {
+    id: "load", title: "Negotiating a Dallas → Atlanta load", source: "broker · email + call", when: "10:31", status: "waiting",
+    nodes: [
+      { id: "i1", kind: "intent", author: "you", status: "done", title: "Standing direction: keep the truck loaded at $2.40+/mi",
+        summary: "You said to find loads and negotiate within your rate rules, and to call you in only when it matters.", applied: ["p1", "p2"], parents: [] },
+      { id: "r1", kind: "reasoning", author: "ai", status: "done", title: "Truck empties in Dallas Friday 2pm", conf: 0.96,
+        summary: "Delivery in Dallas is confirmed for Friday at 2pm. Your driver lives in Atlanta and is off Saturday and Sunday.",
+        evidence: [["rate con", "Load #DL-4471 delivery, Fri 2pm"], ["calendar", "Driver home time, Sat–Sun"]], parents: ["i1"] },
+      { id: "r2", kind: "reasoning", author: "ai", status: "done", title: "Lane is soft: market ~$2.21/mi", conf: 0.78,
+        summary: "Dallas → Atlanta (781 mi) has averaged $2.21/mi over the last 2 weeks, and it's Friday afternoon, when outbound Dallas freight thins out.",
+        evidence: [["load board", "14 posted DAL→ATL loads, $2.05–$2.38/mi"], ["memory", "Your last 6 loads on this lane"]], parents: ["i1"] },
+      { id: "r3", kind: "reasoning", author: "ai", status: "done", title: "Broker offered $1,640 ($2.10/mi)", conf: 0.99,
+        summary: "Hollis Logistics: dry van, 42,000 lb, pickup Friday 4pm 6 miles from your delivery, drop Monday 8am in Atlanta.",
+        evidence: [["email", "Offer from Dana at Hollis Logistics, 10:31"]], parents: ["i1"] },
+      { id: "d1", kind: "decision", author: "ai", status: "done", title: "Counter at $1,950 ($2.50/mi)", conf: 0.74,
+        summary: "Start above your floor. Hollis has posted this load twice, so they're likely short on trucks.",
+        options: [
+          { label: "Counter $1,950 ($2.50/mi)", score: 0.74, chosen: true, why: "Room to come down; the load was reposted, which suggests the broker needs a truck." },
+          { label: "Counter $1,875 ($2.40/mi, your floor)", score: 0.51, why: "Leaves no room to negotiate." },
+          { label: "Decline and search for other loads", score: 0.18, why: "Few better options this late on a Friday." } ],
+        applied: ["p1"], parents: ["r2", "r3"] },
+      { id: "a1", kind: "action", author: "ai", status: "done", title: "Countered by email at $1,950",
+        summary: "“We can cover it at $1,950 all in. The truck is empty 6 miles away at 2pm.”",
+        raw: { do: "reply", to: "@dana-hollis", saying: "We can cover it at $1,950 all in…", within: "mandate:freight" }, parents: ["d1"] },
+      { id: "r4", kind: "reasoning", author: "ai", status: "done", title: "Broker came back at $1,780 ($2.28/mi)", conf: 0.99,
+        summary: "Dana says $1,780 is the most the shipper approved. That's $95 under your floor.",
+        evidence: [["email", "Reply from Dana, 11:02"]], parents: ["a1"] },
+      { id: "d2", kind: "decision", author: "ai", status: "waiting", title: "Take $1,780: under the floor, but it gets the truck home", conf: 0.66,
+        summary: "This matches your weekend-home exception: 6 miles of deadhead, and the driver is home Saturday. My confidence is lower because $2.28 is further under the floor than you've taken before ($2.34 was the lowest), so I'm asking.",
+        options: [
+          { label: "Accept $1,780", score: 0.66, chosen: true, why: "Truck home for the weekend, almost no deadhead. Beats driving home empty, which costs about $640 in fuel and time." },
+          { label: "Hold at $1,875 (your floor)", score: 0.41, why: "Dana may find room, but she said the shipper capped it." },
+          { label: "Deadhead home empty", score: 0.12, why: "No revenue and about $640 in cost." } ],
+        applied: ["p1", "p2"], parents: ["r4", "r1"] },
+      { id: "a2", kind: "action", author: "ai", status: "waiting", title: "Accept and sign the rate confirmation",
+        summary: "Needs your OK: it's below your floor rate.",
+        raw: { plan: "accept-hollis-load", conf: 0.66, steps: [
+          { do: "reply", to: "@dana-hollis", saying: "Deal at $1,780. Send the rate con." },
+          { wait: "message.received", about: "rate confirmation", max: "2h" },
+          { do: "sign", what: "$event.data.attachment" },
+          { do: "schedule", what: "appointment", with: { title: "Pickup Hollis #HL-2209", at: "fri 16:00" } } ] },
+        parents: ["d2"] },
+      { id: "o1", kind: "result", author: "ai", status: "waiting", title: "$1,780 revenue, truck home Monday",
+        summary: "Net about $1,140 after fuel, compared with about –$640 for driving home empty.", parents: ["a2"] },
+    ],
+  },
   {
     id: "trip", title: "Book flights for Sam's wedding", source: "you · text", when: "9:12", status: "waiting",
     nodes: [
@@ -212,7 +275,7 @@ let tasks = [
           { label: "Southwest 1432 · 8:05am · $214", score: 0.77, chosen: true, why: "Usual airline, aisle available, 2 free bags." },
           { label: "United 512 · 6:10am · $189", score: 0.44, why: "Cheaper, but you've rebooked away from early flights 3 times." },
           { label: "Frontier 2207 · 11:40am · $121", score: 0.08, why: "You said never again; bag fees bring it to about $190." } ],
-        parents: ["d1", "r2"] },
+        applied: ["p3"], parents: ["d1", "r2"] },
       { id: "d3", kind: "decision", author: "ai", status: "done", title: "Courtyard Downtown, 3 nights, $504", conf: 0.71,
         summary: "0.6 miles from the venue. Sam's family block rate saves $22 a night.",
         options: [
@@ -249,7 +312,7 @@ let tasks = [
           { label: "Ask first", score: 0.81, chosen: true, why: "Outside your 20% range; a charge you may not recognize." },
           { label: "Pay $112.40 now", score: 0.33, why: "Due in 11 days, so there's no rush." },
           { label: "Dispute the $29.99 charge", score: 0.29, why: "Only if you didn't add it. You were in Toronto Oct 19–22." } ],
-        parents: ["r1"] },
+        applied: ["p4"], parents: ["r1"] },
       { id: "a1", kind: "action", author: "ai", status: "waiting", title: "Asked you by text",
         summary: "“Verizon is $112.40, about 37% above the usual $82. There's a new $29.99 International Pass. Pay it?”",
         raw: { ask: "Verizon is ${$bill.amount}… Pay it?", opts: ["pay", "hold", "dispute"], as: "ans" }, parents: ["d1"] },
@@ -299,7 +362,7 @@ let tasks = [
 // State
 // ---------------------------------------------------------------------------------------------
 let current = tasks[0].id;
-let selected = "d1";
+let selected = "d2";
 let pending = null;       // {taskId, nodeId, comment, result: {kind, reply, remember, revisions[]}}
 let thinking = null;      // {nodeId, ctl}
 let sampleFn = null;      // Claude, when this view allows it
@@ -334,7 +397,9 @@ function renderStream() {
     </button>`;
   $("stream").innerHTML =
     (waiting.length ? `<div class="label group-l">Needs you</div>${waiting.map(item).join("")}` : "") +
-    `<div class="label group-l">Recent</div>${rest.map(item).join("")}`;
+    `<div class="label group-l">Recent</div>${rest.map(item).join("")}` +
+    `<div class="label group-l" style="margin-top:8px">Learned from you</div><div class="prin">${principles.map((p) =>
+      `<div class="prin-i ${p.isNew ? "new" : ""}"><span>${esc(p.text)}</span><small>${esc(p.scope)} · ${esc(p.from)}${p.uses ? ` · used ${p.uses}×` : ""}</small></div>`).join("")}</div>`;
   $("waitingCount").textContent = waiting.length;
   $("streamCount").textContent = tasks.length + " tasks";
 }
@@ -405,6 +470,7 @@ function renderInspector() {
     </div>
     <div class="sec"><p>${esc(n.summary)}</p></div>`;
   if (n.evidence?.length) html += `<div class="sec"><div class="label">Based on</div><ul class="evid">${n.evidence.map(([k, v]) => `<li><span class="chip">${esc(k)}</span>${esc(v)}</li>`).join("")}</ul></div>`;
+  if (n.applied?.length) html += `<div class="sec"><div class="label">Your principles it applied</div><div class="applied">${n.applied.map((id) => principles.find((p) => p.id === id)).filter(Boolean).map((p) => `<span>${esc(p.text)}</span>`).join("")}</div></div>`;
   if (n.options?.length) html += `<div class="sec"><div class="label">Options weighed</div><div class="opts">${n.options.map((o) => `
       <div class="opt ${o.chosen ? "chosen" : ""}">
         <div class="opt-top"><span>${o.chosen ? "✓ " : ""}${esc(o.label)}</span><span class="conf">${pct(o.score)}</span></div>
@@ -434,7 +500,7 @@ function renderInspector() {
 
 function placeholderFor(n) {
   return { intent: "e.g. Actually it's a work trip, so expense it", reasoning: "e.g. The rehearsal dinner moved to Thursday",
-    decision: "e.g. I'd rather leave Wednesday", action: "e.g. Why not hold the hotel too?", result: "e.g. That's too expensive" }[n.kind];
+    decision: "e.g. Also weigh that Hollis pays in 2 days, not 30", action: "e.g. Why not hold the hotel too?", result: "e.g. That's too expensive" }[n.kind];
 }
 
 function impactBox(t) {
@@ -447,9 +513,11 @@ function impactBox(t) {
   const up = r.revisions.filter((rv) => reach(t, pending.nodeId, "up").includes(rv.id)).length;
   const down = r.revisions.filter((rv) => reach(t, pending.nodeId, "down").includes(rv.id)).length;
   return `<div class="impact-box">
-      <h3>Your comment changes ${r.revisions.length} step${r.revisions.length === 1 ? "" : "s"}</h3>
+      <h3>${r.revisions.length ? `Your comment changes ${r.revisions.length} step${r.revisions.length === 1 ? "" : "s"}` : "Your comment teaches a way to think"}</h3>
       <span class="hint">${up ? `${up} before this step · ` : ""}${down} after it · nothing has been applied yet</span>
       ${rows}
+      ${r.principle?.text ? `<div class="lesson"><span class="label" style="color:var(--you)">A way of thinking to keep</span><span>“${esc(r.principle.text)}”</span>
+        <label><input type="checkbox" id="keepLesson" checked> From now on, for ${esc(r.principle.scope || "similar decisions")} (untick for just this time)</label></div>` : ""}
       <div class="actions-row"><button class="btn amber" id="apply">Apply changes</button><button class="btn" id="branch">Keep both (branch)</button><button class="btn" id="discard">Discard</button></div>
     </div>`;
 }
@@ -462,7 +530,7 @@ function render() { renderStream(); renderGraph(); renderInspector(); }
 function compactTask(t) {
   return { task: t.title, nodes: t.nodes.map((n) => ({ id: n.id, kind: n.kind, author: n.author, status: n.status, title: n.title,
     summary: n.summary, confidence: n.conf, from: n.parents, options: n.options?.map((o) => ({ label: o.label, score: o.score, chosen: !!o.chosen })),
-    evidence: n.evidence?.map(([k, v]) => k + ": " + v) })) };
+    evidence: n.evidence?.map(([k, v]) => k + ": " + v), applied_principles: n.applied?.map((id) => principles.find((p) => p.id === id)?.text) })) };
 }
 
 function promptFor(t, n, comment) {
@@ -473,13 +541,18 @@ The human just commented on step "${n.id}".
 Decide what the comment means:
 - "question": they want an explanation. Answer from the evidence and change nothing.
 - "change": it corrects a fact or overrides a choice. Revise the commented step if it changes, and every step downstream whose content depends on it. If the comment shows an earlier assumption was wrong, revise those upstream steps too. Leave unaffected steps out.
+- "lesson": they are teaching a better way to reason (a factor to weigh, an exception to a rule, a different way to think about the trade-off). Re-run this task's reasoning with it, revising affected steps (this task may or may not change), AND state it as a reusable principle for future decisions.
 - "note": a lasting preference or fact to remember, with no change to this task.
+Apply the human's existing principles (listed below) whenever they are relevant.
 
 Write as the AI speaking plainly to the human, short. Keep step ids. Invent realistic specifics (times, prices, names) consistent with the task when a revision needs them. A revised step that is not yet carried out stays a proposal; revised actions that cost money still need the human's approval.
 
 Reply with only JSON, no other text:
-{"kind":"question|change|note","reply":"what you say back (1-3 sentences)","remember":"a lasting preference learned, or empty string","revisions":[{"id":"step id","title":"new short title","summary":"new 1-2 sentence summary","why":"one line: what changed and why","confidence":0.0,"options":[{"label":"...","score":0.0,"chosen":true,"why":"..."}]}]}
-"options" only for decisions; omit fields that don't change. "revisions" is [] for a question or note.
+{"kind":"question|change|lesson|note","reply":"what you say back (1-3 sentences)","remember":"a lasting preference learned, or empty string","principle":{"text":"for a lesson: the principle in one sentence, as an instruction to yourself","scope":"short area it applies to, e.g. freight, travel, bills"},"revisions":[{"id":"step id","title":"new short title","summary":"new 1-2 sentence summary","why":"one line: what changed and why","confidence":0.0,"options":[{"label":"...","score":0.0,"chosen":true,"why":"..."}]}]}
+"options" only for decisions; omit fields that don't change. "revisions" is [] for a question or note; "principle" is null unless kind is lesson.
+
+THE HUMAN'S PRINCIPLES (learned earlier):
+${principles.map((p) => "- [" + p.scope + "] " + p.text).join("\n")}
 
 TASK:
 ${JSON.stringify(compactTask(t))}
@@ -494,6 +567,11 @@ function scripted(t, n, comment) {
   if (/\?\s*$/.test(comment)) {
     const ev = n.evidence?.[0];
     return { kind: "question", reply: ev ? `Mostly from ${ev[0]}: ${ev[1]}. ${n.summary}` : n.summary, remember: "", revisions: [] };
+  }
+  if (/\b(consider|think about|factor|weigh|remember that|always|never|in general|when .* then|unless)\b/i.test(comment)) {
+    return { kind: "lesson", reply: `That's a useful way to think about it. I'll weigh it here and, if you keep it, in future ${t.id === "load" ? "freight" : "similar"} decisions.`, remember: "",
+      principle: { text: comment.replace(/^./, (c) => c.toUpperCase()), scope: t.id === "load" ? "freight" : "general" },
+      revisions: [{ id: n.id, why: "Re-weighed with your principle." }] };
   }
   const down = reach(t, n.id, "down").map((id) => node(t, id)).filter((x) => x.status !== "done" || x.kind !== "intent");
   return { kind: "change", reply: `Got it. I'll re-plan from here with “${comment}”. In the live system I'd work out the new specifics; this demo just marks what would change.`,
@@ -512,6 +590,7 @@ async function sendComment(text) {
     if (!sampleFn) throw { code: "unavailable" };
     result = await sampleFn.json(promptFor(t, n, text), { signal: ctl.signal, cache: false });
     if (!result || typeof result.reply !== "string") throw { code: "invalid_json" };
+    if (!result.principle || typeof result.principle.text !== "string" || !result.principle.text.trim()) result.principle = null;
     result.revisions = Array.isArray(result.revisions) ? result.revisions.filter((r) => r && node(t, String(r.id))) : [];
   } catch (e) {
     if (e && e.code === "cancelled") { thinking = null; n.comments.push({ who: "ai", text: "(stopped)" }); render(); return; }
@@ -521,15 +600,24 @@ async function sendComment(text) {
   }
   thinking = null;
   n.comments.push({ who: "ai", text: result.reply + (result.remember ? `\n\nI'll remember: ${result.remember}` : "") });
-  if (result.revisions.length) pending = { taskId: t.id, nodeId: n.id, comment: text, result };
+  if (result.revisions.length || result.principle?.text) pending = { taskId: t.id, nodeId: n.id, comment: text, result };
   current = t.id; selected = n.id;
   render();
+}
+
+function keepLesson() {
+  const p = pending?.result.principle;
+  if (!p?.text || !$("keepLesson")?.checked) return;
+  principles.forEach((x) => delete x.isNew);
+  const id = "p" + Date.now().toString(36);
+  principles.unshift({ id, text: String(p.text), scope: String(p.scope || "general"), from: "Your comment just now", uses: 0, isNew: true });
+  const n = node(task(), pending.nodeId); if (n) n.applied = [...(n.applied || []), id];
 }
 
 function applyPending(targetTask) {
   for (const rv of pending.result.revisions) {
     const n = node(targetTask, rv.id); if (!n) continue;
-    n.history = [...(n.history || []), { title: n.title, after: pending.comment }];
+    if ((rv.title && rv.title !== n.title) || (rv.summary && rv.summary !== n.summary)) n.history = [...(n.history || []), { title: n.title, after: pending.comment }];
     if (rv.title) n.title = rv.title;
     if (rv.summary) n.summary = rv.summary;
     if (typeof rv.confidence === "number") n.conf = Math.max(0, Math.min(1, rv.confidence));
@@ -559,12 +647,12 @@ document.addEventListener("click", (e) => {
   const dc = e.target.closest("[data-decline]");
   if (dc) { const n = node(task(), dc.dataset.decline); n.comments = [...(n.comments || []), { who: "ai", text: "OK, holding off. Comment here if you want me to change the plan." }]; renderInspector(); return; }
   if (e.target.id === "stop" && thinking) { thinking.ctl.abort(); return; }
-  if (e.target.id === "apply" && pending) { applyPending(task()); pending = null; render(); return; }
+  if (e.target.id === "apply" && pending) { keepLesson(); applyPending(task()); pending = null; render(); return; }
   if (e.target.id === "discard" && pending) { pending = null; render(); return; }
   if (e.target.id === "branch" && pending) {
     const src = task(), copy = JSON.parse(JSON.stringify(src));
     copy.id = src.id + "-b" + Date.now().toString(36); copy.title = src.title + " (branch)"; copy.when = "now";
-    applyPending(copy); tasks.splice(tasks.indexOf(src) + 1, 0, copy);
+    keepLesson(); applyPending(copy); tasks.splice(tasks.indexOf(src) + 1, 0, copy);
     pending = null; current = copy.id; render(); return;
   }
 });

@@ -56,8 +56,39 @@ On a phone the three areas stack, and the graph scrolls sideways.
      them.
    - **Discard**.
 
-Every comment and change is recorded. Over time, notes and corrections become the AI's preferences ("leaves a
-day early for weddings", "never Frontier").
+Every comment and change is recorded.
+
+## The human improves the machine: lessons
+
+This is the reverse cyborg from the original vision. The AI shows its reasoning *so that you can improve it*, not
+so it can be audited. Besides questions and changes, a comment can be a **lesson**: a better way to think ("also
+weigh how fast the broker pays", "a wedding with a rehearsal dinner means arriving a day early").
+
+- The AI re-runs the current task's reasoning with the lesson.
+- It states the lesson as a **principle** in one sentence, with a scope (freight, travel, bills…). You keep it
+  **from now on**, or use it **just this time**.
+- Kept principles are listed under **Learned from you**, with where each came from and how often it's been used.
+- Every decision shows **which of your principles it applied**. You can see your teaching at work, and correct
+  it when it's applied wrongly.
+
+In the system, a principle is a `preference`/`belief` object with a scope, its source comment as evidence, and a
+use count. The mind includes the principles that are in scope whenever it reasons.
+
+## Example: negotiating freight with a broker
+
+A standing rule with judgment-call exceptions:
+
+- **Your direction:** keep the truck loaded at $2.40/mi or more. **Your principle, taught earlier:** going under
+  the floor is OK if it gets the truck home for the weekend with little deadhead.
+- **What the AI sees:** the truck empties in Dallas Friday at 2pm, the lane is soft (about $2.21/mi), and the
+  broker offers $2.10/mi.
+- **It decides and acts:** counters at $2.50/mi, because the load was reposted, which suggests the broker is short
+  on trucks.
+- **The broker comes back at $2.28/mi.** The AI's reasoning: under the floor, but it matches your exception. It
+  beats driving home empty (about $640 in cost). Confidence is only 66%, because it's further under the floor
+  than you've ever accepted. So it **asks you**, and shows exactly why.
+- **You can step in at any point**: approve, set a different counter, or teach it something ("Hollis pays in 2
+  days, which is worth a little rate").
 
 ## How it maps onto the system
 
