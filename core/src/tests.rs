@@ -689,3 +689,20 @@ fn repeated_prunes_merge_into_one_digest_per_day() {
     assert_eq!(d.len(), 1, "{d:?}");
     assert_eq!(d[0]["counts"]["test.a"], 2);
 }
+
+#[test]
+fn finished_task_trees_expire_unfinished_ones_never_do() {
+    let (c, _, _) = core_with_playbooks();
+    let done = c.handle(&json!({"op": "task_create", "source": "human", "spec": {"title": "Old job", "subtasks": [
+        {"title": "a", "plan": {"steps": [{"tell": "a"}]}}, {"title": "b", "plan": {"steps": [{"tell": "b"}]}}]}}));
+    let open = c.handle(&json!({"op": "task_create", "source": "human", "spec": {"title": "Open job", "subtasks": [
+        {"title": "decide", "kind": "decision"}]}}));
+    assert_eq!(done["tree"]["status"], "done");
+    let mut ret = c.retention.clone();
+    ret.tasks_days = 0.0;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let r = c.mem.prune(&ret, false);
+    assert_eq!(r["tasks"], 3, "{r}");
+    assert!(c.mem.load_task(done["task"].as_str().unwrap()).is_none());
+    assert_eq!(c.handle(&json!({"op": "task", "task": open["task"]}))["tree"]["children"].as_array().unwrap().len(), 1);
+}

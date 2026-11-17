@@ -399,10 +399,14 @@ impl Memory {
         let events_cutoff = if r.events_days >= 1.0 { (raw_cutoff / day).floor() * day } else { raw_cutoff };
         let plans_cutoff = t - r.plans_days * day;
         let journal_cutoff = t - r.journal_days * day;
+        let tasks_cutoff = t - r.tasks_days * day;
+        // Finished task trees (root finished long enough ago), including all their subtasks.
+        let old_trees = "WITH RECURSIVE old(id) AS (SELECT id FROM tasks WHERE parent IS NULL AND status IN ('done','failed','cancelled') AND updated < ?1 UNION ALL SELECT t.id FROM tasks t JOIN old ON t.parent = old.id)";
         let count = |sql: &str, p: f64| -> i64 { db.query_row(sql, params![p], |row| row.get(0)).unwrap_or(0) };
         let n_events = count("SELECT COUNT(*) FROM events WHERE ts < ?1", events_cutoff);
         let n_plans = count("SELECT COUNT(*) FROM plans WHERE status IN ('done','stopped','failed') AND updated < ?1", plans_cutoff);
         let n_journal = count("SELECT COUNT(*) FROM journal WHERE ts < ?1", journal_cutoff);
+        let n_tasks = count(&format!("{old_trees} SELECT COUNT(*) FROM old"), tasks_cutoff);
         let n_versions: i64 = db.query_row(
             "SELECT COUNT(*) FROM playbook_history h WHERE (SELECT COUNT(*) FROM playbook_history n
              WHERE n.category = h.category AND n.id > h.id) >= ?1", params![r.playbook_versions], |row| row.get(0)).unwrap_or(0);
@@ -464,6 +468,7 @@ impl Memory {
         if !dry_run {
             let _ = db.execute("DELETE FROM plans WHERE status IN ('done','stopped','failed') AND updated < ?1", params![plans_cutoff]);
             let _ = db.execute("DELETE FROM journal WHERE ts < ?1", params![journal_cutoff]);
+            let _ = db.execute(&format!("{old_trees} DELETE FROM tasks WHERE id IN (SELECT id FROM old)"), params![tasks_cutoff]);
             let _ = db.execute("DELETE FROM playbook_history WHERE id IN (SELECT h.id FROM playbook_history h WHERE
                 (SELECT COUNT(*) FROM playbook_history n WHERE n.category = h.category AND n.id > h.id) >= ?1)", params![r.playbook_versions]);
             // Give the space back when a lot was freed.
@@ -474,7 +479,7 @@ impl Memory {
             }
             let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
         }
-        json!({"dry_run": dry_run, "events": n_events, "digests": digests, "plans": n_plans, "journal": n_journal,
+        json!({"dry_run": dry_run, "events": n_events, "digests": digests, "plans": n_plans, "journal": n_journal, "tasks": n_tasks,
                "playbook_versions": n_versions})
     }
 
@@ -498,6 +503,7 @@ pub struct Retention {
     pub events_days: f64,
     pub plans_days: f64,
     pub journal_days: f64,
+    pub tasks_days: f64,
     pub playbook_versions: i64,
 }
 
@@ -508,6 +514,7 @@ impl Retention {
             events_days: get("LINUXAI_KEEP_EVENTS_DAYS", 30.0),
             plans_days: get("LINUXAI_KEEP_PLANS_DAYS", 14.0),
             journal_days: get("LINUXAI_KEEP_JOURNAL_DAYS", 365.0),
+            tasks_days: get("LINUXAI_KEEP_TASKS_DAYS", 180.0),
             playbook_versions: get("LINUXAI_KEEP_PLAYBOOK_VERSIONS", 50.0) as i64,
         }
     }

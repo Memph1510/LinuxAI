@@ -43,7 +43,7 @@ class Daemon:
         self.restarts = 0
 
     def start(self) -> None:
-        env = dict(os.environ, LINUXAI_KEEP_EVENTS_DAYS=str(120 / 86400), LINUXAI_KEEP_PLANS_DAYS=str(60 / 86400),
+        env = dict(os.environ, LINUXAI_KEEP_EVENTS_DAYS=str(120 / 86400), LINUXAI_KEEP_PLANS_DAYS=str(60 / 86400), LINUXAI_KEEP_TASKS_DAYS=str(180 / 86400),
                    LINUXAI_KEEP_JOURNAL_DAYS=str(600 / 86400), LINUXAI_KEEP_PLAYBOOK_VERSIONS="5",
                    LINUXAI_PRUNE_EVERY_SECS=str(self.prune_every))
         self.proc = subprocess.Popen([self.binary, "daemon", "--socket", self.sock, "--db", str(self.work / "core.db"),
@@ -248,6 +248,8 @@ class Soak:
             "memory flat (end within 50% of the middle of the run)": last.get("rss_kb", 0) <= 1.5 * statistics.median(middle) + 4096,
             "threads back down after the load": last.get("threads", 999) <= 32,
             "file handles bounded": last.get("fds", 999) <= 64,
+            "database size levels off (end within 50% of the middle of the run)":
+                last.get("db_bytes", 0) <= 1.5 * statistics.median([s["db_bytes"] for s in self.samples if s.get("db_bytes")][len(self.samples) // 4: 3 * len(self.samples) // 4] or [1]) + 1_000_000,
             "p99 response under 250ms": p(0.99) < 0.25,
             "pruning ran (digests exist)": (q("SELECT COUNT(*) FROM objects WHERE type='digest'") or [[0]])[0][0] > 0,
             "events kept bounded by pruning": (q("SELECT COUNT(*) FROM events WHERE ts < strftime('%s','now') - 400") or [[1]])[0][0] == 0,
