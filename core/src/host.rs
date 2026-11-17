@@ -286,16 +286,18 @@ fn scx_policy(policy: &str) -> Option<(&'static str, &'static str)> {
 fn set(what: &str, to: &str) -> Result<Value, String> {
     match what {
         "power.profile" => {
-            if which("powerprofilesctl") {
-                ok_cmd("powerprofilesctl", &["set", to])
-            } else {
+            let via_daemon = if which("powerprofilesctl") { ok_cmd("powerprofilesctl", &["set", to]) } else {
+                Err("power-profiles-daemon is not installed".into())
+            };
+            via_daemon.or_else(|e| {
+                // Fall back to steering the CPU frequency governor directly.
                 let gov = match to {
                     "power-saver" => "powersave",
                     "performance" => "performance",
                     _ => "schedutil",
                 };
-                write_governor(gov)
-            }
+                write_governor(gov).map_err(|g| format!("{e}; fallback: {g}"))
+            })
         }
         "cpu.governor" => write_governor(to),
         "cpu.policy" => {
