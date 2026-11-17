@@ -235,7 +235,12 @@ class Soak:
         db = sqlite3.connect(self.work / "core.db")
         q = lambda sql: db.execute(sql).fetchall()  # noqa: E731
         running_plans = q("SELECT id, state FROM plans WHERE status='running'")
-        stuck_tasks = q("SELECT id, status FROM tasks WHERE status IN ('running','pending') AND parent IS NULL")
+        # Stuck = an unfinished tree where nothing can move: no step waiting on the human or for a plan.
+        stuck_tasks = q("""WITH RECURSIVE tree(root, id) AS (
+                SELECT id, id FROM tasks WHERE parent IS NULL AND status IN ('running','pending')
+                UNION ALL SELECT tree.root, t.id FROM tasks t JOIN tree ON t.parent = tree.id)
+            SELECT root FROM tree GROUP BY root
+            HAVING SUM((SELECT status FROM tasks WHERE id = tree.id) IN ('waiting','needs_plan')) = 0""")
         dup_actions = q("SELECT step_key, COUNT(*) c FROM journal WHERE status='done' GROUP BY step_key HAVING c > 1")
         middle = [s["rss_kb"] for s in self.samples if "rss_kb" in s][len(self.samples) // 4: 3 * len(self.samples) // 4] or [0]
         last = next((s for s in reversed(self.samples) if "rss_kb" in s), {})

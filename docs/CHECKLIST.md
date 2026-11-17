@@ -18,10 +18,15 @@ within each stage.
 - [ ] Verify the sched_ext policy switch on real hardware
 - [x] Prune old history: raw events become daily digests (counts plus notable moments) before removal;
       finished plans, old journal entries and old playbook versions expire; nothing in progress is touched.
-      Defaults: events 30 days, finished plans 14 days, journal 365 days, 50 playbook versions
+      Defaults: events 30 days, finished plans 14 days, finished task trees 180 days, journal 365 days,
+      50 playbook versions
       (`LINUXAI_KEEP_*`)
 - [x] Soak harness (`tests/soak.py`): days of activity compressed into minutes, with crashes, pruning,
       invariants and resource tracking
+- [x] Compressed soak runs passed: 30 minutes (82,670 events, 4,374 macro tasks, 3,487 AI plans, 9,996 human
+      answers, 602 long actions, 7 kill -9 restarts) and a 10-minute rerun after expiring finished task trees.
+      Memory flat at about 10 MB, 2 threads at rest, p99 response 2.5 ms, nothing stuck, no action done twice,
+      database levels off at about 4 MB
 - [ ] Multi-day soak on the real laptop (same harness, `--minutes 4320`)
 - [x] Second look before acting: assessments required; unknowns, low confidence and first-time situations go
       to the human; first-time situations need research
