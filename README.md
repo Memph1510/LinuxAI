@@ -5,7 +5,7 @@ Linux is its body, and the terminal and GUI are implants a human uses to step in
 intent and act as the guardrail. The AI does the work and asks you when it's stuck. It writes down how each problem
 was solved, so the system grows into its own OS over time.
 
-See [docs/BLUEPRINT.md](docs/BLUEPRINT.md) for the full architecture and roadmap.
+See [docs/SCOPE.md](docs/SCOPE.md) for what we are building and in what order, and [docs/BLUEPRINT.md](docs/BLUEPRINT.md) for the technical architecture.
 
 ## What works today (Phase 1, v0)
 
