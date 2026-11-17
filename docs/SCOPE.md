@@ -110,7 +110,7 @@ Built and tested in a VM on Windows.
    - what an *event* is;
    - what a *view* is (replacing apps).
 
-   Everything else is built on it.
+   Everything else is built on it. Drafts: [SYSTEM_INTERFACE.md](SYSTEM_INTERFACE.md), [ACTION_LANGUAGE.md](ACTION_LANGUAGE.md).
 1. **The image.** A LinuxAI ISO, built reproducibly from this repo (Arch packages via `archiso` or `mkosi`).
    It installs and boots in a VM.
 2. **Boot into the AI.** Boot → login → the LinuxAI session. There is no Windows-style desktop. The first
