@@ -1,0 +1,588 @@
+<title>LinuxAI Workspace</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: a cockpit. Stream of work (left) · the reasoning graph of the selected task (center) ·
+   inspector + discussion for the selected step (right). Stacks to one column on phones.
+   Deliberately dark-only: it is the OS's own screen, one visual world. */
+:root {
+  color-scheme: dark;
+  --bg: #0b1016;          /* deep slate, faintly blue */
+  --panel: #111821;
+  --panel-2: #16202b;
+  --line: #233140;
+  --line-soft: #1b2733;
+  --fg: #dfe7ee;
+  --fg-dim: #8ea0b1;
+  --fg-faint: #5d6f80;
+  --accent: #46c2c9;      /* the AI's color: teal */
+  --accent-soft: rgba(70,194,201,.14);
+  --you: #e8b04a;         /* the human's color: amber. Also "needs you" */
+  --you-soft: rgba(232,176,74,.14);
+  --ok: #6fbf8e;
+  --bad: #e06c6c;
+  --font-display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font-body); }
+* { box-sizing: border-box; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, textarea:focus-visible, .node:focus-visible, .task:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { height: 100%; display: grid; grid-template-rows: auto 1fr; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 12px; gap: 12px; }
+.top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.brand { font: 600 18px/1 var(--font-display); letter-spacing: .02em; }
+.brand span { color: var(--accent); }
+.vitals { display: flex; gap: 8px; flex-wrap: wrap; font: 12px/1 var(--font-mono); color: var(--fg-dim); }
+.vital { border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; display: inline-flex; gap: 6px; align-items: center; }
+.vital b { color: var(--fg); font-weight: 500; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.dot.you { background: var(--you); }
+.mode { margin-left: auto; font: 12px var(--font-mono); color: var(--fg-faint); }
+
+.main { min-height: 0; display: grid; grid-template-columns: minmax(230px, 280px) minmax(0, 1fr) minmax(300px, 380px); gap: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px; min-height: 0; display: flex; flex-direction: column; }
+.panel-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 14px 8px; }
+.label { font: 500 11px/1.2 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-faint); }
+.scroll { overflow: auto; min-height: 0; }
+
+/* Stream */
+.stream { padding: 0 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.task { text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 10px; display: grid; gap: 4px; }
+.task:hover { background: var(--panel-2); }
+.task.on { background: var(--panel-2); border-color: var(--line); }
+.task-t { font-weight: 500; line-height: 1.3; }
+.task-m { display: flex; gap: 8px; align-items: center; font: 12px var(--font-mono); color: var(--fg-dim); flex-wrap: wrap; }
+.pill { font: 500 10.5px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; padding: 4px 7px; border-radius: 4px; border: 1px solid currentColor; white-space: nowrap; }
+.s-done { color: var(--ok); } .s-running { color: var(--accent); } .s-waiting, .s-stale, .s-proposed { color: var(--you); } .s-failed { color: var(--bad); }
+.src { color: var(--fg-faint); }
+.group-l { padding: 10px 10px 2px; }
+
+/* Graph */
+.graph-wrap { position: relative; overflow: auto; flex: 1; min-height: 320px; }
+.graph { position: relative; }
+.graph svg { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.cols { position: absolute; top: 0; left: 0; display: flex; font: 500 10.5px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-faint); }
+.node { position: absolute; width: 190px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; display: grid; gap: 5px; transition: border-color .15s, box-shadow .15s, opacity .15s; }
+.node:hover { border-color: var(--fg-faint); }
+.node.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.node.k-intent { border-left: 3px solid var(--you); }
+.node.st-stale, .node.st-proposed { border-style: dashed; border-color: var(--you); }
+.node.st-waiting { border-color: var(--you); background: linear-gradient(var(--you-soft), var(--you-soft)), var(--panel-2); }
+.node.impact { box-shadow: 0 0 0 3px var(--you-soft); border-color: var(--you); }
+.node.dim { opacity: .45; }
+.node-k { display: flex; justify-content: space-between; gap: 6px; font: 500 10px/1 var(--font-mono); letter-spacing: .09em; text-transform: uppercase; color: var(--fg-faint); }
+.node-t { font-weight: 500; font-size: 13px; line-height: 1.3; }
+.node-m { display: flex; gap: 8px; align-items: center; font: 11px var(--font-mono); color: var(--fg-dim); }
+.conf { font-variant-numeric: tabular-nums; }
+.cmt-n { color: var(--you); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 8px 14px 12px; font: 11px var(--font-mono); color: var(--fg-faint); border-top: 1px solid var(--line-soft); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; border: 1px solid var(--line); }
+
+/* Inspector */
+.insp { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 14px; }
+.insp h2 { font: 600 19px/1.25 var(--font-display); margin: 4px 0 0; text-wrap: balance; }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font: 12px var(--font-mono); color: var(--fg-dim); }
+.sec { display: grid; gap: 6px; }
+.sec p { margin: 0; }
+.why li, .evid li { margin: 2px 0; }
+.why, .evid { margin: 0; padding-left: 18px; }
+.evid { list-style: none; padding: 0; display: grid; gap: 4px; }
+.evid li { font-size: 13px; color: var(--fg-dim); }
+.chip { font: 11px var(--font-mono); color: var(--fg-dim); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; margin-right: 6px; }
+.opts { display: grid; gap: 6px; }
+.opt { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 5px; }
+.opt.chosen { border-color: var(--accent); }
+.opt-top { display: flex; justify-content: space-between; gap: 8px; font-weight: 500; }
+.bar { height: 4px; background: var(--line-soft); border-radius: 2px; overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--fg-faint); }
+.opt.chosen .bar > span { background: var(--accent); }
+.opt-why { font-size: 12.5px; color: var(--fg-dim); }
+.links { display: flex; gap: 6px; flex-wrap: wrap; }
+.link { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font-size: 12.5px; color: var(--fg-dim); }
+.link:hover { color: var(--fg); border-color: var(--fg-faint); }
+details summary { cursor: pointer; font: 12px var(--font-mono); color: var(--fg-dim); }
+pre { margin: 6px 0 0; padding: 10px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 6px; font: 12px/1.45 var(--font-mono); color: var(--fg-dim); overflow-x: auto; white-space: pre; }
+.actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--panel-2); border-radius: 7px; padding: 7px 12px; font-weight: 500; }
+.btn:hover { border-color: var(--fg-faint); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #06231f; }
+.btn.amber { background: var(--you); border-color: var(--you); color: #2a1c02; }
+.btn:disabled { opacity: .5; cursor: default; }
+.history { font-size: 12.5px; color: var(--fg-faint); display: grid; gap: 4px; }
+.history s { color: var(--fg-faint); }
+
+.thread { display: grid; gap: 8px; }
+.msg { display: grid; gap: 2px; }
+.msg-w { font: 500 11px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+.msg.you .msg-w { color: var(--you); } .msg.ai .msg-w { color: var(--accent); }
+.msg p { margin: 0; white-space: pre-wrap; }
+.composer { display: grid; gap: 8px; }
+.composer textarea { width: 100%; min-height: 64px; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font: inherit; }
+.hint { font-size: 12px; color: var(--fg-faint); }
+.impact-box { border: 1px dashed var(--you); border-radius: 8px; padding: 10px; display: grid; gap: 8px; background: var(--you-soft); }
+.impact-box h3 { margin: 0; font: 600 14px var(--font-display); color: var(--you); }
+.chg { display: grid; gap: 2px; font-size: 13px; }
+.chg b { font-weight: 600; }
+.chg .old { color: var(--fg-faint); text-decoration: line-through; }
+.thinking { color: var(--accent); font: 12px var(--font-mono); }
+@media (prefers-reduced-motion: no-preference) {
+  .thinking::after { content: " ●"; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+}
+
+@media (max-width: 1060px) {
+  .main { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
+  .app { height: auto; }
+  html, body { height: auto; }
+  .panel.stream-p .scroll { max-height: 240px; }
+  .graph-wrap { min-height: 380px; max-height: 70vh; }
+  .mode { margin-left: 0; }
+}
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">Linux<span>AI</span></div>
+    <div class="vitals" aria-label="Machine status">
+      <span class="vital"><span class="dot"></span>core <b>running</b></span>
+      <span class="vital">power <b>on battery · 64% · saver</b></span>
+      <span class="vital">cpu policy <b>efficiency</b></span>
+      <span class="vital"><span class="dot you"></span><b id="waitingCount">2</b> need you</span>
+    </div>
+    <div class="mode" id="mode">prototype · example data</div>
+  </header>
+
+  <main class="main">
+    <section class="panel stream-p" aria-label="Work stream">
+      <div class="panel-h"><span class="label">Stream</span><span class="label" id="streamCount"></span></div>
+      <div class="scroll"><div class="stream" id="stream"></div></div>
+    </section>
+
+    <section class="panel" aria-label="Reasoning graph">
+      <div class="panel-h"><span class="label" id="graphTitle">Reasoning</span><span class="label" id="graphMeta"></span></div>
+      <div class="graph-wrap" id="graphWrap"><div class="graph" id="graph"></div></div>
+      <div class="legend">
+        <span><i style="border-left:3px solid var(--you)"></i>your intent</span>
+        <span><i style="border-color:var(--accent)"></i>selected</span>
+        <span><i style="border:1px dashed var(--you)"></i>changed by a comment · not applied</span>
+        <span><i style="background:var(--you-soft);border-color:var(--you)"></i>waiting for you</span>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Inspector">
+      <div class="panel-h"><span class="label" id="inspLabel">Step</span></div>
+      <div class="scroll"><div class="insp" id="insp"></div></div>
+    </section>
+  </main>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------------------------
+// Example data. Every task is a small graph: intent → reasoning → decisions → actions → results.
+// ---------------------------------------------------------------------------------------------
+const KINDS = ["intent", "reasoning", "decision", "action", "result"];
+const KIND_LABEL = { intent: "Intent", reasoning: "Reasoning", decision: "Decision", action: "Action", result: "Result" };
+
+let tasks = [
+  {
+    id: "trip", title: "Book flights for Sam's wedding", source: "you · text", when: "9:12", status: "waiting",
+    nodes: [
+      { id: "i1", kind: "intent", author: "you", status: "done", title: "“Book my flights for Sam's wedding”",
+        summary: "Sent by text this morning.", parents: [] },
+      { id: "r1", kind: "reasoning", author: "ai", status: "done", title: "Wedding is Sat Jun 14 in Denver", conf: 0.97,
+        summary: "The invite says Saturday June 14, 4pm, at The Grove, Denver. The rehearsal dinner is Friday the 13th at 7pm.",
+        evidence: [["email", "Wedding invite from Sam, Nov 2"], ["calendar", "“Sam's wedding” on Jun 14"]], parents: ["i1"] },
+      { id: "r2", kind: "reasoning", author: "ai", status: "done", title: "You fly from Austin, usually Southwest", conf: 0.88,
+        summary: "4 of your last 5 trips were Southwest out of AUS. You picked an aisle seat every time and you said “never Frontier again” in March.",
+        evidence: [["memory", "5 past bookings"], ["preference", "Aisle seat, 85% sure"], ["message", "“never Frontier again”, Mar 3"]], parents: ["i1"] },
+      { id: "d1", kind: "decision", author: "ai", status: "done", title: "Fly Thu Jun 12, back Sun Jun 15", conf: 0.82,
+        summary: "Arriving Thursday leaves a buffer before Friday's rehearsal dinner.",
+        options: [
+          { label: "Thu Jun 12 → Sun Jun 15", score: 0.82, chosen: true, why: "A day of buffer before the rehearsal dinner. Matches how you usually travel." },
+          { label: "Fri Jun 13 → Sun Jun 15", score: 0.61, why: "Cheaper by $38, but a delay would make you miss the rehearsal dinner." },
+          { label: "Wed Jun 11 → Mon Jun 16", score: 0.24, why: "Longer than any trip you've taken this year." } ],
+        parents: ["r1", "r2"] },
+      { id: "d2", kind: "decision", author: "ai", status: "done", title: "Southwest 1432, 8:05am, $214 round trip", conf: 0.77,
+        summary: "Your usual airline, a reasonable departure time, and no bag fees.",
+        options: [
+          { label: "Southwest 1432 · 8:05am · $214", score: 0.77, chosen: true, why: "Usual airline, aisle available, 2 free bags." },
+          { label: "United 512 · 6:10am · $189", score: 0.44, why: "Cheaper, but you've rebooked away from early flights 3 times." },
+          { label: "Frontier 2207 · 11:40am · $121", score: 0.08, why: "You said never again; bag fees bring it to about $190." } ],
+        parents: ["d1", "r2"] },
+      { id: "d3", kind: "decision", author: "ai", status: "done", title: "Courtyard Downtown, 3 nights, $504", conf: 0.71,
+        summary: "0.6 miles from the venue. Sam's family block rate saves $22 a night.",
+        options: [
+          { label: "Courtyard Downtown · $168/night", score: 0.71, chosen: true, why: "Walkable to the venue; wedding block rate." },
+          { label: "Airbnb in LoHi · $141/night", score: 0.52, why: "Cheaper, but a 15-minute ride to the venue." } ],
+        parents: ["d1", "r1"] },
+      { id: "a1", kind: "action", author: "ai", status: "done", title: "Hold the Southwest seats (24h)",
+        summary: "Held 2 aisle seats with no charge. The hold expires tomorrow at 9:14am.",
+        raw: { do: "hold", what: "flight", with: { airline: "@southwest", flight: "1432", date: "2027-06-12", return: "2027-06-15", seat: "aisle" }, as: "hold" },
+        parents: ["d2"] },
+      { id: "a2", kind: "action", author: "ai", status: "waiting", title: "Book flights + hotel ($718)",
+        summary: "This is the first trip I'm booking for you, so I'm asking before paying. It fits your $900 travel budget.",
+        raw: { plan: "book-sam-wedding", conf: 0.74, steps: [
+          { do: "book", what: "$hold", within: "budget:travel" },
+          { do: "book", what: "hotel", with: { hotel: "@courtyard-denver-downtown", nights: 3, rate: "wedding-block" }, within: "budget:travel" },
+          { do: "schedule", what: "appointment", with: { title: "Fly to Denver (WN 1432)", at: "2027-06-12T08:05" } } ] },
+        parents: ["a1", "d3"] },
+      { id: "o1", kind: "result", author: "ai", status: "waiting", title: "Trip total $718 of $900 budget",
+        summary: "Once booked: flights $214, hotel $504, and both added to your calendar with check-in reminders.",
+        parents: ["a2"] },
+    ],
+  },
+  {
+    id: "bill", title: "Verizon bill is higher than usual", source: "event · bill.arrived", when: "8:40", status: "waiting",
+    nodes: [
+      { id: "i1", kind: "intent", author: "you", status: "done", title: "Standing direction: “handle my bills”",
+        summary: "You said this on Oct 4. So far I've paid 6 bills on my own.", parents: [] },
+      { id: "r1", kind: "reasoning", author: "ai", status: "done", title: "This bill is $112.40, usually $82", conf: 0.95,
+        summary: "The average over the last 6 months is $81.90. This one is 37% higher. Line items show a new $29.99 “International Pass”.",
+        evidence: [["email", "Verizon e-bill, Nov 17"], ["memory", "6 paid Verizon bills"]], parents: ["i1"] },
+      { id: "d1", kind: "decision", author: "ai", status: "done", title: "Ask you before paying", conf: 0.41,
+        summary: "It's outside the “within 20% of usual” range you set, and the new charge may be a mistake.",
+        options: [
+          { label: "Ask first", score: 0.81, chosen: true, why: "Outside your 20% range; a charge you may not recognize." },
+          { label: "Pay $112.40 now", score: 0.33, why: "Due in 11 days, so there's no rush." },
+          { label: "Dispute the $29.99 charge", score: 0.29, why: "Only if you didn't add it. You were in Toronto Oct 19–22." } ],
+        parents: ["r1"] },
+      { id: "a1", kind: "action", author: "ai", status: "waiting", title: "Asked you by text",
+        summary: "“Verizon is $112.40, about 37% above the usual $82. There's a new $29.99 International Pass. Pay it?”",
+        raw: { ask: "Verizon is ${$bill.amount}… Pay it?", opts: ["pay", "hold", "dispute"], as: "ans" }, parents: ["d1"] },
+      { id: "o1", kind: "result", author: "ai", status: "waiting", title: "Waiting for your answer",
+        summary: "Due Nov 28. I'll remind you on Nov 25 if I haven't heard back.", parents: ["a1"] },
+    ],
+  },
+  {
+    id: "nginx", title: "Web server stopped after an update", source: "event · service.failed", when: "Yesterday", status: "done",
+    nodes: [
+      { id: "i1", kind: "intent", author: "rule", status: "done", title: "Rule: investigate failed services",
+        summary: "Built-in rule. When a service fails, I find out why and fix it or tell you.", parents: [] },
+      { id: "r1", kind: "reasoning", author: "ai", status: "done", title: "Port 80 was taken by caddy", conf: 0.93,
+        summary: "nginx logged “bind() to 0.0.0.0:80 failed (98: Address in use)”. caddy started 4 seconds earlier. It was pulled in as a dependency by yesterday's update.",
+        evidence: [["journal", "nginx.service, 19:02:11"], ["journal", "caddy.service started 19:02:07"], ["pacman log", "caddy 2.9 installed as a dependency"]], parents: ["i1"] },
+      { id: "d1", kind: "decision", author: "ai", status: "done", title: "Disable caddy, restart nginx", conf: 0.86,
+        summary: "You never asked for caddy, and your sites are configured in nginx.",
+        options: [
+          { label: "Disable caddy, restart nginx", score: 0.86, chosen: true, why: "Your 3 sites live in nginx; caddy has no sites configured." },
+          { label: "Move nginx to port 8080", score: 0.12, why: "Would break the links people use." } ],
+        parents: ["r1"] },
+      { id: "a1", kind: "action", author: "ai", status: "done", title: "Stopped caddy, restarted nginx",
+        summary: "Both steps succeeded in 2.1s.",
+        raw: { plan: "fix-nginx-port", steps: [{ do: "stop", unit: "caddy.service" }, { do: "run", program: "systemctl", args: ["disable", "caddy.service"] }, { do: "restart", unit: "nginx.service" }] },
+        parents: ["d1"] },
+      { id: "o1", kind: "result", author: "ai", status: "done", title: "nginx running, 3 sites reachable",
+        summary: "Checked all 3 sites; each returned 200. I saved this as a solution, and I'll offer a rule if it happens again.",
+        parents: ["a1"] },
+    ],
+  },
+  {
+    id: "power", title: "Unplugged: switched to power saving", source: "rule · power.unplugged", when: "7:58", status: "done",
+    nodes: [
+      { id: "i1", kind: "intent", author: "rule", status: "done", title: "Rule: save power on battery",
+        summary: "Runs without the AI model: instantly, offline, at no cost.", parents: [] },
+      { id: "a1", kind: "action", author: "rule", status: "done", title: "Power profile → saver",
+        summary: "Done in 40ms.", raw: { do: "set", what: "power.profile", to: "power-saver" }, parents: ["i1"] },
+      { id: "a2", kind: "action", author: "rule", status: "done", title: "CPU policy → efficiency",
+        summary: "Switched the sched_ext scheduler to its power-saving mode.", raw: { do: "set", what: "cpu.policy", to: "efficiency" }, parents: ["i1"] },
+      { id: "o1", kind: "result", author: "rule", status: "done", title: "Estimated 5h 40m of battery",
+        summary: "Up from about 4h 10m at the previous settings.", parents: ["a1", "a2"] },
+    ],
+  },
+];
+
+// ---------------------------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------------------------
+let current = tasks[0].id;
+let selected = "d1";
+let pending = null;       // {taskId, nodeId, comment, result: {kind, reply, remember, revisions[]}}
+let thinking = null;      // {nodeId, ctl}
+let sampleFn = null;      // Claude, when this view allows it
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const task = () => tasks.find((t) => t.id === current);
+const node = (t, id) => t.nodes.find((n) => n.id === id);
+const children = (t, id) => t.nodes.filter((n) => n.parents.includes(id));
+function reach(t, id, dir) {
+  const seen = new Set(), stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    const next = dir === "down" ? children(t, cur).map((n) => n.id) : node(t, cur).parents;
+    for (const n of next) if (!seen.has(n)) { seen.add(n); stack.push(n); }
+  }
+  return [...seen];
+}
+const pct = (x) => (x == null ? "" : Math.round(x * 100) + "%");
+const statusWord = { done: "done", running: "running", waiting: "needs you", stale: "out of date", proposed: "proposed", failed: "failed" };
+
+// ---------------------------------------------------------------------------------------------
+// Render: stream
+// ---------------------------------------------------------------------------------------------
+function renderStream() {
+  const waiting = tasks.filter((t) => t.status === "waiting");
+  const rest = tasks.filter((t) => t.status !== "waiting");
+  const item = (t) => `
+    <button class="task ${t.id === current ? "on" : ""}" data-task="${t.id}">
+      <span class="task-t">${esc(t.title)}</span>
+      <span class="task-m"><span class="pill s-${t.status}">${statusWord[t.status]}</span><span class="src">${esc(t.source)} · ${esc(t.when)}</span></span>
+    </button>`;
+  $("stream").innerHTML =
+    (waiting.length ? `<div class="label group-l">Needs you</div>${waiting.map(item).join("")}` : "") +
+    `<div class="label group-l">Recent</div>${rest.map(item).join("")}`;
+  $("waitingCount").textContent = waiting.length;
+  $("streamCount").textContent = tasks.length + " tasks";
+}
+
+// ---------------------------------------------------------------------------------------------
+// Render: graph (columns by kind, edges as curves)
+// ---------------------------------------------------------------------------------------------
+const COL_W = 226, NODE_W = 190, ROW_H = 100, TOP = 8;
+// Columns follow dependency depth, so every arrow points right; rows are ordered by their parents' rows.
+function layout(t) {
+  const depth = {};
+  const d = (n) => depth[n.id] ??= n.parents.length ? 1 + Math.max(...n.parents.map((p) => d(node(t, p)))) : 0;
+  t.nodes.forEach(d);
+  const ncols = Math.max(...Object.values(depth)) + 1, pos = {}, row = {};
+  for (let c = 0; c < ncols; c++) {
+    const col = t.nodes.filter((n) => depth[n.id] === c);
+    const key = (n) => n.parents.length ? n.parents.reduce((s, p) => s + (row[p] ?? 0), 0) / n.parents.length : 0;
+    col.map((n, i) => [n, key(n) + i * 1e-3]).sort((a, b) => a[1] - b[1]).forEach(([n], i) => {
+      row[n.id] = i; pos[n.id] = { x: 8 + c * COL_W, y: TOP + i * ROW_H };
+    });
+  }
+  return { cols: Array.from({ length: ncols }), pos };
+}
+
+function renderGraph() {
+  const t = task();
+  const { cols, pos } = layout(t);
+  const impact = new Set(pending && pending.taskId === t.id ? pending.result.revisions.map((r) => r.id) : []);
+  const focus = new Set([selected, ...reach(t, selected, "up"), ...reach(t, selected, "down")]);
+  const w = 8 + cols.length * COL_W, h = Math.max(...Object.values(pos).map((p) => p.y)) + ROW_H;
+  let edges = "";
+  for (const n of t.nodes) for (const p of n.parents) {
+    const a = pos[p], b = pos[n.id]; if (!a || !b) continue;
+    const x1 = a.x + NODE_W, y1 = a.y + 34, x2 = b.x, y2 = b.y + 34, mx = (x1 + x2) / 2;
+    const lit = focus.has(n.id) && focus.has(p);
+    edges += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${lit ? "var(--accent)" : "var(--line)"}" stroke-width="${lit ? 1.6 : 1.2}" opacity="${lit ? 0.9 : 0.8}"/>`;
+  }
+  const nodes = t.nodes.map((n) => {
+    const p = pos[n.id];
+    const st = impact.has(n.id) ? "proposed" : n.status;
+    const meta = [n.conf != null ? `<span class="conf">${pct(n.conf)} sure</span>` : "", n.comments?.length ? `<span class="cmt-n">${n.comments.length} comment${n.comments.length > 1 ? "s" : ""}</span>` : ""].join("");
+    return `<button class="node k-${n.kind} st-${st} ${n.id === selected ? "on" : ""} ${impact.has(n.id) ? "impact" : ""} ${focus.has(n.id) ? "" : "dim"}"
+        style="left:${p.x}px;top:${p.y}px" data-node="${n.id}" aria-label="${esc(KIND_LABEL[n.kind] + ": " + n.title)}">
+      <span class="node-k"><span>${KIND_LABEL[n.kind]}${n.author === "you" ? " · you" : n.author === "rule" ? " · rule" : ""}</span><span class="s-${st}">${statusWord[st]}</span></span>
+      <span class="node-t">${esc(n.title)}</span>
+      ${meta ? `<span class="node-m">${meta}</span>` : ""}
+    </button>`;
+  }).join("");
+  $("graph").style.width = w + "px"; $("graph").style.height = h + "px";
+  $("graph").innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${edges}</svg>${nodes}`;
+  $("graphTitle").textContent = t.title;
+  $("graphMeta").textContent = t.source;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Render: inspector
+// ---------------------------------------------------------------------------------------------
+function renderInspector() {
+  const t = task(), n = node(t, selected);
+  if (!n) { $("insp").innerHTML = ""; return; }
+  $("inspLabel").textContent = KIND_LABEL[n.kind];
+  const ups = n.parents.map((id) => node(t, id)), downs = children(t, n.id);
+  const linkList = (list) => list.map((x) => `<button class="link" data-node="${x.id}">${esc(x.title)}</button>`).join("");
+  let html = `
+    <div>
+      <div class="meta"><span class="pill s-${n.status}">${statusWord[n.status]}</span><span>${n.author === "you" ? "from you" : n.author === "rule" ? "by a rule" : "by the AI"}</span>${n.conf != null ? `<span class="conf">${pct(n.conf)} sure</span>` : ""}</div>
+      <h2>${esc(n.title)}</h2>
+    </div>
+    <div class="sec"><p>${esc(n.summary)}</p></div>`;
+  if (n.evidence?.length) html += `<div class="sec"><div class="label">Based on</div><ul class="evid">${n.evidence.map(([k, v]) => `<li><span class="chip">${esc(k)}</span>${esc(v)}</li>`).join("")}</ul></div>`;
+  if (n.options?.length) html += `<div class="sec"><div class="label">Options weighed</div><div class="opts">${n.options.map((o) => `
+      <div class="opt ${o.chosen ? "chosen" : ""}">
+        <div class="opt-top"><span>${o.chosen ? "✓ " : ""}${esc(o.label)}</span><span class="conf">${pct(o.score)}</span></div>
+        <div class="bar"><span style="width:${Math.round((o.score || 0) * 100)}%"></span></div>
+        <div class="opt-why">${esc(o.why)}</div>
+      </div>`).join("")}</div></div>`;
+  if (n.raw) html += `<details class="sec"><summary>What runs behind the scenes (LinuxAI action language)</summary><pre>${esc(JSON.stringify(n.raw, null, 2))}</pre></details>`;
+  if (n.status === "waiting" && n.kind === "action") html += `<div class="actions-row"><button class="btn amber" data-approve="${n.id}">Approve</button><button class="btn" data-decline="${n.id}">Not now</button></div>`;
+  if (ups.length || downs.length) html += `<div class="sec">${ups.length ? `<div class="label">Comes from</div><div class="links">${linkList(ups)}</div>` : ""}${downs.length ? `<div class="label" style="margin-top:6px">Leads to</div><div class="links">${linkList(downs)}</div>` : ""}</div>`;
+  if (n.history?.length) html += `<div class="sec"><div class="label">Earlier versions</div><div class="history">${n.history.map((h) => `<span><s>${esc(h.title)}</s> · changed after: “${esc(h.after)}”</span>`).join("")}</div></div>`;
+
+  // Discussion
+  const msgs = (n.comments || []).map((c) => `<div class="msg ${c.who}"><span class="msg-w">${c.who === "you" ? "You" : "AI"}</span><p>${esc(c.text)}</p></div>`).join("");
+  html += `<div class="sec"><div class="label">Discussion</div><div class="thread">${msgs || `<span class="hint">Ask why, correct a fact, or change a choice. The AI works out what your comment changes before and after this step.</span>`}</div></div>`;
+  if (thinking && thinking.nodeId === n.id && current === thinking.taskId) {
+    html += `<div class="actions-row"><span class="thinking">Re-evaluating with your comment</span><button class="btn" id="stop">Stop</button></div>`;
+  }
+  if (pending && pending.taskId === t.id && pending.nodeId === n.id) html += impactBox(t);
+  html += `
+    <form class="composer" id="composer">
+      <label class="label" for="cmt">Comment on this step</label>
+      <textarea id="cmt" placeholder="${esc(placeholderFor(n))}" ${thinking ? "disabled" : ""}></textarea>
+      <div class="actions-row"><button class="btn primary" type="submit" ${thinking ? "disabled" : ""}>Send</button><span class="hint">${sampleFn ? "Claude re-reasons live" : "Scripted demo (Claude not available here)"}</span></div>
+    </form>`;
+  $("insp").innerHTML = html;
+}
+
+function placeholderFor(n) {
+  return { intent: "e.g. Actually it's a work trip, so expense it", reasoning: "e.g. The rehearsal dinner moved to Thursday",
+    decision: "e.g. I'd rather leave Wednesday", action: "e.g. Why not hold the hotel too?", result: "e.g. That's too expensive" }[n.kind];
+}
+
+function impactBox(t) {
+  const r = pending.result;
+  const rows = r.revisions.map((rv) => {
+    const n = node(t, rv.id); if (!n) return "";
+    const changedTitle = rv.title && rv.title !== n.title;
+    return `<div class="chg"><span class="label">${KIND_LABEL[n.kind]}</span>${changedTitle ? `<span class="old">${esc(n.title)}</span><b>${esc(rv.title)}</b>` : `<b>${esc(n.title)}</b>`}<span>${esc(rv.why || rv.summary || "")}</span></div>`;
+  }).join("");
+  const up = r.revisions.filter((rv) => reach(t, pending.nodeId, "up").includes(rv.id)).length;
+  const down = r.revisions.filter((rv) => reach(t, pending.nodeId, "down").includes(rv.id)).length;
+  return `<div class="impact-box">
+      <h3>Your comment changes ${r.revisions.length} step${r.revisions.length === 1 ? "" : "s"}</h3>
+      <span class="hint">${up ? `${up} before this step · ` : ""}${down} after it · nothing has been applied yet</span>
+      ${rows}
+      <div class="actions-row"><button class="btn amber" id="apply">Apply changes</button><button class="btn" id="branch">Keep both (branch)</button><button class="btn" id="discard">Discard</button></div>
+    </div>`;
+}
+
+function render() { renderStream(); renderGraph(); renderInspector(); }
+
+// ---------------------------------------------------------------------------------------------
+// Comments → re-evaluation (Claude when available; a scripted fallback otherwise)
+// ---------------------------------------------------------------------------------------------
+function compactTask(t) {
+  return { task: t.title, nodes: t.nodes.map((n) => ({ id: n.id, kind: n.kind, author: n.author, status: n.status, title: n.title,
+    summary: n.summary, confidence: n.conf, from: n.parents, options: n.options?.map((o) => ({ label: o.label, score: o.score, chosen: !!o.chosen })),
+    evidence: n.evidence?.map(([k, v]) => k + ": " + v) })) };
+}
+
+function promptFor(t, n, comment) {
+  return `You are the reasoning layer of LinuxAI, an operating system where an AI does the work and the human steers by commenting on any step of it.
+Below is one task as a graph of steps (intent → reasoning → decisions → actions → results); "from" lists each step's upstream steps.
+The human just commented on step "${n.id}".
+
+Decide what the comment means:
+- "question": they want an explanation. Answer from the evidence and change nothing.
+- "change": it corrects a fact or overrides a choice. Revise the commented step if it changes, and every step downstream whose content depends on it. If the comment shows an earlier assumption was wrong, revise those upstream steps too. Leave unaffected steps out.
+- "note": a lasting preference or fact to remember, with no change to this task.
+
+Write as the AI speaking plainly to the human, short. Keep step ids. Invent realistic specifics (times, prices, names) consistent with the task when a revision needs them. A revised step that is not yet carried out stays a proposal; revised actions that cost money still need the human's approval.
+
+Reply with only JSON, no other text:
+{"kind":"question|change|note","reply":"what you say back (1-3 sentences)","remember":"a lasting preference learned, or empty string","revisions":[{"id":"step id","title":"new short title","summary":"new 1-2 sentence summary","why":"one line: what changed and why","confidence":0.0,"options":[{"label":"...","score":0.0,"chosen":true,"why":"..."}]}]}
+"options" only for decisions; omit fields that don't change. "revisions" is [] for a question or note.
+
+TASK:
+${JSON.stringify(compactTask(t))}
+
+EARLIER DISCUSSION ON THIS STEP:
+${(n.comments || []).map((c) => (c.who === "you" ? "Human: " : "AI: ") + c.text).join("\n") || "(none)"}
+
+COMMENT ON STEP ${n.id}: ${comment}`;
+}
+
+function scripted(t, n, comment) {
+  if (/\?\s*$/.test(comment)) {
+    const ev = n.evidence?.[0];
+    return { kind: "question", reply: ev ? `Mostly from ${ev[0]}: ${ev[1]}. ${n.summary}` : n.summary, remember: "", revisions: [] };
+  }
+  const down = reach(t, n.id, "down").map((id) => node(t, id)).filter((x) => x.status !== "done" || x.kind !== "intent");
+  return { kind: "change", reply: `Got it. I'll re-plan from here with “${comment}”. In the live system I'd work out the new specifics; this demo just marks what would change.`,
+    remember: "", revisions: [n, ...down].map((x) => ({ id: x.id, summary: `Re-planned using your note: “${comment}”.`, why: x.id === n.id ? "You changed this directly." : `Depends on “${n.title}”.` })) };
+}
+
+async function sendComment(text) {
+  const t = task(), n = node(t, selected);
+  n.comments = [...(n.comments || []), { who: "you", text }];
+  pending = null;
+  const ctl = new AbortController();
+  thinking = { nodeId: n.id, taskId: t.id, ctl };
+  render();
+  let result;
+  try {
+    if (!sampleFn) throw { code: "unavailable" };
+    result = await sampleFn.json(promptFor(t, n, text), { signal: ctl.signal, cache: false });
+    if (!result || typeof result.reply !== "string") throw { code: "invalid_json" };
+    result.revisions = Array.isArray(result.revisions) ? result.revisions.filter((r) => r && node(t, String(r.id))) : [];
+  } catch (e) {
+    if (e && e.code === "cancelled") { thinking = null; n.comments.push({ who: "ai", text: "(stopped)" }); render(); return; }
+    if (e && (e.code === "not_granted" || e.code === "sampling_disabled")) { sampleFn = null; }
+    result = scripted(t, n, text);
+    if (e && e.code && e.code !== "unavailable") result.reply += ` (Claude couldn't answer: ${e.code}.)`;
+  }
+  thinking = null;
+  n.comments.push({ who: "ai", text: result.reply + (result.remember ? `\n\nI'll remember: ${result.remember}` : "") });
+  if (result.revisions.length) pending = { taskId: t.id, nodeId: n.id, comment: text, result };
+  current = t.id; selected = n.id;
+  render();
+}
+
+function applyPending(targetTask) {
+  for (const rv of pending.result.revisions) {
+    const n = node(targetTask, rv.id); if (!n) continue;
+    n.history = [...(n.history || []), { title: n.title, after: pending.comment }];
+    if (rv.title) n.title = rv.title;
+    if (rv.summary) n.summary = rv.summary;
+    if (typeof rv.confidence === "number") n.conf = Math.max(0, Math.min(1, rv.confidence));
+    if (Array.isArray(rv.options) && rv.options.length) n.options = rv.options.map((o) => ({ label: String(o.label), score: Number(o.score) || 0, chosen: !!o.chosen, why: String(o.why || "") }));
+    if (n.kind === "action" || n.kind === "result") n.status = "waiting";
+    else if (n.status !== "waiting") n.status = "done";
+  }
+  targetTask.status = targetTask.nodes.some((n) => n.status === "waiting") ? "waiting" : "done";
+}
+
+// ---------------------------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------------------------
+document.addEventListener("click", (e) => {
+  const tk = e.target.closest("[data-task]");
+  if (tk) { current = tk.dataset.task; selected = task().nodes.find((n) => n.kind === "decision")?.id || task().nodes[0].id; render(); return; }
+  const nd = e.target.closest("[data-node]");
+  if (nd) { selected = nd.dataset.node; renderGraph(); renderInspector(); return; }
+  const ap = e.target.closest("[data-approve]");
+  if (ap) {
+    const t = task(), n = node(t, ap.dataset.approve);
+    n.status = "done"; n.comments = [...(n.comments || []), { who: "ai", text: "Approved. Done, and recorded in the journal." }];
+    for (const c of reach(t, n.id, "down")) node(t, c).status = "done";
+    t.status = t.nodes.some((x) => x.status === "waiting") ? "waiting" : "done";
+    render(); return;
+  }
+  const dc = e.target.closest("[data-decline]");
+  if (dc) { const n = node(task(), dc.dataset.decline); n.comments = [...(n.comments || []), { who: "ai", text: "OK, holding off. Comment here if you want me to change the plan." }]; renderInspector(); return; }
+  if (e.target.id === "stop" && thinking) { thinking.ctl.abort(); return; }
+  if (e.target.id === "apply" && pending) { applyPending(task()); pending = null; render(); return; }
+  if (e.target.id === "discard" && pending) { pending = null; render(); return; }
+  if (e.target.id === "branch" && pending) {
+    const src = task(), copy = JSON.parse(JSON.stringify(src));
+    copy.id = src.id + "-b" + Date.now().toString(36); copy.title = src.title + " (branch)"; copy.when = "now";
+    applyPending(copy); tasks.splice(tasks.indexOf(src) + 1, 0, copy);
+    pending = null; current = copy.id; render(); return;
+  }
+});
+
+document.addEventListener("submit", (e) => {
+  if (e.target.id !== "composer") return;
+  e.preventDefault();
+  const text = $("cmt").value.trim();
+  if (text && !thinking) sendComment(text);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target.id === "cmt" && e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("composer").requestSubmit(); }
+});
+
+render();
+(async () => {
+  try { sampleFn = window.claude ? await window.claude.use("sample") : null; } catch { sampleFn = null; }
+  $("mode").textContent = sampleFn ? "prototype · example data · live reasoning" : "prototype · example data";
+  renderInspector();
+})();
+</script>

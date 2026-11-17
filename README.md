@@ -7,6 +7,7 @@ the hardware-driver layer; everything above it is LinuxAI.
 - **[docs/SCOPE.md](docs/SCOPE.md)**: what we're building and in what order
 - **[docs/SYSTEM_INTERFACE.md](docs/SYSTEM_INTERFACE.md)**: objects, events, actions and views (the foundation)
 - **[docs/ACTION_LANGUAGE.md](docs/ACTION_LANGUAGE.md)**: the language the AI uses to run the machine
+- **[docs/VIEWS.md](docs/VIEWS.md)**: the Workspace screen (tasks, decisions, reasoning, comments that change things); prototype in `prototypes/`
 - **[image/README.md](image/README.md)**: the bootable ISO, and how to try it in a VM on Windows
 - [docs/BLUEPRINT.md](docs/BLUEPRINT.md): the original technical blueprint
 
