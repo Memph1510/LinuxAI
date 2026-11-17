@@ -1,0 +1,415 @@
+"""The AI's motor nerves: what it can do to the machine, and the human gate in front of it.
+
+Trust model (the human is the guardrail):
+  ask      every change is shown and waits for you
+  trusted  read-only commands and commands you marked "always allow" run on their own;
+           everything else waits for you  (default)
+  auto     everything runs on its own; you still watch it live and can Ctrl-C
+"""
+
+from __future__ import annotations
+
+import difflib
+import json
+import os
+import re
+import shlex
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+from . import sysinfo, ui
+from .config import Config
+from .memory import Memory
+
+CWD_MARK = "__LINUXAI_CWD__"
+
+READ_ONLY = {
+    "ls", "cat", "head", "tail", "less", "grep", "egrep", "rg", "find", "fd", "stat", "file", "wc",
+    "sort", "uniq", "cut", "awk", "tr", "diff", "cmp", "md5sum", "sha256sum", "du", "df", "free",
+    "uptime", "uname", "whoami", "id", "groups", "hostname", "hostnamectl", "timedatectl", "date",
+    "ps", "pgrep", "lsblk", "blkid", "lsusb", "lspci", "lscpu", "lsmod", "lsof", "ss", "which",
+    "type", "whereis", "echo", "printf", "pwd", "env", "printenv", "journalctl", "dmesg", "tree",
+    "readlink", "realpath", "basename", "dirname", "nproc", "sensors", "true", "test", "[",
+}
+READ_ONLY_SUB = {
+    "systemctl": {"status", "show", "cat", "list-units", "list-unit-files", "list-timers",
+                  "is-active", "is-enabled", "is-failed", "list-dependencies", "--failed"},
+    "git": {"status", "log", "diff", "show", "branch", "remote", "rev-parse", "ls-files", "blame"},
+    "ip": {"addr", "a", "route", "r", "link", "l", "neigh", "-br", "-c"},
+    "pacman": {"-Q", "-Qi", "-Ql", "-Qs", "-Qe", "-Qo", "-Ss", "-Si", "-Qu", "-Qdt"},
+    "apt": {"list", "show", "search", "policy"},
+    "dpkg": {"-l", "-L", "-s", "-S"},
+    "flatpak": {"list", "info", "search"},
+    "nmcli": {"device", "d", "connection", "c", "general", "g", "-t"},
+    "docker": {"ps", "images", "logs", "inspect", "version", "info"},
+    "loginctl": {"list-sessions", "show-session", "session-status"},
+}
+SAFE_REDIRECT = re.compile(r"\d?>\s*/dev/null|2>&1")
+
+
+def _segments(command: str) -> list[str]:
+    return [s.strip() for s in re.split(r"\|\|?|&&|;|\n", command) if s.strip()]
+
+
+def is_read_only(command: str) -> bool:
+    """Conservative check: every pipeline segment is a known read-only command, no writes."""
+    if re.search(r"`|\$\(", command):
+        return False
+    if ">" in SAFE_REDIRECT.sub("", command):
+        return False
+    for seg in _segments(command):
+        try:
+            words = shlex.split(seg)
+        except ValueError:
+            return False
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        head = os.path.basename(words[0])
+        if head in ("sudo", "doas"):
+            return False
+        if head == "find" and any(w in ("-delete", "-exec", "-execdir", "-ok") for w in words):
+            return False
+        if head == "sed" and len(words) > 1 and not any(w.startswith("-i") for w in words):
+            continue
+        if head in READ_ONLY:
+            continue
+        sub = READ_ONLY_SUB.get(head)
+        rest = [w for w in words[1:] if not w.startswith("--no-pager")]
+        if sub and rest and (rest[0] in sub or rest[0].split("=")[0] in sub):
+            continue
+        return False
+    return True
+
+
+def suggest_prefix(command: str) -> str:
+    words = command.strip().split()
+    if not words:
+        return ""
+    take = 3 if words[0] in ("sudo", "doas") else 2
+    pre = [w for w in words[:take] if not w.startswith("-") and "/" not in w]
+    return " ".join(pre or words[:1])
+
+
+def matches_allow(command: str, prefixes: list[str]) -> bool:
+    segs = _segments(command)
+    return bool(segs) and all(
+        is_read_only(s) or any(s == p or s.startswith(p + " ") for p in prefixes) for s in segs
+    )
+
+
+def clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return f"{text[:half]}\n... [{len(text) - limit} chars omitted] ...\n{text[-half:]}"
+
+
+def _str(v: Any) -> bool:
+    return isinstance(v, str)
+
+
+# ---------------------------------------------------------------------------------------------
+# Tool schemas (what the model sees)
+# ---------------------------------------------------------------------------------------------
+
+def _tool(name: str, description: str, props: dict, required: list[str]) -> dict:
+    return {
+        "name": name,
+        "description": description,
+        "input_schema": {"type": "object", "properties": props, "required": required,
+                         "additionalProperties": False},
+        "eager_input_streaming": True,
+    }
+
+
+TOOLS = [
+    _tool("run_command",
+          "Run a bash command on this machine as the human's user (use sudo when root is needed; the human "
+          "types the password). The working directory persists between calls. Output is streamed to the "
+          "human and returned to you. Do not run interactive/full-screen programs (vim, top, less) or "
+          "commands that never exit.",
+          {"command": {"type": "string", "description": "The bash command."},
+           "why": {"type": "string", "description": "One short line telling the human what this is for."},
+           "timeout": {"type": "integer", "description": "Seconds before it is killed (default 600)."}},
+          ["command", "why"]),
+    _tool("read_file", "Read a text file (optionally a line range).",
+          {"path": {"type": "string"},
+           "offset": {"type": "integer", "description": "1-based first line."},
+           "limit": {"type": "integer", "description": "Number of lines (default 400)."}},
+          ["path"]),
+    _tool("write_file", "Create or overwrite a file with the full contents given. The human sees a diff.",
+          {"path": {"type": "string"}, "content": {"type": "string"},
+           "why": {"type": "string"}},
+          ["path", "content", "why"]),
+    _tool("edit_file", "Replace one exact, unique occurrence of old_text with new_text in a file.",
+          {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"},
+           "why": {"type": "string"}},
+          ["path", "old_text", "new_text", "why"]),
+    _tool("ask_human",
+          "Ask the human a question and wait for the answer. Use it whenever their intent is ambiguous, a "
+          "decision is a matter of preference, or they likely know something you would otherwise spend "
+          "many steps discovering. A good question is cheaper than a wrong guess.",
+          {"question": {"type": "string"},
+           "options": {"type": "array", "items": {"type": "string"},
+                       "description": "Optional suggested answers."}},
+          ["question"]),
+    _tool("search_memory",
+          "Search what you have learned before: recorded solutions to past problems and notes about this "
+          "machine and human. Do this before working out a non-trivial problem from scratch.",
+          {"query": {"type": "string"}}, ["query"]),
+    _tool("record_solution",
+          "Save how a problem was solved so it can be reused next time. Call this after solving anything "
+          "non-trivial, especially when the human supplied the key insight. Write it as a reusable "
+          "playbook: the symptom, the root cause, the steps that worked, and pitfalls.",
+          {"title": {"type": "string"},
+           "problem": {"type": "string", "description": "Symptoms and context, so it can be found again."},
+           "solution": {"type": "string", "description": "Root cause, the steps that worked, pitfalls."},
+           "commands": {"type": "array", "items": {"type": "string"},
+                        "description": "Key commands, in order."},
+           "tags": {"type": "string", "description": "Space-separated keywords."},
+           "reused_solution_id": {"type": "integer",
+                                  "description": "If an existing solution was applied as-is, its id "
+                                                 "(then only this field is needed)."}},
+          ["title", "problem", "solution"]),
+    _tool("remember",
+          "Store a durable fact about this machine or a preference of the human (e.g. 'prefers fish shell', "
+          "'backup drive is labelled BACKUP', 'GPU is an RTX 4070 on nvidia-open').",
+          {"fact": {"type": "string"},
+           "category": {"type": "string", "description": "e.g. hardware, preferences, network, software."}},
+          ["fact"]),
+    _tool("system_state", "Get a fresh snapshot of the machine: OS, memory, disks, failed units, recent errors.",
+          {}, []),
+]
+TOOL_NAMES = {t["name"] for t in TOOLS}
+
+
+# ---------------------------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------------------------
+
+class Toolbox:
+    def __init__(self, config: Config, memory: Memory, asker: Callable[[str, list[str]], str] | None = None):
+        self.config = config
+        self.memory = memory
+        self.cwd = os.getcwd()
+        self.asker = asker or self._ask_terminal
+
+    # -- dispatch --
+    def execute(self, name: str, args: Any) -> tuple[str, bool]:
+        """Run one tool call. Returns (result text, is_error)."""
+        if not isinstance(args, dict):
+            return "Error: tool input must be a JSON object.", True
+        handler = getattr(self, f"t_{name}", None)
+        if name not in TOOL_NAMES or handler is None:
+            return f"Error: unknown tool {name}", True
+        try:
+            return handler(**args), False
+        except TypeError as e:
+            return f"Error: bad arguments for {name}: {e}", True
+        except _Invalid as e:
+            return f"Error: {e}", True
+        except OSError as e:
+            return f"Error: {e}", True
+
+    def _path(self, p: Any) -> Path:
+        if not _str(p) or not p:
+            raise _Invalid("path must be a non-empty string")
+        path = Path(os.path.expanduser(p))
+        return path if path.is_absolute() else Path(self.cwd) / path
+
+    def _gate(self, kind: str, auto_ok: bool, editable: str | None = None, prefix: str = "") -> ui.Decision:
+        if self.config.mode == "auto" or (self.config.mode == "trusted" and auto_ok):
+            return ui.Decision("run")
+        return ui.confirm(kind, "", editable=editable, suggest_prefix=prefix)
+
+    @staticmethod
+    def _declined(d: ui.Decision) -> str:
+        if d.action == "redirect":
+            return f"The human did not run this and said instead: {d.text}"
+        return "The human declined this." + (f" Reason: {d.text}" if d.text else "")
+
+    # -- tools --
+    def t_run_command(self, command: str, why: str = "", timeout: int | None = None) -> str:
+        if not _str(command) or not command.strip():
+            raise _Invalid("command must be a non-empty string")
+        ui.out(f"\n{cyan_arrow()} {ui.bold(command)}")
+        if why:
+            ui.out(ui.dim(f"  {why}   [{self.cwd}]"))
+        auto = is_read_only(command) or matches_allow(command, self.memory.allow_prefixes())
+        d = self._gate("command", auto, editable=command, prefix=suggest_prefix(command))
+        if d.action != "run":
+            self.memory.log_action("command", command, "declined:" + d.text)
+            return self._declined(d)
+        if d.text:
+            command = d.text
+            ui.out(f"{cyan_arrow()} {ui.bold(command)}")
+        if d.always:
+            self.memory.add_allow(d.always)
+            ui.out(ui.dim(f"  learned: commands starting with '{d.always}' now run without asking"))
+        code, output, cwd = self._spawn(command, int(timeout or self.config.command_timeout))
+        self.memory.log_action("command", command, "edited" if d.text else "approved", code, output)
+        moved = f"\n(cwd is now {cwd})" if cwd != self.cwd else ""
+        self.cwd = cwd
+        edited = f"(The human edited your command to: {command})\n" if d.text else ""
+        return f"{edited}exit code: {code}{moved}\n{clip(output, self.config.max_output_chars) or '(no output)'}"
+
+    def _spawn(self, command: str, timeout: int) -> tuple[int, str, str]:
+        script = f"{command}\n__rc=$?; printf '\\n{CWD_MARK}%s' \"$PWD\"; exit $__rc"
+        proc = subprocess.Popen(["bash", "-c", script], cwd=self.cwd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1)
+        chunks: list[str] = []
+
+        def pump() -> None:
+            assert proc.stdout
+            for line in proc.stdout:
+                chunks.append(line)
+                if CWD_MARK not in line:
+                    ui.out(ui.dim("  │ " + line.rstrip("\n")))
+
+        t = threading.Thread(target=pump, daemon=True)
+        t.start()
+        note = ""
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            note = f"\n[killed after {timeout}s timeout]"
+        except KeyboardInterrupt:
+            proc.kill()
+            proc.wait()
+            t.join(timeout=2)
+            self.memory.log_action("command", command, "interrupted", -2, "".join(chunks))
+            raise
+        t.join(timeout=2)
+        text = "".join(chunks)
+        cwd = self.cwd
+        if CWD_MARK in text:
+            text, _, tail = text.rpartition(CWD_MARK)
+            cwd = tail.strip() or cwd
+            text = text.rstrip("\n")
+        code = proc.returncode if proc.returncode is not None else -1
+        ui.out(ui.dim(f"  └ exit {code}") if code == 0 else ui.red(f"  └ exit {code}"))
+        return code, text + note, cwd
+
+    def t_read_file(self, path: str, offset: int | None = None, limit: int | None = None) -> str:
+        p = self._path(path)
+        lines = p.read_text(errors="replace").splitlines()
+        start = max(int(offset or 1), 1)
+        n = int(limit or 400)
+        chunk = lines[start - 1:start - 1 + n]
+        ui.out(ui.dim(f"\n  read {p} ({len(chunk)} of {len(lines)} lines)"))
+        body = "\n".join(f"{i:>5}  {l}" for i, l in enumerate(chunk, start))
+        more = f"\n... {len(lines) - (start - 1 + n)} more lines" if start - 1 + n < len(lines) else ""
+        return clip(body, self.config.max_output_chars * 2) + more
+
+    def _write(self, p: Path, new: str, why: str, kind: str) -> str:
+        old = p.read_text(errors="replace") if p.exists() else ""
+        diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(), str(p), str(p), lineterm="", n=2))
+        ui.out(f"\n{cyan_arrow()} {ui.bold(kind)} {p}" + ("" if p.exists() else ui.green(" (new file)")))
+        if why:
+            ui.out(ui.dim(f"  {why}"))
+        for line in diff[2:60]:
+            color = ui.green if line.startswith("+") else ui.red if line.startswith("-") else ui.dim
+            ui.out("  " + color(line))
+        if len(diff) > 60:
+            ui.out(ui.dim(f"  ... {len(diff) - 60} more diff lines"))
+        d = self._gate(kind, auto_ok=False)
+        if d.action != "run":
+            self.memory.log_action(kind, str(p), "declined:" + d.text)
+            return self._declined(d)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(new)
+        except PermissionError:
+            return (f"Error: permission denied writing {p}. For system files, write to a temp file and "
+                    f"install it with run_command (e.g. sudo install -m644 /tmp/x {p}).")
+        self.memory.log_action(kind, str(p), "approved", 0, "\n".join(diff)[:4000])
+        return f"Wrote {p} ({len(new)} bytes)."
+
+    def t_write_file(self, path: str, content: str, why: str = "") -> str:
+        if not _str(content):
+            raise _Invalid("content must be a string")
+        return self._write(self._path(path), content, why, "write")
+
+    def t_edit_file(self, path: str, old_text: str, new_text: str, why: str = "") -> str:
+        p = self._path(path)
+        if not (_str(old_text) and _str(new_text)) or not old_text:
+            raise _Invalid("old_text and new_text must be strings; old_text non-empty")
+        text = p.read_text(errors="replace")
+        count = text.count(old_text)
+        if count != 1:
+            return f"Error: old_text occurs {count} times in {p}; it must occur exactly once."
+        return self._write(p, text.replace(old_text, new_text, 1), why, "edit")
+
+    def t_ask_human(self, question: str, options: list[str] | None = None) -> str:
+        answer = self.asker(question, [o for o in (options or []) if _str(o)])
+        self.memory.log_action("question", question, "answered", None, answer)
+        return f"The human answered: {answer}" if answer.strip() else "The human gave no answer."
+
+    @staticmethod
+    def _ask_terminal(question: str, options: list[str]) -> str:
+        ui.out("\n" + ui.magenta("? ") + ui.bold(question))
+        for i, o in enumerate(options, 1):
+            ui.out(f"  {i}. {o}")
+        ans = ui.ask(ui.magenta("  your answer> ")).strip()
+        if ans.isdigit() and 1 <= int(ans) <= len(options):
+            ans = options[int(ans) - 1]
+        return ans
+
+    def t_search_memory(self, query: str) -> str:
+        sols = self.memory.search_solutions(query)
+        notes = self.memory.search_notes(query)
+        ui.out(ui.dim(f"\n  recall '{query}': {len(sols)} solutions, {len(notes)} notes"))
+        if not sols and not notes:
+            return "Nothing relevant in memory."
+        return format_recall(sols, notes)
+
+    def t_record_solution(self, title: str, problem: str, solution: str, commands: list[str] | None = None,
+                          tags: str = "", reused_solution_id: int | None = None) -> str:
+        if reused_solution_id:
+            self.memory.mark_used(int(reused_solution_id))
+            ui.out(ui.green(f"\n  ✓ reused solution #{reused_solution_id}"))
+            return f"Marked solution #{reused_solution_id} as used again."
+        sid = self.memory.add_solution(title, problem, solution, [c for c in (commands or []) if _str(c)], tags)
+        ui.out(ui.green(f"\n  ✓ learned solution #{sid}: {title}"))
+        return f"Saved as solution #{sid}."
+
+    def t_remember(self, fact: str, category: str = "general") -> str:
+        self.memory.add_note(fact, category or "general")
+        ui.out(ui.green(f"\n  ✓ noted ({category}): {fact}"))
+        return "Noted."
+
+    def t_system_state(self) -> str:
+        return sysinfo.snapshot()
+
+
+class _Invalid(Exception):
+    pass
+
+
+def cyan_arrow() -> str:
+    return ui.cyan("▶")
+
+
+def format_recall(sols, notes) -> str:
+    parts = []
+    for s in sols:
+        cmds = json.loads(s["commands"])
+        parts.append(f"[solution #{s['id']}] {s['title']} (used {s['uses']}x)\nProblem: {s['problem']}\n"
+                     f"Solution: {s['solution']}" + (f"\nCommands: {' ; '.join(cmds)}" if cmds else ""))
+    if notes:
+        parts.append("Notes:\n" + "\n".join(f"- ({n['category']}) {n['fact']}" for n in notes))
+    return "\n\n".join(parts)
+
+
+def time_ago(ts: float) -> str:
+    d = time.time() - ts
+    for unit, sec in (("d", 86400), ("h", 3600), ("m", 60)):
+        if d >= sec:
+            return f"{int(d // sec)}{unit} ago"
+    return "just now"

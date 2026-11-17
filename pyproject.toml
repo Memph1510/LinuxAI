@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linuxai"
+version = "0.1.0"
+description = "Cortex: an AI mind that runs your Linux machine, with you as the intent and the guardrail"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["anthropic>=2.9"]
+
+[project.scripts]
+cortex = "linuxai.cli:main"
+
+[tool.setuptools]
+packages = ["linuxai"]

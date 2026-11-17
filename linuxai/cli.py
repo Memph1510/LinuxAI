@@ -1,0 +1,190 @@
+"""`cortex`: the terminal implant. Step inside the machine's mind and give it intent."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+from . import __version__, ui
+from .config import Config
+from .memory import Memory
+from .tools import Toolbox, time_ago
+
+BANNER = """\
+{title}  you give the intent, it runs the machine, you're the guardrail.
+mode: {mode} · model: {model} · memory: {solutions} solutions, {notes} notes
+Type what you want. /help for commands. Ctrl-C stops whatever it is doing."""
+
+HELP = """\
+/help                 this list
+/mode ask|trusted|auto
+                      ask: confirm every change · trusted: read-only and learned commands run
+                      on their own (default) · auto: everything runs, you watch and Ctrl-C
+/inbox                let it look at what the observer noticed
+/solutions            what it has learned so far
+/notes                facts it keeps about this machine and you
+/log                  recent actions and your decisions
+/allow                commands you've told it to always run
+/new                  start a fresh conversation (memory is kept)
+/quit                 leave (Ctrl-D works too)
+!<command>            run a shell command yourself, bypassing the AI"""
+
+
+def _setup_readline(config: Config) -> None:
+    try:
+        import atexit
+        import readline
+    except ImportError:
+        return
+    hist = config.home / "history"
+    try:
+        readline.read_history_file(hist)
+    except OSError:
+        pass
+    readline.set_history_length(2000)
+    atexit.register(lambda: readline.write_history_file(hist))
+
+
+def show_solutions(memory: Memory) -> None:
+    rows = memory.list_solutions()
+    if not rows:
+        ui.out(ui.dim("  nothing learned yet"))
+    for s in rows:
+        ui.out(f"  #{s['id']:<4} {s['title']}  " + ui.dim(f"used {s['uses']}x · {time_ago(s['created'])}"))
+    ui.out(ui.dim(f"  readable copies: {memory.config.mind_dir / 'solutions'}"))
+
+
+def show_log(memory: Memory) -> None:
+    for a in reversed(memory.recent_actions(25)):
+        code = "" if a["exit_code"] is None else f" exit {a['exit_code']}"
+        ui.out(ui.dim(f"  {time_ago(a['ts']):>8}  {a['kind']:<8} {a['decision']:<10}{code}  ") +
+               a["detail"].splitlines()[0][:100])
+
+
+def repl(config: Config) -> None:
+    from .agent import Agent
+
+    memory = Memory(config)
+    toolbox = Toolbox(config, memory)
+    agent = Agent(config, memory, toolbox)
+    _setup_readline(config)
+    ui.out(BANNER.format(title=ui.bold("cortex"), mode=config.mode, model=config.model,
+                         solutions=len(memory.list_solutions()), notes=len(memory.all_notes())))
+    while True:
+        unseen = len(memory.unseen_inbox())
+        badge = ui.yellow(f"[{unseen} noticed] ") if unseen else ""
+        try:
+            line = input("\n" + badge + ui.cyan("❯ ")).strip()
+        except EOFError:
+            ui.out()
+            return
+        except KeyboardInterrupt:
+            ui.out()
+            continue
+        if not line:
+            continue
+        if line.startswith("!"):
+            toolbox.cwd = toolbox._spawn(line[1:], config.command_timeout)[2]
+            continue
+        if line.startswith("/"):
+            cmd, _, arg = line[1:].partition(" ")
+            if cmd in ("quit", "exit", "q"):
+                return
+            elif cmd == "help":
+                ui.out(HELP)
+            elif cmd == "mode" and arg in ("ask", "trusted", "auto"):
+                config.mode = arg
+                ui.out(ui.dim(f"  mode is now {arg}"))
+            elif cmd == "mode":
+                ui.out(ui.dim(f"  mode is {config.mode}; choose ask, trusted or auto"))
+            elif cmd == "new":
+                agent.reset()
+                ui.out(ui.dim("  fresh conversation; long-term memory kept"))
+            elif cmd == "solutions":
+                show_solutions(memory)
+            elif cmd == "notes":
+                for n in memory.all_notes():
+                    ui.out(f"  ({n['category']}) {n['fact']}")
+            elif cmd == "log":
+                show_log(memory)
+            elif cmd == "allow":
+                ui.out("\n".join(f"  {p}" for p in memory.allow_prefixes()) or ui.dim("  none yet"))
+            elif cmd == "inbox":
+                if not unseen:
+                    ui.out(ui.dim("  nothing new"))
+                else:
+                    agent.turn("Look at what you noticed while I was away. Tell me what matters, briefly, "
+                               "and propose (don't start) fixes for anything that needs attention.")
+            else:
+                ui.out(ui.dim("  unknown command; /help"))
+            continue
+        agent.turn(line)
+
+
+USER_UNIT = """\
+[Unit]
+Description=Cortex observer (LinuxAI background senses)
+
+[Service]
+ExecStart={exe} observe
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def install_service() -> None:
+    exe = shutil.which("cortex") or f"{sys.executable} -m linuxai"
+    unit_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    path = unit_dir / "cortex-observer.service"
+    path.write_text(USER_UNIT.format(exe=exe))
+    print(f"wrote {path}\nenable it with:  systemctl --user daemon-reload && "
+          f"systemctl --user enable --now cortex-observer.service")
+
+
+def main(argv: list[str] | None = None) -> None:
+    p = argparse.ArgumentParser(prog="cortex", description="An AI mind that runs your Linux machine.")
+    p.add_argument("--version", action="version", version=__version__)
+    p.add_argument("--mode", choices=["ask", "trusted", "auto"], help="how much runs without asking")
+    p.add_argument("--model", help="Claude model id (default claude-opus-5-5)")
+    p.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
+    p.add_argument("intent", nargs="*", help="do this one thing and exit (omit for the interactive shell)")
+    args = p.parse_args(argv)
+
+    config = Config()
+    for k in ("mode", "model", "effort"):
+        if getattr(args, k):
+            setattr(config, k, getattr(args, k))
+    config.ensure()
+
+    words = args.intent
+    if words == ["observe"]:
+        from .observer import run
+        run()
+    elif words == ["install-service"]:
+        install_service()
+    elif words == ["solutions"]:
+        show_solutions(Memory(config))
+    elif words == ["log"]:
+        show_log(Memory(config))
+    elif words == ["export"]:
+        m = Memory(config)
+        print(json.dumps({"solutions": [dict(r) for r in m.list_solutions()],
+                          "notes": [dict(r) for r in m.all_notes()]}, indent=2))
+    elif words:
+        from .agent import Agent
+        memory = Memory(config)
+        Agent(config, memory, Toolbox(config, memory)).turn(" ".join(words))
+    else:
+        repl(config)
+
+
+if __name__ == "__main__":
+    main()

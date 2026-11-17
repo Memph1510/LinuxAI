@@ -276,6 +276,13 @@ UX principles that make "living inside the AI" bearable:
 
 ## 3. Security, Autonomy & Guardrails
 
+> **Current stance (v0): the human is the guardrail.** The prototype in `linuxai/` runs with the human's
+> own authority (their user, `sudo` when they type the password). It does not use a separate uid, a Warden, Cedar
+> policies or sandboxing. Every action is shown live. Whether it waits for approval depends on the mode
+> (`ask` / `trusted` / `auto`), and Ctrl-C stops it. Trust grows from use: answering "always allow" teaches it which
+> commands to run on its own. The rest of this section is **deferred hardening**, a menu to pull from once the
+> capability is proven, not a precondition for building it.
+
 The threat model has three adversaries: (1) **external content that injects instructions** (web pages, mail, files,
 repo READMEs), which is the main one; (2) **the model being wrong** (hallucinated paths, `rm` on the wrong
 directory); (3) **classic attackers** going after a highly privileged daemon. The design assumes the cortex
@@ -406,7 +413,15 @@ Each phase ends with a working system. Rough estimates assume one to two strong 
 
 ### Phase 1: "Parasite" (weeks 1–6). Runs on your existing Linux machine as user services.
 
-Goal: prove the loop *event → thought → gated typed action → audit → undo* without touching the base OS.
+Goal: prove the loop *intent → thought → action the human can see and steer → learned solution* without
+touching the base OS.
+
+**Status: v0 is built** (`linuxai/`, the `cortex` command). It is a different shape from the original plan below:
+the human gate replaces the Warden, a scripted-model test harness (`tests/`) stands in for trace replay, and the
+learning loop (search memory → ask the human → solve → `record_solution`) is the core feature. Next steps:
+a local model tier, the HUD overlay, and the skill compiler, which turns recorded solutions into reflexes.
+
+Original plan:
 
 1. **Warden v0 (Rust):** Unix-socket JSON-RPC, a typed `ActionRequest` schema, a hard-coded tier table (Cedar comes
    in Phase 2), a hash-chained audit log in SQLite, execution through `systemd-run --user` transient units.
