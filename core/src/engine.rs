@@ -314,7 +314,12 @@ pub struct Report {
     pub ok: bool,
     pub errors: Vec<String>,
     pub effects: Vec<Value>,
+    /// The plan must wait for the human before acting (untrusted actions, or a second look is needed).
     pub needs_approval: bool,
+    /// Why a second look is needed even if every action is trusted: low confidence, open unknowns, first time.
+    pub review: Vec<String>,
+    /// The AI's own assessment, shown to the human.
+    pub assessment: Value,
     pub explain: Vec<String>,
 }
 
@@ -344,6 +349,13 @@ fn collect_var_refs(v: &Value, out: &mut Vec<String>) {
 }
 
 pub fn check(plan: &Value, mem: &Memory, source: &str, threshold: f64) -> Report {
+    check_with(plan, mem, source, threshold, None)
+}
+
+const ASSESS_HELP: &str = "before acting, assess it: add \"assess\": {\"confidence\": 0-1, \"consequences\": [what this will cause], \"outcomes\": [{\"if\": what might happen, \"then\": what you'd do}], \"unknowns\": [what you don't know yet], \"research\": what you looked into}";
+
+/// `novelty` is Some(reason) when the plan is a first-time situation (decided by the core from playbooks and cases).
+pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, novelty: Option<&str>) -> Report {
     let mut r = Report::default();
     let steps = match plan.get("steps") {
         Some(Value::Array(s)) => s.clone(),
@@ -361,13 +373,61 @@ pub fn check(plan: &Value, mem: &Memory, source: &str, threshold: f64) -> Report
         defined.extend(w.keys().cloned());
     }
     check_block(&steps, "steps", &mut defined, &mandates, &mut r, 0);
-    let conf = plan.get("conf").and_then(Value::as_f64).unwrap_or(0.0);
     let ai = source == "ai";
     let has_effects = r.effects.iter().any(|e| e["effect"] != "internal");
     let uncovered = r.effects.iter().any(|e| e["covered"] == false);
-    r.needs_approval = ai && (uncovered || (has_effects && conf < threshold));
+    if ai && has_effects {
+        assess(plan, threshold, novelty, &mut r);
+    }
+    r.needs_approval = ai && (uncovered || !r.review.is_empty());
     r.ok = r.errors.is_empty();
     r
+}
+
+fn strings(v: &Value) -> Vec<String> {
+    match v {
+        Value::Array(a) => a.iter().map(|x| match x {
+            Value::Object(o) if o.contains_key("if") => format!("if {}: {}", display(&o["if"]), display(o.get("then").unwrap_or(&Value::Null))),
+            other => display(other),
+        }).filter(|s| !s.trim().is_empty()).collect(),
+        Value::String(s) if !s.trim().is_empty() => vec![s.clone()],
+        _ => vec![],
+    }
+}
+
+/// The AI must understand what it's about to do before doing it: confidence, consequences, what it would do
+/// in each outcome, what's still unknown. Low confidence, unknowns or a first-time situation get a second look.
+fn assess(plan: &Value, threshold: f64, novelty: Option<&str>, r: &mut Report) {
+    let a = plan.get("assess").cloned().unwrap_or(Value::Null);
+    if !a.is_object() {
+        r.errors.push(ASSESS_HELP.into());
+        return;
+    }
+    let conf = a.get("confidence").or(plan.get("conf")).and_then(Value::as_f64);
+    let consequences = strings(&a["consequences"]);
+    let outcomes = strings(&a["outcomes"]);
+    let unknowns = strings(&a["unknowns"]);
+    let research = strings(&a["research"]);
+    if conf.is_none() || consequences.is_empty() || outcomes.is_empty() {
+        r.errors.push(format!("the assessment needs confidence, consequences and outcomes; {ASSESS_HELP}"));
+        return;
+    }
+    let conf = conf.unwrap().clamp(0.0, 1.0);
+    if conf < threshold {
+        r.review.push(format!("my confidence is {:.0}%", conf * 100.0));
+    }
+    if !unknowns.is_empty() {
+        r.review.push(format!("still unknown: {}", unknowns.join("; ")));
+    }
+    if let Some(reason) = novelty {
+        if research.is_empty() {
+            r.errors.push(format!("{reason}: research it first (playbooks, similar cases, read-only investigation) and put what you found in assess.research, or ask the human"));
+            return;
+        }
+        r.review.push(reason.to_string());
+    }
+    r.assessment = json!({"confidence": conf, "consequences": consequences, "outcomes": outcomes,
+                          "unknowns": unknowns, "research": research});
 }
 
 fn check_block(steps: &[Value], path: &str, defined: &mut Vec<String>, mandates: &[(String, String)], r: &mut Report, depth: usize) {
@@ -586,12 +646,31 @@ fn request_approval(exec: &mut Exec, report: &Report, ctx: &Ctx) {
             .map(|e| format!("• {}", display(&e["explain"])))
             .collect();
         let why = if exec.why.is_empty() { String::new() } else { format!(" ({})", exec.why) };
-        let question = format!("I'd like to {}{}:\n{}\nOK?", exec.name, why, lines.join("\n"));
+        let a = &report.assessment;
+        let mut q = format!("I'd like to {}{}:\n{}", exec.name, why, lines.join("\n"));
+        let list = |k: &str| a[k].as_array().map(|v| v.iter().map(display).collect::<Vec<_>>()).unwrap_or_default();
+        for (label, key) in [("What I expect", "consequences"), ("If it goes differently", "outcomes"),
+                             ("Still unknown", "unknowns"), ("What I looked into", "research")] {
+            let items = list(key);
+            if !items.is_empty() {
+                q.push_str(&format!("\n{label}: {}", items.join("; ")));
+            }
+        }
+        if let Some(c) = a["confidence"].as_f64() {
+            q.push_str(&format!("\nConfidence: {:.0}%", c * 100.0));
+        }
+        q.push_str("\nOK?");
+        let question = q;
+        let untrusted = report.effects.iter().any(|e| e["effect"] != "internal" && e["covered"] == false);
+        let reason = match (report.review.is_empty(), untrusted) {
+            (false, _) => format!("I want a second look before acting: {}.", report.review.join("; ")),
+            (true, _) => "You haven't told me I can do these on my own yet. Answer \"always\" and I won't ask about them again.".to_string(),
+        };
         exec.status = "waiting:answer".into();
         let t0 = now();
         exec.wait = json!({"question": question, "opts": ["yes", "no", "always"], "approval": true,
-                           "effects": report.effects,
-                           "why": "You haven't told me I can do these on my own yet. Answer \"always\" and I won't ask about them again.",
+                           "effects": report.effects, "review": report.review,
+                           "why": reason,
                            "reminders": [t0 + 2.0 * 3600.0, t0 + 8.0 * 3600.0], "asked_at": t0});
         persist(exec, ctx);
         ctx.bus.emit(ctx.mem, "plan.waiting", exec.summary());

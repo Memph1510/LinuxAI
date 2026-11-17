@@ -207,7 +207,8 @@ def test_ai_plan_through_core_needs_trust_first(env, live_core):
     from linuxai.cli import route_answer
     cfg, mem, tb, tmp = env
     tb.core = live_core
-    plan = {"plan": "show-kernel", "why": "human asked", "conf": 0.9,
+    plan = {"plan": "show-kernel", "why": "human asked",
+            "assess": {"confidence": 0.9, "consequences": ["prints the kernel version"], "outcomes": ["read-only either way"]},
             "steps": [{"do": "run", "program": "uname", "args": ["-r"], "as": "k"},
                       {"tell": "kernel {$k.output}"}]}
     client = FakeClient([_msg([_tool("t1", "submit_plan", {"plan": plan})], "tool_use"),
@@ -216,7 +217,7 @@ def test_ai_plan_through_core_needs_trust_first(env, live_core):
     assert "LinuxAI action language" in agent.system
     agent.turn("what kernel am I on")
     result = client.requests[1]["messages"][-1]["content"][0]["content"]
-    assert "waiting for the human's approval" in result
+    assert "is waiting for the human" in result and "always" in result
     # The human answers "always" in the session: goes straight to the plan, no model involved.
     waiting = live_core.request("waiting")["plans"]
     pending = {waiting[0]["plan_id"]: waiting[0]["wait"]}
@@ -360,3 +361,17 @@ def test_ai_plans_a_task_from_its_playbook_then_learns(env, live_core, tmp_path)
     assert [p["category"] for p in chain] == ["freight/negotiate", "freight/negotiate/hollis"]
     cases = live_core.request("find", spec={"type": "case", "where": {"broker": "@hollis"}})["found"]
     assert cases and cases[0]["decision"] == "countered at $2.50"
+
+
+
+def test_reach_tells_the_human_about_blockers():
+    from linuxai.reach import message_for
+    text = message_for({"kind": "task.failed", "data": {"title": "Book the hotel", "error": "sold out"}})
+    assert "blocked on 'Book the hotel': sold out" in text
+
+
+def test_unassessed_ai_plan_is_sent_back_with_instructions(env, live_core):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    out = tb.t_submit_plan({"plan": "x", "steps": [{"do": "run", "program": "true"}]})
+    assert "rejected" in out and "assess" in out

@@ -48,6 +48,9 @@ def message_for(event: dict) -> str | None:
         return "\n".join(lines)
     if kind == "ai.tell" and data.get("text"):
         return f"LinuxAI: {data['text']}"
+    if kind == "task.failed":
+        return (f"LinuxAI: blocked on '{data.get('title')}': {data.get('error')}. I'm looking at what to do next "
+                "and will check with you before trying anything new.")
     if kind == "plan.failed":
         return f"LinuxAI: '{data.get('plan')}' failed: {data.get('error')}. I'll look into it."
     return None

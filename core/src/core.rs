@@ -268,7 +268,8 @@ impl Core {
             "verbs" => json!({"ok": true, "verbs": verbs::registry_json()}),
             "check" => {
                 let source = req["source"].as_str().unwrap_or("ai");
-                let r = engine::check(&req["plan"], &self.mem, source, self.threshold);
+                let nov = if source == "ai" { self.novelty(&req["plan"]) } else { None };
+                let r = engine::check_with(&req["plan"], &self.mem, source, self.threshold, nov.as_deref());
                 json!({"ok": r.ok, "report": r})
             }
             "submit" => self.submit(&req["plan"], req["source"].as_str().unwrap_or("ai")),
@@ -353,8 +354,27 @@ impl Core {
         }
     }
 
+    /// Some(reason) when a plan is a first-time situation: its category (or its task's) has no playbook and
+    /// no past cases, in that category or a broader or narrower one.
+    pub fn novelty(&self, plan: &Value) -> Option<String> {
+        let cat = plan["category"].as_str().map(String::from)
+            .or_else(|| plan["task"].as_str().and_then(|t| self.mem.load_task(t)).and_then(|t| t["category"].as_str().map(String::from)))?;
+        if cat == "general" {
+            return None;
+        }
+        if self.playbook_chain(&cat).as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            return None;
+        }
+        let related = |c: &str| c == cat || cat.starts_with(&format!("{c}/")) || c.starts_with(&format!("{cat}/"));
+        if self.mem.objects_of("case", 5000).iter().any(|o| o["category"].as_str().map(related).unwrap_or(false)) {
+            return None;
+        }
+        Some(format!("this is the first time I'm handling {cat}"))
+    }
+
     pub fn submit(self: &Arc<Self>, plan: &Value, source: &str) -> Value {
-        let report = engine::check(plan, &self.mem, source, self.threshold);
+        let nov = if source == "ai" { self.novelty(plan) } else { None };
+        let report = engine::check_with(plan, &self.mem, source, self.threshold, nov.as_deref());
         if !report.ok {
             return json!({"ok": false, "report": report});
         }
@@ -379,8 +399,11 @@ impl Core {
         let steps = req.get("steps").and_then(Value::as_array).cloned().filter(|s| !s.is_empty());
         let report = match &steps {
             Some(s) => {
-                let vars = self.mem.load_plan(id).map(|p| p["vars"].clone()).unwrap_or(json!({}));
-                let r = engine::check(&json!({"plan": "resolution", "with": vars, "steps": s}), &self.mem, "ai", self.threshold);
+                let stored = self.mem.load_plan(id).unwrap_or(json!({}));
+                let res = json!({"plan": "resolution", "with": stored["vars"], "steps": s, "assess": req["assess"],
+                                 "category": stored["plan"]["category"], "task": stored["plan"]["task"]});
+                let nov = self.novelty(&res);
+                let r = engine::check_with(&res, &self.mem, "ai", self.threshold, nov.as_deref());
                 if !r.ok {
                     return json!({"ok": false, "report": r});
                 }
@@ -408,7 +431,10 @@ impl Core {
         self.emit("rule.added", json!({"rule": name, "source": source, "enabled": !from_ai, "explain": report.explain}));
         if from_ai {
             let what = format!("when {}: {}", rule["when"].as_str().unwrap_or(""), report.explain.join("; "));
-            let ask = json!({"plan": format!("turn on the rule \"{name}\""), "why": what, "conf": 0.0,
+            let ask = json!({"plan": format!("turn on the rule \"{name}\""), "why": what,
+                             "assess": {"confidence": 0.5,
+                                        "consequences": [format!("from now on this runs by itself, with no model and no asking: {what}")],
+                                        "outcomes": [{"if": "it fires when it shouldn't", "then": "turn the rule off; nothing else depends on it"}]},
                              "steps": [{"do": "enable_rule", "name": name}]});
             let r = self.submit(&ask, "ai");
             return json!({"ok": true, "enabled": false, "approval": r["result"], "explain": report.explain});

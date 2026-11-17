@@ -51,7 +51,7 @@ fn check_catches_mistakes() {
 #[test]
 fn trust_is_learned_from_conversation() {
     let (c, fake) = core();
-    let plan = json!({"plan": "quiet-mode", "why": "you asked for quiet", "conf": 0.95,
+    let plan = json!({"plan": "quiet-mode", "why": "you asked for quiet", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]},
                       "steps": [{"do": "set", "what": "power.profile", "to": "power-saver"}]});
     // Trust starts at zero: the AI has to ask.
     let r = c.submit(&plan, "ai");
@@ -66,14 +66,14 @@ fn trust_is_learned_from_conversation() {
     let r = c.submit(&plan, "ai");
     assert_eq!(r["result"]["status"], "done", "{r}");
     // ...but not for a different one.
-    let other = json!({"plan": "x", "conf": 0.95, "steps": [{"do": "restart", "unit": "nginx.service"}]});
+    let other = json!({"plan": "x", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}, "steps": [{"do": "restart", "unit": "nginx.service"}]});
     assert_eq!(c.submit(&other, "ai")["result"]["status"], "waiting:answer");
 }
 
 #[test]
 fn no_means_no() {
     let (c, fake) = core();
-    let plan = json!({"plan": "p", "conf": 0.9, "steps": [{"do": "restart", "unit": "x.service"}]});
+    let plan = json!({"plan": "p", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}, "steps": [{"do": "restart", "unit": "x.service"}]});
     let id = c.submit(&plan, "ai")["result"]["plan_id"].as_str().unwrap().to_string();
     let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "no, not now"}));
     assert_eq!(r["result"]["status"], "stopped");
@@ -151,7 +151,7 @@ fn think_hands_back_to_the_ai() {
     let p = &w["plans"][0];
     assert_eq!(p["status"], "needs_thought");
     assert!(p["wait"]["note"].as_str().unwrap().contains("nginx.service"));
-    let r = c.handle(&json!({"op": "resolve", "plan_id": p["plan_id"], "steps": [{"do": "restart", "unit": "nginx.service"}]}));
+    let r = c.handle(&json!({"op": "resolve", "plan_id": p["plan_id"], "steps": [{"do": "restart", "unit": "nginx.service"}], "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}}));
     assert_eq!(r["result"]["status"], "waiting:answer", "restarting needs the human's ok first: {r}");
     let r = c.handle(&json!({"op": "answer", "plan_id": p["plan_id"], "text": "yes"}));
     assert_eq!(r["result"]["status"], "done", "{r}");
@@ -215,7 +215,7 @@ fn undecided_reaches_out_follows_up_and_falls_back() {
 #[test]
 fn approval_says_why_and_schedules_follow_ups() {
     let (c, _) = core();
-    let r = c.submit(&json!({"plan": "p", "conf": 0.9, "steps": [{"do": "restart", "unit": "x.service"}]}), "ai");
+    let r = c.submit(&json!({"plan": "p", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}, "steps": [{"do": "restart", "unit": "x.service"}]}), "ai");
     let w = &r["result"]["wait"];
     assert!(w["why"].as_str().unwrap().contains("on my own"));
     assert_eq!(w["reminders"].as_array().unwrap().len(), 2);
@@ -258,7 +258,7 @@ fn a_long_action_does_not_freeze_the_core() {
 fn no_not_always_is_a_no() {
     for reply in ["no, not always", "not now", "never", "don't", "cancel that", "hmm, let me think"] {
         let (c, fake) = core();
-        let r = c.submit(&json!({"plan": "p", "conf": 0.9, "steps": [{"do": "restart", "unit": "x.service"}]}), "ai");
+        let r = c.submit(&json!({"plan": "p", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}, "steps": [{"do": "restart", "unit": "x.service"}]}), "ai");
         let id = r["result"]["plan_id"].as_str().unwrap().to_string();
         let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": reply}));
         assert_eq!(r["result"]["status"], "stopped", "reply {reply:?} was taken as a yes: {r}");
@@ -277,7 +277,7 @@ fn steps_added_by_the_ai_later_are_checked_and_gated() {
     assert_eq!(r["ok"], false, "{r}");
     assert_eq!(c.handle(&json!({"op": "waiting"}))["plans"][0]["status"], "needs_thought");
     // An action the AI isn't trusted with yet becomes a question to the human, not an action.
-    let r = c.handle(&json!({"op": "resolve", "plan_id": id, "steps": [{"do": "stop", "unit": "caddy.service"}]}));
+    let r = c.handle(&json!({"op": "resolve", "plan_id": id, "steps": [{"do": "stop", "unit": "caddy.service"}], "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}}));
     assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
     assert!(calls(&fake).is_empty(), "ran before the human approved: {:?}", calls(&fake));
     c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes"}));
@@ -526,7 +526,7 @@ fn unfinished_tasks_pick_up_again_after_a_restart() {
 fn an_ai_task_with_an_untrusted_action_waits_on_the_human() {
     let (c, fake, _) = core_with_playbooks();
     let r = c.handle(&json!({"op": "task_create", "spec": {"title": "Quiet the fans",
-        "plan": {"conf": 0.9, "steps": [{"do": "set", "what": "power.profile", "to": "power-saver"}]}}}));
+        "plan": {"assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}, "steps": [{"do": "set", "what": "power.profile", "to": "power-saver"}]}}}));
     assert_eq!(r["tree"]["status"], "waiting", "{r}");
     assert!(calls(&fake).is_empty());
     let t = waiting_task(&c, "Quiet the fans");
@@ -543,4 +543,82 @@ fn find_compares_against_variables() {
         {"let": "under", "find": {"type": "case", "where": {"rate": ["<", "$floor"]}}},
         {"expect": ["=", ["count", "$under"], 1], "else": "stop"}]}), "human");
     assert_eq!(r["result"]["status"], "done", "{r}");
+}
+
+// ---- second look: assess before acting -----------------------------------------------------------
+
+fn ai_plan(extra: Value) -> Value {
+    let mut p = json!({"plan": "tune", "steps": [{"do": "set", "what": "power.profile", "to": "balanced"}]});
+    for (k, v) in extra.as_object().unwrap() { p[k] = v.clone(); }
+    p
+}
+
+fn trust_set(c: &Arc<Core>) { c.mem.add_mandate("set", "*", "test"); }
+
+#[test]
+fn the_ai_must_assess_before_acting() {
+    let (c, fake) = core();
+    trust_set(&c);
+    let r = c.submit(&ai_plan(json!({})), "ai");
+    assert_eq!(r["ok"], false);
+    assert!(r["report"]["errors"][0].as_str().unwrap().contains("assess"), "{r}");
+    let r = c.submit(&ai_plan(json!({"assess": {"confidence": 0.9, "consequences": ["x"]}})), "ai");
+    assert_eq!(r["ok"], false, "outcomes are required: {r}");
+    // Trusted, confident, understood, familiar: it just acts.
+    let r = c.submit(&ai_plan(json!({"assess": {"confidence": 0.9, "consequences": ["fans get louder"],
+        "outcomes": [{"if": "too loud", "then": "back to power-saver"}]}})), "ai");
+    assert_eq!(r["result"]["status"], "done", "{r}");
+    assert_eq!(calls(&fake).len(), 1);
+    // The human's own plans and the system's rules don't need an assessment.
+    assert_eq!(c.submit(&ai_plan(json!({})), "human")["result"]["status"], "done");
+}
+
+#[test]
+fn unknowns_or_low_confidence_get_a_second_look_even_when_trusted() {
+    for assess in [json!({"confidence": 0.9, "consequences": ["x"], "outcomes": ["y"], "unknowns": ["whether you're on a call"]}),
+                   json!({"confidence": 0.5, "consequences": ["x"], "outcomes": ["y"]})] {
+        let (c, fake) = core();
+        trust_set(&c);
+        let r = c.submit(&ai_plan(json!({"assess": assess})), "ai");
+        assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
+        let w = &r["result"]["wait"];
+        assert!(w["why"].as_str().unwrap().contains("second look"), "{w}");
+        assert!(w["question"].as_str().unwrap().contains("What I expect: x"), "{w}");
+        assert!(calls(&fake).is_empty());
+        // "always" here does not make unknowns go away next time: it only trusts actions, not situations.
+        let id = r["result"]["plan_id"].as_str().unwrap().to_string();
+        assert_eq!(c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes"}))["result"]["status"], "done");
+    }
+}
+
+#[test]
+fn a_first_time_situation_needs_research_and_a_conversation() {
+    let (c, _, _) = core_with_playbooks();
+    trust_set(&c);
+    let base = json!({"confidence": 0.9, "consequences": ["counter the broker"], "outcomes": [{"if": "they refuse", "then": "hold"}]});
+    let mut plan = ai_plan(json!({"category": "freight/negotiate", "assess": base.clone()}));
+    let r = c.submit(&plan, "ai");
+    assert_eq!(r["ok"], false);
+    assert!(r["report"]["errors"][0].as_str().unwrap().contains("first time I'm handling freight/negotiate"), "{r}");
+    plan["assess"]["research"] = json!(["lane averages $2.21/mi this month", "no past Hollis loads"]);
+    let r = c.submit(&plan, "ai");
+    assert_eq!(r["result"]["status"], "waiting:answer", "first time: talk it over even with research: {r}");
+    assert!(r["result"]["wait"]["question"].as_str().unwrap().contains("What I looked into: lane averages"));
+    // Once there's experience (a case, or a playbook), it's no longer a first time.
+    c.handle(&json!({"op": "object_put", "type": "case", "fields": {"category": "freight/negotiate", "decision": "countered"}}));
+    plan["assess"] = base;
+    assert_eq!(c.submit(&plan, "ai")["result"]["status"], "done");
+    // A narrower category counts as related experience too.
+    let narrower = ai_plan(json!({"category": "freight/negotiate/hollis", "assess": plan["assess"].clone()}));
+    assert_eq!(c.submit(&narrower, "ai")["result"]["status"], "done");
+}
+
+#[test]
+fn resolving_a_blocker_needs_an_assessment_too() {
+    let (c, _) = core();
+    c.emit("service.failed", json!({"unit": "nginx.service"}));
+    let id = c.handle(&json!({"op": "waiting"}))["plans"][0]["plan_id"].as_str().unwrap().to_string();
+    let r = c.handle(&json!({"op": "resolve", "plan_id": id, "steps": [{"do": "restart", "unit": "nginx.service"}]}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["report"]["errors"][0].as_str().unwrap().contains("assess"));
 }

@@ -82,3 +82,26 @@ task → (playbooks + similar cases) → plan → human steps where needed → d
 
 Problems are fixed by category, as they come up: a bad outcome updates that category's playbook, so the
 fix reaches every future task of that kind and nothing else.
+
+## A second look before acting (enforced by the core)
+
+The AI never acts on a guess, whether or not it was given direct instructions.
+
+- **Every plan that changes something carries an assessment:** the AI's confidence, the consequences it
+  expects, the possible outcomes with what it would do in each, what's still unknown, and what it researched.
+  The core **rejects** a plan without one.
+- **Second look:** even for actions the AI is already trusted with, the plan waits for a conversation with you
+  when its confidence is below the threshold (80%), when it lists unknowns, or when it's a **first-time
+  situation**: its category has no playbook and no past cases, in that category or a broader or narrower one.
+  You see the plan and the whole assessment.
+- **First-time situations need research first:** the core won't accept the plan until the assessment includes
+  what the AI looked into (playbooks, similar cases, read-only investigation). Then it still goes over it with
+  you.
+- **Blockers:** when a step fails, the AI gets it to think about (`think`), and its fix goes through the same
+  gate. You're told about the blocker right away, by message.
+- **Unfamiliar or unclear directions:** the AI is instructed to ask (or create a human step) instead of
+  guessing. When it does act, its listed unknowns trigger the second look.
+
+Answering "always" only extends trust to *actions*. It never skips the second look for a new or uncertain
+*situation*. As experience builds up (cases, playbooks), situations stop being new, and the second look
+happens less often.

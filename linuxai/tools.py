@@ -204,9 +204,11 @@ CORE_TOOLS = [
           "Pass the human's answer to a plan that is waiting on a question (see <waiting_plans>).",
           {"plan_id": {"type": "string"}, "text": {"type": "string"}}, ["plan_id", "text"]),
     _tool("resolve_thought",
-          "A plan stopped at `think` and needs your judgment. Give it more steps to run, or omit steps to end it.",
+          "A plan stopped at `think` (a blocker, a failure, something unexpected) and needs your judgment. Give it "
+          "more steps to run (with an assessment if they change anything), or omit steps to end it.",
           {"plan_id": {"type": "string"},
-           "steps": {"type": "array", "items": {"type": "object"}, "description": "Steps to run next."}},
+           "steps": {"type": "array", "items": {"type": "object"}, "description": "Steps to run next."},
+           "assess": {"type": "object", "description": "{confidence, consequences, outcomes, unknowns?, research?}"}},
           ["plan_id"]),
     _tool("tell_human", "Send the human a short message (shown on their screen, later by text).",
           {"text": {"type": "string"}}, ["text"]),
@@ -247,7 +249,13 @@ CORE_TOOL_NAMES = {t["name"] for t in CORE_TOOLS}
 
 LANGUAGE_REFERENCE = """\
 ## LinuxAI action language (for submit_plan / add_rule)
-A plan is JSON: {"plan": "<name>", "why": "<one line>", "conf": <0-1, your confidence>, "steps": [...]}.
+A plan is JSON: {"plan": "<name>", "why": "<one line>", "category": "<e.g. freight/negotiate>"?, "assess": {...}, "steps": [...]}.
+Before any plan that changes something, assess it (the core rejects plans without this):
+  "assess": {"confidence": 0-1, "consequences": [what it will cause], "outcomes": [{"if": ..., "then": what you'd do}],
+             "unknowns": [what you don't know yet], "research": [what you looked into]}
+The core gives it a second look with the human (it waits for their OK) when confidence is low, unknowns remain,
+or it's the first time handling that category (no playbook, no past cases). A first-time situation must include
+research. Be honest: an unknown you list costs a short conversation; an unknown you hide can cost much more.
 Steps (one keyword each):
   {"let": "x", "value"|"calc"|"find": ...}       name a value. calc takes an expression.
   {"let": "x", "do": <verb>, ...args}           run a verb and keep its result
@@ -513,9 +521,9 @@ class Toolbox:
         for line in r.get("explain", [])[:12]:
             ui.out(ui.dim(f"  │ {line}"))
         if res["status"] == "waiting:answer" and (res.get("wait") or {}).get("approval"):
-            return (f"Plan {res['plan_id']} is waiting for the human's approval (you aren't yet trusted for "
-                    "these actions). The human has been asked; their answer goes straight to the plan. End your "
-                    "turn unless there is something else to do.")
+            return (f"Plan {res['plan_id']} is waiting for the human: {(res.get('wait') or {}).get('why', '')} "
+                    "They have been sent your plan and assessment; their answer goes straight to the plan. Keep "
+                    "doing anything that doesn't depend on it, otherwise end your turn.")
         return json.dumps({"result": res, "vars": {k: v for k, v in r.get("vars", {}).items()
                                                     if k not in ("state",)}}, default=str)[:6000]
 
@@ -532,8 +540,13 @@ class Toolbox:
         r = self._core("answer", plan_id=plan_id, text=text)
         return json.dumps(r.get("result", r), default=str)
 
-    def t_resolve_thought(self, plan_id: str, steps: list | None = None) -> str:
-        r = self._core("resolve", plan_id=plan_id, **({"steps": steps} if steps else {}))
+    def t_resolve_thought(self, plan_id: str, steps: list | None = None, assess: Any = None) -> str:
+        extra = {"steps": steps} if steps else {}
+        if assess:
+            extra["assess"] = assess
+        r = self._core("resolve", plan_id=plan_id, **extra)
+        if not r.get("ok") and r.get("report"):
+            return "Not accepted. Fix these and try again:\n- " + "\n- ".join(r["report"].get("errors", []))
         return json.dumps(r.get("result", r), default=str)
 
     # -- tasks, playbooks, cases --
