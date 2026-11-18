@@ -98,3 +98,32 @@ Each flaw was first shown by a failing test, then fixed:
 Verified by: 21 core tests, including 200 plans with answers and events running concurrently from 8 threads,
 and 32 Python tests, including **killing the real daemon with `kill -9` in the middle of a plan and restarting
 it**. Then the rebuilt ISO is boot-tested in QEMU.
+
+## Next pieces (decided 2026-11-18; any order; install to disk waits until you're at the laptop)
+
+- [ ] **Prompt library** (`~/prompts/`): markdown prompts by use case, with fill-in slots, which model they suit,
+      helped/hurt counts, searchable. You edit them directly; the AI suggests changes, which are held for you.
+      Starts with a starter set across freight, email, research, summaries, images and tasks.
+- [ ] **Image organ that doesn't depend on the laptop.** The OS detects what the machine can do (graphics card and
+      its memory) and picks how to do each job:
+      precise edits always local (ImageMagick, GIMP, Inkscape); 3D in Blender; generating and editing from a
+      description on a local model when there's a capable graphics card (FLUX, Qwen-Image-Edit via ComfyUI),
+      otherwise a paid service within a budget you set, otherwise slow CPU generation. Nothing is off the table.
+      The photo view is where you see results and comment to refine them.
+- [ ] **LinuxAI browser on a Chromium-based engine** (leaning), working headless for the AI and shared, so you
+      and the AI can use the same browser at the same time. Research how best to share one browser between a
+      person and the AI before choosing the exact setup. The same engine draws the Workspace screens.
+
+### Open: should the OS's own prompts live in the prompt library?
+
+The prompts the OS runs on are things like the email extractor's instructions and the mind's planning and
+reflection prompts.
+
+| | In the library (editable) | Built in |
+|---|---|---|
+| For | You can read exactly how the OS thinks and adjust it; one place for all prompts; improvements by the AI go through the same review; nothing hidden | Stable: an edit can't silently break core behavior; tested together with the code; simpler |
+| Against | An edit can break things (the extractor's form, the safety wording about outside information); needs versioning and a way back | Opaque to you; changing how the OS thinks needs a code change |
+
+A middle path: OS prompts are **readable** in the library (marked "system") with their history; editing one
+needs your explicit OK, and protected parts (the rules about outside information and the forms code depends on)
+stay locked in code. Decide later.
