@@ -842,3 +842,84 @@ fn points_that_keep_hurting_get_flagged() {
     let evs = c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().clone();
     assert!(evs.iter().any(|e| e["kind"] == "playbook.entry_questioned"));
 }
+
+// ---- outside information: facts, never commands ------------------------------------------------
+
+fn offer(c: &Arc<Core>, authenticated: bool) -> String {
+    let r = c.handle(&json!({"op": "object_put", "type": "load_offer", "fields": {
+        "trust": "outside", "origin": "Dallas, TX", "destination": "Atlanta, GA", "rate_cents": 178000, "miles": 781,
+        "source": {"kind": "email", "from": "dana@hollis-logistics.com", "authenticated": authenticated, "message": "obj:message/x"}}}));
+    r["id"].as_str().unwrap().to_string()
+}
+
+fn outside_plan(facts: Value) -> Value {
+    json!({"plan": "accept the Hollis load", "taint": "outside", "category": "general",
+           "assess": {"confidence": 0.9, "consequences": ["the load is booked"], "outcomes": [{"if": "rate con differs", "then": "stop"}]},
+           "reasoning": {"facts": facts},
+           "steps": [{"do": "set", "what": "power.profile", "to": "accept-hollis"}]})
+}
+
+#[test]
+fn outside_information_must_be_cited() {
+    let (c, _) = core();
+    let r = c.submit(&outside_plan(json!([])), "ai");
+    assert_eq!(r["ok"], false);
+    assert!(r["report"]["errors"][0].as_str().unwrap().contains("cite the stored facts"), "{r}");
+    let r = c.submit(&outside_plan(json!(["obj:load_offer/made-up"])), "ai");
+    assert!(r["report"]["errors"][0].as_str().unwrap().contains("no stored fact"), "{r}");
+}
+
+#[test]
+fn ordinary_trust_does_not_cover_acting_on_outside_information() {
+    let (c, fake) = core();
+    trust_set(&c); // the AI may change this setting on its own...
+    let id = offer(&c, false);
+    let r = c.submit(&outside_plan(json!([id])), "ai");
+    // ...but not because of what an email said.
+    assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
+    let q = r["result"]["wait"]["question"].as_str().unwrap();
+    assert!(q.contains("Based on outside information") && q.contains("dana@hollis-logistics.com") && q.contains("sender NOT verified"), "{q}");
+    assert!(q.contains("rate_cents: 178000"), "the human sees the core's record, not the AI's retelling: {q}");
+    assert!(r["result"]["wait"]["why"].as_str().unwrap().contains("information from outside"));
+    assert!(calls(&fake).is_empty());
+    // "always" gives standing permission for this kind of action based on outside information.
+    c.handle(&json!({"op": "answer", "plan_id": r["result"]["plan_id"], "text": "always"}));
+    assert_eq!(calls(&fake).len(), 1);
+    let id2 = offer(&c, true);
+    assert_eq!(c.submit(&outside_plan(json!([id2])), "ai")["result"]["status"], "done");
+    // That permission doesn't leak into ordinary trust for a different action.
+    let mut other = outside_plan(json!([id2]));
+    other["steps"] = json!([{"do": "restart", "unit": "x.service"}]);
+    assert_eq!(c.submit(&other, "ai")["result"]["status"], "waiting:answer");
+}
+
+#[test]
+fn a_task_from_outside_information_labels_its_plans_whatever_the_ai_says() {
+    let (c, fake, _) = core_with_playbooks();
+    trust_set(&c);
+    let r = c.handle(&json!({"op": "task_create", "spec": {"title": "Answer the Hollis offer", "trust": "outside"}}));
+    let task = r["task"].as_str().unwrap().to_string();
+    // The AI's plan doesn't mention the label and cites nothing: refused.
+    let plan = json!({"assess": {"confidence": 0.9, "consequences": ["x"], "outcomes": ["y"]},
+                      "steps": [{"do": "set", "what": "power.profile", "to": "x"}]});
+    let r = c.handle(&json!({"op": "task_plan", "task": task, "plan": plan}));
+    assert_eq!(r["tree"]["status"], "needs_plan", "{r}");
+    assert!(r["tree"]["error"].as_str().unwrap().contains("outside information"), "{r}");
+    assert!(calls(&fake).is_empty());
+}
+
+#[test]
+fn the_human_sees_the_reasoning_modules() {
+    let (c, _) = core();
+    let id = offer(&c, true);
+    let mut p = outside_plan(json!([id]));
+    p["reasoning"]["policies"] = json!(["e123: under the floor is OK to get home for the weekend"]);
+    p["reasoning"]["chain"] = json!(["offer is $2.28/mi", "below the $2.40 floor", "but it gets the truck home"]);
+    p["reasoning"]["decision"] = json!("accept $1,780");
+    p["reasoning"]["downstream"] = json!(["pickup Friday 4pm goes on the calendar"]);
+    let q = c.submit(&p, "ai")["result"]["wait"]["question"].as_str().unwrap().to_string();
+    for part in ["Rules applied: e123", "Reasoning: offer is $2.28/mi → below", "Decision: accept $1,780",
+                 "If this runs: pickup Friday", "Based on outside information"] {
+        assert!(q.contains(part), "missing {part:?} in {q}");
+    }
+}

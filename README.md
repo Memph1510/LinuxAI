@@ -8,6 +8,7 @@ the hardware-driver layer; everything above it is LinuxAI.
 - **[docs/CHECKLIST.md](docs/CHECKLIST.md)**: what's done and what's next (core first, then install, the Workspace screen, the Android app)
 - **[docs/SYSTEM_INTERFACE.md](docs/SYSTEM_INTERFACE.md)**: objects, events, actions and views (the foundation)
 - **[docs/TASKS.md](docs/TASKS.md)**: tasks of any size, the human steps (action, evaluation, critique, decision), playbooks and cases
+- **[docs/MAIL.md](docs/MAIL.md)**: email as information, never instructions (the first outside-world organ)
 - **[docs/RESEARCH_SELF_LEARNING.md](docs/RESEARCH_SELF_LEARNING.md)**: what self-learning harnesses (DeepSeek Harness, ACE, Memento-Skills, Recuris, Hermes…) do, and what LinuxAI takes from them
 - **[docs/ACTION_LANGUAGE.md](docs/ACTION_LANGUAGE.md)**: the language the AI uses to run the machine
 - **[docs/VIEWS.md](docs/VIEWS.md)**: the Workspace screen (tasks, decisions, reasoning, comments that change things); prototype in `prototypes/`

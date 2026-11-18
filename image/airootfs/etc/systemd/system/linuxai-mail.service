@@ -1,0 +1,18 @@
+[Unit]
+Description=LinuxAI mail (email in, facts out: never instructions)
+After=linuxai-core.service network-online.target
+Wants=network-online.target
+# Starts once IMAP is configured in /etc/linuxai/mail.env (LINUXAI_IMAP_HOST/USER/PASSWORD, LINUXAI_AUTHSERV_ID).
+ConditionPathExists=/etc/linuxai/mail.env
+
+[Service]
+EnvironmentFile=/etc/linuxai/mail.env
+EnvironmentFile=-/home/linuxai/.config/linuxai/env
+# Raw email lives where only this service can read it; the AI (user linuxai) only ever gets extracted facts.
+Environment=LINUXAI_MAIL_DIR=/var/lib/linuxai/mail
+ExecStart=/usr/local/bin/cortex mail watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -24,6 +24,9 @@ class Config:
     mode: str = field(default_factory=lambda: os.environ.get("LINUXAI_MODE", "trusted"))
     # Web search and fetch for research (server-side tools). LINUXAI_WEB=0 turns them off.
     web: bool = field(default_factory=lambda: os.environ.get("LINUXAI_WEB", "1") != "0")
+    # Raw email is kept here for the human; the AI's tools refuse to read it (it only ever sees extracted facts).
+    mail_dir: Path = field(default_factory=lambda: Path(os.environ["LINUXAI_MAIL_DIR"]).expanduser()
+                           if os.environ.get("LINUXAI_MAIL_DIR") else _home() / "mail")
     command_timeout: int = field(default_factory=lambda: int(os.environ.get("LINUXAI_TIMEOUT", "600")))
     max_output_chars: int = 8000
 

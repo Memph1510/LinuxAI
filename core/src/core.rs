@@ -364,8 +364,23 @@ impl Core {
             op if op.starts_with("task") => self.task_op(op, req),
             op if op.starts_with("playbook") => self.playbook_op(op, req),
             "object_put" | "find" => self.object_op(op, req),
+            "object" => match self.mem.object(req["id"].as_str().unwrap_or("")) {
+                Some(o) => json!({"ok": true, "object": o}),
+                None => json!({"ok": false, "error": "no such object"}),
+            },
             _ => json!({"ok": false, "error": format!("unknown op '{op}'")}),
         }
+    }
+
+    /// A plan for a task that came from outside information carries the outside label, whatever the AI says.
+    pub fn with_inherited_taint(&self, plan: &Value) -> Value {
+        let task_outside = plan["task"].as_str().and_then(|t| self.mem.load_task(t)).map(|t| t["trust"] == "outside").unwrap_or(false);
+        if task_outside && plan["taint"] != "outside" {
+            let mut p = plan.clone();
+            p["taint"] = json!("outside");
+            return p;
+        }
+        plan.clone()
     }
 
     /// Some(reason) when a plan is a first-time situation: its category (or its task's) has no playbook and
@@ -387,6 +402,7 @@ impl Core {
     }
 
     pub fn submit(self: &Arc<Self>, plan: &Value, source: &str) -> Value {
+        let plan = &self.with_inherited_taint(plan);
         let nov = if source == "ai" { self.novelty(plan) } else { None };
         let report = engine::check_with(plan, &self.mem, source, self.threshold, nov.as_deref());
         if !report.ok {
@@ -415,7 +431,8 @@ impl Core {
             Some(s) => {
                 let stored = self.mem.load_plan(id).unwrap_or(json!({}));
                 let res = json!({"plan": "resolution", "with": stored["vars"], "steps": s, "assess": req["assess"],
-                                 "category": stored["plan"]["category"], "task": stored["plan"]["task"]});
+                                 "reasoning": req["reasoning"], "category": stored["plan"]["category"], "task": stored["plan"]["task"],
+                                 "taint": if stored["plan"]["taint"] == "outside" || req["taint"] == "outside" { json!("outside") } else { Value::Null }});
                 let nov = self.novelty(&res);
                 let r = engine::check_with(&res, &self.mem, "ai", self.threshold, nov.as_deref());
                 if !r.ok {

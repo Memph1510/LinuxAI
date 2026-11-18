@@ -41,10 +41,15 @@ impl Core {
             Ok(id) => id,
             Err(e) => return json!({"ok": false, "error": e}),
         };
-        // Plans written into the task run with the authority of whoever created it.
+        // Plans written into the task run with the authority of whoever created it. A task that came from
+        // outside information keeps that label on every subtask and plan.
         let source = if source == "human" { "human" } else { "ai" };
+        let outside = spec["trust"] == "outside";
         for r in &mut rows {
             r["source"] = json!(source);
+            if outside {
+                r["trust"] = json!("outside");
+            }
             self.mem.save_task(r);
         }
         self.bus.emit(&self.mem, "task.created", json!({"task": root, "title": spec["title"], "count": rows.len()}));

@@ -321,6 +321,11 @@ pub struct Report {
     pub review: Vec<String>,
     /// The AI's own assessment, shown to the human.
     pub assessment: Value,
+    /// The plan relies on information from outside (email, web, messages): it can't act on the outside world
+    /// on its own unless the human has given standing permission for that, and must cite the facts it uses.
+    pub outside: bool,
+    /// The cited outside facts, as the core recorded them (provenance from the core, not the AI).
+    pub outside_facts: Vec<Value>,
     pub explain: Vec<String>,
 }
 
@@ -368,7 +373,14 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
     if plan.get("plan").and_then(Value::as_str).unwrap_or("").is_empty() {
         r.errors.push("plan needs a name in \"plan\"".into());
     }
-    let mandates = mem.mandates();
+    // Standing permissions given for actions based on outside information are kept apart ("outside:" targets):
+    // ordinary trust doesn't cover acting on what strangers sent, and vice versa.
+    let outside = plan["taint"] == "outside";
+    let mandates: Vec<(String, String)> = mem.mandates().into_iter().filter_map(|(v, t)| match t.strip_prefix("outside:") {
+        Some(rest) => outside.then(|| (v, rest.to_string())),
+        None => (!outside).then_some((v, t)),
+    }).collect();
+    r.outside = outside;
     let mut defined: Vec<String> = BUILTIN_VARS.iter().map(|s| s.to_string()).collect();
     if let Some(Value::Object(w)) = plan.get("with") {
         defined.extend(w.keys().cloned());
@@ -379,6 +391,19 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
     let uncovered = r.effects.iter().any(|e| e["covered"] == false);
     if ai && has_effects {
         assess(plan, threshold, novelty, &mut r);
+    }
+    if outside && has_effects {
+        // Show the human exactly which outside facts this rests on, as recorded when they arrived.
+        let cited = plan["reasoning"]["facts"].as_array().cloned().unwrap_or_default();
+        if cited.is_empty() {
+            r.errors.push("this plan relies on outside information: cite the stored facts it uses in reasoning.facts (object ids)".into());
+        }
+        for f in cited {
+            match f.as_str().and_then(|id| mem.object(id)) {
+                Some(o) => r.outside_facts.push(o),
+                None => r.errors.push(format!("reasoning.facts: no stored fact {f}")),
+            }
+        }
     }
     r.needs_approval = ai && (uncovered || !r.review.is_empty());
     r.ok = r.errors.is_empty();
@@ -660,17 +685,42 @@ fn request_approval(exec: &mut Exec, report: &Report, ctx: &Ctx) {
         if let Some(c) = a["confidence"].as_f64() {
             q.push_str(&format!("\nConfidence: {:.0}%", c * 100.0));
         }
+        // The reasoning modules (facts, policies, chain, decision, downstream), as the AI laid them out.
+        let rsn = &exec.plan["reasoning"];
+        let items = |k: &str| rsn[k].as_array().map(|v| v.iter().map(display).collect::<Vec<_>>()).unwrap_or_default();
+        let policies = items("policies");
+        if !policies.is_empty() {
+            q.push_str(&format!("\nRules applied: {}", policies.join("; ")));
+        }
+        let chain = items("chain");
+        if !chain.is_empty() {
+            q.push_str(&format!("\nReasoning: {}", chain.join(" → ")));
+        }
+        if let Some(d) = rsn["decision"].as_str() {
+            q.push_str(&format!("\nDecision: {d}"));
+        }
+        let down = items("downstream");
+        if !down.is_empty() {
+            q.push_str(&format!("\nIf this runs: {}", down.join("; ")));
+        }
+        if !report.outside_facts.is_empty() {
+            q.push_str("\nBased on outside information:");
+            for f in &report.outside_facts {
+                q.push_str(&format!("\n• {}", describe_fact(f)));
+            }
+        }
         q.push_str("\nOK?");
         let question = q;
         let untrusted = report.effects.iter().any(|e| e["effect"] != "internal" && e["covered"] == false);
         let reason = match (report.review.is_empty(), untrusted) {
             (false, _) => format!("I want a second look before acting: {}.", report.review.join("; ")),
+            (true, true) if report.outside => "This acts on information from outside, and you haven't told me I can do that on my own yet. Answer \"always\" to let me do this kind of thing from outside information.".to_string(),
             (true, _) => "You haven't told me I can do these on my own yet. Answer \"always\" and I won't ask about them again.".to_string(),
         };
         exec.status = "waiting:answer".into();
         let t0 = now();
         exec.wait = json!({"question": question, "opts": ["yes", "no", "always"], "approval": true,
-                           "effects": report.effects, "review": report.review,
+                           "effects": report.effects, "review": report.review, "outside": report.outside,
                            "why": reason,
                            "reminders": [t0 + 2.0 * 3600.0, t0 + 8.0 * 3600.0], "asked_at": t0});
         persist(exec, ctx);
@@ -709,7 +759,9 @@ pub fn answer(exec: &mut Exec, text: &str, ctx: &Ctx) {
                 // Trust learned from conversation: these kinds of actions no longer need asking.
                 for e in exec.wait["effects"].as_array().cloned().unwrap_or_default() {
                     if e["effect"] != "internal" && e["covered"] == false {
-                        ctx.mem.add_mandate(e["verb"].as_str().unwrap_or(""), &display(&e["target"]), "human:always");
+                        let outside = exec.wait["outside"] == true;
+                        let target = if outside { format!("outside:{}", display(&e["target"])) } else { display(&e["target"]) };
+                        ctx.mem.add_mandate(e["verb"].as_str().unwrap_or(""), &target, if outside { "human:always:outside" } else { "human:always" });
                     }
                 }
                 ctx.bus.emit(ctx.mem, "trust.granted", json!({"plan": exec.name}));
@@ -1071,4 +1123,20 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
             Err(format!("{text}: {e}"))
         }
     }
+}
+
+/// One line describing an outside fact for the human, from the core's own record of it.
+pub fn describe_fact(f: &Value) -> String {
+    let typ = f["type"].as_str().unwrap_or("fact");
+    let src = &f["source"];
+    let from = src["from"].as_str().or(f["from"].as_str()).unwrap_or("unknown sender");
+    let auth = match src["authenticated"].as_bool() {
+        Some(true) => "sender verified",
+        Some(false) => "sender NOT verified",
+        None => "unverified",
+    };
+    let skip = ["id", "type", "source", "trust", "created", "handle", "category"];
+    let detail: Vec<String> = f.as_object().map(|m| m.iter().filter(|(k, v)| !skip.contains(&k.as_str()) && !v.is_null() && !v.is_object() && !v.is_array())
+        .take(6).map(|(k, v)| format!("{k}: {}", display(v))).collect()).unwrap_or_default();
+    format!("{typ} from {from} ({auth}): {}", detail.join(", "))
 }

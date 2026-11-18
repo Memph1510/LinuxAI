@@ -249,6 +249,18 @@ impl Memory {
         );
     }
 
+    /// One stored object by id.
+    pub fn object(&self, id: &str) -> Option<Value> {
+        let db = self.c();
+        db.query_row("SELECT type, fields FROM objects WHERE id=?1", params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .optional().ok().flatten().map(|(t, f)| {
+                let mut v: Value = serde_json::from_str(&f).unwrap_or(json!({}));
+                v["id"] = json!(id);
+                v["type"] = json!(t);
+                v
+            })
+    }
+
     pub fn mandates(&self) -> Vec<(String, String)> {
         let db = self.c();
         let mut st = db.prepare("SELECT verb, target FROM mandates ORDER BY id").unwrap();

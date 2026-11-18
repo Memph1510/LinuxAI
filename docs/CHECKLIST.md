@@ -29,6 +29,12 @@ within each stage.
       database levels off at about 4 MB
 - [x] Playbook protections: small edits only, rendered markdown you can edit, validation gate against past
       cases, held proposals, helped/hurt feedback ([TASKS.md](TASKS.md#playbook-protections))
+- [x] Outside information is facts, never commands: outside-labeled plans must cite facts, need separate
+      standing permission to act on the outside world, and show provenance from the core's records
+- [x] Email organ, headless ([MAIL.md](MAIL.md)): code-decided provenance and authentication, sanitized body
+      (hidden text removed), tool-less extractor into typed facts, raw mail kept out of the AI's reach.
+      Not yet: sending replies
+- [x] Reasoning modules in plans (facts, rules applied, chain, decision, downstream), shown in approvals
 - [ ] Multi-day soak on the real laptop (same harness, `--minutes 4320`)
 - [x] Second look before acting: assessments required; unknowns, low confidence and first-time situations go
       to the human; first-time situations need research
