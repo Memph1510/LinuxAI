@@ -31,6 +31,11 @@ CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent);
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status);
 CREATE TABLE IF NOT EXISTS playbook_history (id INTEGER PRIMARY KEY, category TEXT NOT NULL, text TEXT NOT NULL,
                                     reason TEXT NOT NULL, ts REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS playbook_entries (id TEXT PRIMARY KEY, category TEXT NOT NULL, body TEXT NOT NULL,
+                                    status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS playbook_entries_cat ON playbook_entries(category, status);
+CREATE TABLE IF NOT EXISTS playbook_meta (category TEXT PRIMARY KEY, hash TEXT NOT NULL, preamble TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS playbook_proposals (id TEXT PRIMARY KEY, body TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
 "#;
 
 pub fn now() -> f64 {
@@ -517,5 +522,62 @@ impl Retention {
             tasks_days: get("LINUXAI_KEEP_TASKS_DAYS", 180.0),
             playbook_versions: get("LINUXAI_KEEP_PLAYBOOK_VERSIONS", 50.0) as i64,
         }
+    }
+}
+
+impl Memory {
+    // ---- playbook entries (the source of truth; the markdown file is rendered from them) ----
+    pub fn pb_entries(&self, category: &str, active_only: bool) -> Vec<Value> {
+        let db = self.c();
+        let sql = if active_only {
+            "SELECT body FROM playbook_entries WHERE category=?1 AND status='active' ORDER BY created, rowid"
+        } else {
+            "SELECT body FROM playbook_entries WHERE category=?1 ORDER BY created, rowid"
+        };
+        let mut st = db.prepare(sql).unwrap();
+        st.query_map(params![category], |r| r.get::<_, String>(0)).unwrap()
+            .filter_map(Result::ok).filter_map(|s| serde_json::from_str(&s).ok()).collect()
+    }
+
+    pub fn pb_entry(&self, id: &str) -> Option<Value> {
+        let db = self.c();
+        db.query_row("SELECT body FROM playbook_entries WHERE id=?1", params![id], |r| r.get::<_, String>(0))
+            .optional().ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    pub fn pb_save_entry(&self, e: &Value) {
+        let db = self.c();
+        let t = now();
+        let _ = db.execute(
+            "INSERT INTO playbook_entries(id, category, body, status, created, updated) VALUES (?1,?2,?3,?4,?5,?5)
+             ON CONFLICT(id) DO UPDATE SET body=excluded.body, status=excluded.status, updated=excluded.updated",
+            params![e["id"].as_str().unwrap_or(""), e["category"].as_str().unwrap_or(""), e.to_string(),
+                    e["status"].as_str().unwrap_or("active"), t]);
+    }
+
+    pub fn pb_meta(&self, category: &str) -> Option<(String, String)> {
+        let db = self.c();
+        db.query_row("SELECT hash, preamble FROM playbook_meta WHERE category=?1", params![category],
+                     |r| Ok((r.get(0)?, r.get(1)?))).optional().ok().flatten()
+    }
+
+    pub fn pb_set_meta(&self, category: &str, hash: &str, preamble: &str) {
+        let db = self.c();
+        let _ = db.execute("INSERT INTO playbook_meta(category, hash, preamble) VALUES (?1,?2,?3)
+                            ON CONFLICT(category) DO UPDATE SET hash=excluded.hash, preamble=excluded.preamble",
+                           params![category, hash, preamble]);
+    }
+
+    pub fn pb_save_proposal(&self, p: &Value) {
+        let db = self.c();
+        let _ = db.execute("INSERT INTO playbook_proposals(id, body, status, created) VALUES (?1,?2,?3,?4)
+                            ON CONFLICT(id) DO UPDATE SET body=excluded.body, status=excluded.status",
+                           params![p["id"].as_str().unwrap_or(""), p.to_string(), p["status"].as_str().unwrap_or("held"), now()]);
+    }
+
+    pub fn pb_proposal(&self, id: &str) -> Option<Value> {
+        let db = self.c();
+        db.query_row("SELECT body FROM playbook_proposals WHERE id=?1", params![id], |r| r.get::<_, String>(0))
+            .optional().ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
     }
 }

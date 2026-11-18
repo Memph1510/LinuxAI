@@ -48,7 +48,8 @@ pub struct Exec {
 impl Exec {
     pub fn summary(&self) -> Value {
         json!({"plan_id": self.id, "plan": self.name, "status": self.status, "wait": self.wait,
-               "error": self.error, "source": self.source, "task": self.plan.get("task")})
+               "error": self.error, "source": self.source, "task": self.plan.get("task"),
+               "proposal": self.plan.get("proposal")})
     }
 }
 

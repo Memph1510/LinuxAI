@@ -173,6 +173,9 @@ impl Core {
         if matches!(kind, "plan.finished" | "plan.failed" | "plan.stopped") && ev["data"]["task"].is_string() {
             self.task_on_plan_end(kind, &ev["data"]);
         }
+        if matches!(kind, "plan.finished" | "plan.failed" | "plan.stopped") && ev["data"]["proposal"].is_string() {
+            self.playbook_on_plan_end(kind, &ev["data"]);
+        }
         if kind.starts_with("plan.") || kind.starts_with("action.") || kind == "rule.throttled" {
             return; // bookkeeping events don't trigger rules
         }

@@ -177,8 +177,17 @@ class Soak:
 
     def playbook(self):
         cat = random.choice(["freight/negotiate", "travel/book"])
-        self.call("playbook_put", category=cat, text=f"# {cat}\n- version {random.random()}\n", reason="soak")
         self.call("object_put", type="case", fields={"category": cat, "decision": "soak", "rate": random.uniform(2, 3)})
+        # AI-style small edits through the validation gate (sometimes judged worse, so some get held).
+        info = self.call("playbook_entries", category=cat) or {}
+        entries = info.get("entries") or []
+        if entries and random.random() < 0.4:
+            edit = {"op": random.choice(["revise", "retire"]), "id": random.choice(entries)["id"], "text": f"revised {random.random()}"}
+        else:
+            edit = {"op": "add", "section": random.choice(["How I decide", "Exceptions"]), "text": f"point {random.random()} {self.counts['events']}"}
+        validation = [{"case": c["id"], "verdict": "worse" if random.random() < 0.1 else "same", "note": "soak"}
+                      for c in info.get("validation_cases") or []]
+        self.call("playbook_edit", category=cat, edits=[edit], validation=validation, reason="soak", source="ai")
 
     def sample(self):
         s = {"t": round(time.time() - self.t0, 1), **self.d.proc_stat()}

@@ -251,8 +251,10 @@ def mind(config: Config) -> None:
         agent.turn(f"[system] Task finished ({'done' if d.get('error') is None else 'failed'}): {d.get('title')} "
                    f"[{d.get('category')}]\nResult: {json.dumps(d.get('result'), default=str)[:3000]}\n"
                    f"Error: {d.get('error')}\nLook at the task (task_status {d.get('task')}). Record the case "
-                   f"(record_case) and, if anything new was learned, especially from the human's answers, update the "
-                   f"category's playbook. Be brief; don't contact the human unless something needs them.")
+                   f"(record_case), give feedback on the playbook points you relied on (playbook_feedback), and if anything new "
+                   f"was learned, especially from the human's answers, add or revise a point (edit_playbook, small edits; "
+                   f"if a failure, change only the point that caused it). Be brief; don't contact the human unless "
+                   f"something needs them.")
 
     for t in core.request("tasks").get("needs_plan", []):
         plan_task({"task": t["id"], "title": t["title"], "category": t.get("category"), "context": t.get("context"),

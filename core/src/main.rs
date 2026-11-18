@@ -10,6 +10,7 @@ mod core;
 mod engine;
 mod host;
 mod memory;
+mod playbooks;
 mod tasks;
 mod verbs;
 

@@ -117,3 +117,22 @@ Credible sources are decided as they're encountered. Each website the AI relies 
 from the AI. Your rating always wins. Ratings for broader categories apply to narrower ones. Before researching,
 the AI checks what's already rated, prefers trusted sources, and corroborates doubtful or unrated ones. Blocked
 sites are excluded from searches automatically.
+
+## Playbook protections
+
+From the research in [RESEARCH_SELF_LEARNING.md](RESEARCH_SELF_LEARNING.md) (ACE, Memento-Skills, Recuris):
+
+- **Small edits, never rewrites.** A playbook is a set of entries: points under *What matters*, *How I
+  decide*, *Exceptions* and *Open questions*, plus any sections you add. Each has an id, its evidence, who wrote
+  it, and how often it **helped** or **hurt**. The AI can only add one, revise one or retire one, and plain
+  code merges the change. The AI is refused if it tries to rewrite a whole playbook, so a playbook can't
+  collapse into a short summary that loses what was learned.
+- **The markdown file is generated from the entries and stays yours.** Edit it in any editor. A changed line
+  updates its entry, a new line becomes an entry (marked as yours), and a deleted line retires its entry.
+- **Validation gate.** Before an AI change is kept, the AI checks it against the most recent cases in that
+  category (the core picks them): would each past decision have come out the same, better or worse? The
+  change is **held for you** if it would have made any past decision worse, if it changes or removes a point
+  **you** wrote, or if it changes a large part of the playbook at once. You get the change and the reason, and
+  "yes" applies it. Duplicates of existing points are refused.
+- **Feedback.** After each task the AI records which points helped or hurt. A point that keeps hurting is
+  flagged "often wrong" in the file, and the AI is told to reconsider it.

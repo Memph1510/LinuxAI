@@ -341,8 +341,14 @@ def test_ai_plans_a_task_from_its_playbook_then_learns(env, live_core, tmp_path)
         _msg([_tool("t4", "record_case", {"category": "freight/negotiate", "variables": {"broker": "@hollis", "weather": "clear",
                                                                                          "offer_per_mile": 2.10},
                                           "decision": "countered at $2.50", "outcome": "human approved"}),
-              _tool("t5", "update_playbook", {"category": "freight/negotiate/hollis", "reason": "first Hollis negotiation",
-                                              "text": "# Hollis\n## What matters\n- Opens around $2.10/mi; counter at $2.50.\n"})], "tool_use"),
+              _tool("t5", "edit_playbook", {"category": "freight/negotiate/hollis", "reason": "first Hollis negotiation",
+                                            "edits": [{"op": "add", "section": "What matters",
+                                                       "text": "Hollis opens around $2.10/mi; countering at $2.50 worked."}]})], "tool_use"),
+        # The core asks for the edit to be checked against the case just recorded; the model does so.
+        _msg([_tool("t6", "edit_playbook", {"category": "freight/negotiate/hollis", "reason": "first Hollis negotiation",
+                                            "edits": [{"op": "add", "section": "What matters",
+                                                       "text": "Hollis opens around $2.10/mi; countering at $2.50 worked."}],
+                                            "validation": "FILLED_IN_BELOW"})], "tool_use"),
         _msg([NS(type="text", text="Learned.")], "end_turn"),
     ])
     agent = Agent(cfg, mem, tb, client=client)
@@ -356,7 +362,26 @@ def test_ai_plans_a_task_from_its_playbook_then_learns(env, live_core, tmp_path)
     assert live_core.request("answer", plan_id=plan_id, text="yes")["result"]["status"] == "done"
     assert live_core.request("task", task=task_id)["tree"]["status"] == "done"
     agent.reset()
+    # Fill in the validation the scripted model gives once it has been told which case to check.
+    case_id = None
+
+    def fill(msg):
+        nonlocal case_id
+        for b in msg.content:
+            if b.type == "tool_use" and b.input.get("validation") == "FILLED_IN_BELOW":
+                case_id = case_id or live_core.request("playbook_entries", category="freight/negotiate/hollis")["validation_cases"][0]["id"]
+                b.input["validation"] = [{"case": case_id, "verdict": "same", "note": "still counter at $2.50"}]
+        return msg
+    orig = client.beta.messages.stream
+
+    def stream_filling(**kw):
+        if client.script:
+            fill(client.script[0])  # the model writes its validation when it answers, after seeing the case
+        return orig(**kw)
+    client.beta.messages.stream = stream_filling
     agent.turn("[system] Task finished: reflect")
+    second_try = client.requests[-2]["messages"][-1]["content"]
+    assert any("check it against these past cases" in r["content"] for r in second_try if r.get("type") == "tool_result")
     chain = live_core.request("playbook", category="freight/negotiate/hollis")["chain"]
     assert [p["category"] for p in chain] == ["freight/negotiate", "freight/negotiate/hollis"]
     cases = live_core.request("find", spec={"type": "case", "where": {"broker": "@hollis"}})["found"]

@@ -340,6 +340,7 @@ impl Core {
         let segs: Vec<&str> = category.split('/').collect();
         Value::Array((1..=segs.len()).filter_map(|n| {
             let cat = segs[..n].join("/");
+            self.playbook_sync(&cat);
             std::fs::read_to_string(self.playbook_path(&cat)).ok().map(|text| json!({"category": cat, "text": text}))
         }).collect())
     }
@@ -363,6 +364,10 @@ impl Core {
                 if text.trim().is_empty() || reason.is_empty() {
                     return json!({"ok": false, "error": "playbook_put needs the full new text and a reason"});
                 }
+                let source = req["source"].as_str().unwrap_or("human");
+                if source == "ai" && !self.mem.pb_entries(cat, true).is_empty() {
+                    return json!({"ok": false, "error": "the AI doesn't rewrite whole playbooks: use small edits (playbook_edit) so nothing gets lost"});
+                }
                 let path = self.playbook_path(cat);
                 let old = std::fs::read_to_string(&path).unwrap_or_default();
                 if old == text {
@@ -377,6 +382,7 @@ impl Core {
                     return json!({"ok": false, "error": e.to_string()});
                 }
                 self.share_with_human(&path);
+                self.playbook_sync(cat);
                 self.mem.playbook_archive(cat, &old, reason);
                 self.emit("playbook.updated", json!({"category": cat, "reason": reason, "new": old.is_empty()}));
                 json!({"ok": true, "changed": true, "path": path.to_string_lossy()})
@@ -386,6 +392,28 @@ impl Core {
                 collect_playbooks(&self.playbook_dir, "", &mut cats);
                 cats.sort();
                 json!({"ok": true, "categories": cats})
+            }
+            "playbook_edit" => {
+                if !valid_category(cat) {
+                    return json!({"ok": false, "error": "category should look like freight/negotiate"});
+                }
+                let edits = req["edits"].as_array().cloned().unwrap_or_default();
+                let validation = req["validation"].as_array().cloned().unwrap_or_default();
+                self.playbook_edit(cat, &edits, &validation, req["reason"].as_str().unwrap_or(""), req["source"].as_str().unwrap_or("ai"))
+            }
+            "playbook_feedback" => self.playbook_feedback(req["id"].as_str().unwrap_or(""), req["helped"].as_bool().unwrap_or(true)),
+            "playbook_entries" => {
+                if !valid_category(cat) {
+                    return json!({"ok": false, "error": "category should look like freight/negotiate"});
+                }
+                let segs: Vec<&str> = cat.split('/').collect();
+                let mut all = Vec::new();
+                for n in 1..=segs.len() {
+                    let c = segs[..n].join("/");
+                    self.playbook_sync(&c);
+                    all.extend(self.mem.pb_entries(&c, true));
+                }
+                json!({"ok": true, "entries": all, "validation_cases": self.validation_cases(cat)})
             }
             "playbook_history" => json!({"ok": true, "history": self.mem.playbook_history(cat, req["limit"].as_i64().unwrap_or(20))}),
             _ => json!({"ok": false, "error": "unknown playbook op"}),
@@ -422,6 +450,10 @@ impl Core {
 
 impl Core {
     /// Make a playbook file (and its folders) editable by the human's group.
+    pub(crate) fn share_playbook(&self, path: &std::path::Path) {
+        self.share_with_human(path)
+    }
+
     fn share_with_human(&self, path: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
         let Some(gid) = self.file_gid else { return };

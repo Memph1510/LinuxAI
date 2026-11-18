@@ -230,13 +230,22 @@ CORE_TOOLS = [
           "Read the playbooks (markdown) that govern a category, broadest first (freight, then freight/negotiate, "
           "then freight/negotiate/hollis).",
           {"category": {"type": "string"}}, ["category"]),
-    _tool("update_playbook",
-          "Rewrite a category's playbook (full markdown) when you learn something: from repetition, a new "
-          "situation, or the human's answers and critiques. Keep it short and practical with these sections: "
-          "## What matters (the variables), ## How I decide (rules of thumb), ## Exceptions, ## Open questions. "
-          "Credit the human where a point came from them. Say why it changed.",
-          {"category": {"type": "string"}, "text": {"type": "string"}, "reason": {"type": "string"}},
-          ["category", "text", "reason"]),
+    _tool("edit_playbook",
+          "Change a category's playbook with small edits, never a rewrite: add a point (to a section: What "
+          "matters, How I decide, Exceptions, Open questions), revise one point by id, or retire one by id. Give "
+          "evidence (case ids, the human's words, URLs) and why. The core may ask you to check the change against "
+          "recent cases first: for each, would the decision have come out the same, better or worse with it? Then "
+          "resubmit with validation. Changes that would have made past decisions worse, that touch the human's own "
+          "points, or that change a lot at once are held for the human.",
+          {"category": {"type": "string"},
+           "edits": {"type": "array", "items": {"type": "object"},
+                     "description": "[{op: add, section, text, evidence?} | {op: revise, id, text, evidence?} | {op: retire, id}]"},
+           "reason": {"type": "string"},
+           "validation": {"type": "array", "items": {"type": "object"},
+                          "description": "[{case: id, verdict: same|better|worse, note}]"}},
+          ["category", "edits", "reason"]),
+    _tool("playbook_feedback", "After a task, record whether a playbook point (by id) helped or hurt.",
+          {"id": {"type": "string"}, "helped": {"type": "boolean"}}, ["id", "helped"]),
     _tool("record_case",
           "Record one real situation: its variables (e.g. broker, weather, destination, trip length, days to "
           "complete, rate), what was decided, and how it turned out. Cases are what playbooks are learned from.",
@@ -595,11 +604,22 @@ class Toolbox:
         chain = r.get("chain") or []
         return "\n\n".join(f"=== {p['category']} ===\n{p['text']}" for p in chain) or f"No playbook yet for {category}."
 
-    def t_update_playbook(self, category: str, text: str, reason: str) -> str:
-        r = self._core("playbook_put", category=category, text=text, reason=reason)
-        if r.get("ok") and r.get("changed"):
-            ui.out(ui.green(f"\n  ✓ playbook {category} updated: {reason}"))
-        return "Saved." if r.get("ok") else f"Error: {r.get('error')}"
+    def t_edit_playbook(self, category: str, edits: Any, reason: str, validation: Any = None) -> str:
+        r = self._core("playbook_edit", category=category, edits=edits if isinstance(edits, list) else [],
+                       validation=validation if isinstance(validation, list) else [], reason=reason, source="ai")
+        if r.get("needs_validation"):
+            return (r["error"] + "\nCases:\n" + json.dumps(r["needs_validation"], default=str)[:6000])
+        if not r.get("ok"):
+            return "Not accepted:\n- " + "\n- ".join(r.get("errors") or [r.get("error", "")])
+        if r.get("applied"):
+            ui.out(ui.green(f"\n  ✓ playbook {category}: {reason}"))
+            return f"Applied: {json.dumps(r.get('changes'))}"
+        ui.out(ui.yellow(f"\n  ? playbook change held for the human: {'; '.join(r.get('held', []))}"))
+        return f"Held for the human ({'; '.join(r.get('held', []))}). They've been asked; nothing changed yet."
+
+    def t_playbook_feedback(self, id: str, helped: bool) -> str:
+        r = self._core("playbook_feedback", id=id, helped=helped)
+        return json.dumps(r)
 
     def t_record_case(self, category: str, variables: Any, decision: str, outcome: str = "") -> str:
         fields = {"category": category, "decision": decision, "outcome": outcome, **(variables if isinstance(variables, dict) else {})}

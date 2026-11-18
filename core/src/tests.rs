@@ -706,3 +706,139 @@ fn finished_task_trees_expire_unfinished_ones_never_do() {
     assert!(c.mem.load_task(done["task"].as_str().unwrap()).is_none());
     assert_eq!(c.handle(&json!({"op": "task", "task": open["task"]}))["tree"]["children"].as_array().unwrap().len(), 1);
 }
+
+// ---- playbook protections ------------------------------------------------------------------------
+
+fn pb_edit(c: &Arc<Core>, edits: Value, validation: Value, source: &str) -> Value {
+    c.handle(&json!({"op": "playbook_edit", "category": "freight/negotiate", "edits": edits, "validation": validation,
+                     "reason": "learned from a load", "source": source}))
+}
+
+fn pb_file(dir: &std::path::Path) -> String {
+    std::fs::read_to_string(dir.join("freight/negotiate.md")).unwrap_or_default()
+}
+
+#[test]
+fn playbooks_change_by_small_edits_and_render_to_markdown() {
+    let (c, _, dir) = core_with_playbooks();
+    let r = pb_edit(&c, json!([
+        {"op": "add", "section": "How I decide", "text": "Floor is $2.40/mi loaded."},
+        {"op": "add", "section": "Exceptions", "text": "Under the floor is OK if it gets the truck home for the weekend.", "evidence": ["Memphis load"]}]),
+        json!([]), "ai");
+    assert_eq!(r["applied"], true, "{r}");
+    let md = pb_file(&dir);
+    assert!(md.contains("## How I decide\n- Floor is $2.40/mi loaded."), "{md}");
+    assert!(md.contains("## Exceptions\n- Under the floor"), "{md}");
+    let entries = c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"].clone();
+    let floor = entries[0]["id"].as_str().unwrap().to_string();
+    // Revise one point: the rest stays exactly as it was.
+    let r = pb_edit(&c, json!([{"op": "revise", "id": floor, "text": "Floor is $2.45/mi loaded (fuel went up)."}]), json!([]), "ai");
+    assert_eq!(r["applied"], true, "{r}");
+    let md2 = pb_file(&dir);
+    assert!(md2.contains("$2.45") && md2.contains("Under the floor is OK"), "{md2}");
+    // A duplicate is refused; feedback counts show up in the file.
+    let dup = pb_edit(&c, json!([{"op": "add", "section": "How I decide", "text": "The floor is $2.45/mi loaded (fuel went up)."}]), json!([]), "ai");
+    assert!(dup["errors"][0].as_str().unwrap().contains("already covered"), "{dup}");
+    c.handle(&json!({"op": "playbook_feedback", "id": floor, "helped": true}));
+    assert!(pb_file(&dir).contains(&format!("{floor} · helped 1 · hurt 0")));
+    // History keeps the previous file.
+    assert!(c.handle(&json!({"op": "playbook_history", "category": "freight/negotiate"}))["history"][0]["previous_text"].as_str().unwrap().contains("$2.40"));
+}
+
+#[test]
+fn the_ai_cannot_rewrite_a_whole_playbook() {
+    let (c, _, _) = core_with_playbooks();
+    pb_edit(&c, json!([{"op": "add", "section": "How I decide", "text": "Floor is $2.40/mi."}]), json!([]), "ai");
+    let r = c.handle(&json!({"op": "playbook_put", "category": "freight/negotiate", "text": "# tiny\n", "reason": "simplify", "source": "ai"}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().unwrap().contains("small edits"));
+}
+
+#[test]
+fn ai_edits_must_be_checked_against_past_cases() {
+    let (c, _, _) = core_with_playbooks();
+    for (b, rate, d) in [("@hollis", 2.28, "accepted under the floor to get home"), ("@acme", 2.10, "declined")] {
+        c.handle(&json!({"op": "object_put", "type": "case", "fields": {"category": "freight/negotiate", "broker": b, "rate": rate,
+                                                                        "decision": d, "outcome": "fine"}}));
+    }
+    let edit = json!([{"op": "add", "section": "How I decide", "text": "Never go under the floor."}]);
+    let r = pb_edit(&c, edit.clone(), json!([]), "ai");
+    assert_eq!(r["ok"], false);
+    let ids: Vec<String> = r["needs_validation"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids.len(), 2, "{r}");
+    // It would have made the Hollis decision worse: held for the human, not saved.
+    let v = json!([{"case": ids[0], "verdict": "same", "note": ""}, {"case": ids[1], "verdict": "same", "note": ""}]);
+    let hollis = if r["needs_validation"][0]["broker"] == "@hollis" { 0 } else { 1 };
+    let mut v_worse = v.clone();
+    v_worse[hollis]["verdict"] = json!("worse");
+    v_worse[hollis]["note"] = json!("would have driven home empty");
+    let r = pb_edit(&c, edit.clone(), v_worse, "ai");
+    assert_eq!(r["applied"], false, "{r}");
+    assert!(r["held"][0].as_str().unwrap().contains("worse"));
+    assert!(c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"].as_array().unwrap().is_empty());
+    // The human says no: nothing changes. A clean validation goes straight in.
+    c.handle(&json!({"op": "answer", "plan_id": r["plan_id"], "text": "no"}));
+    assert!(c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"].as_array().unwrap().is_empty());
+    let r = pb_edit(&c, json!([{"op": "add", "section": "What matters", "text": "Weekend home time for the driver."}]), v, "ai");
+    assert_eq!(r["applied"], true, "{r}");
+}
+
+#[test]
+fn held_changes_apply_when_the_human_agrees() {
+    let (c, _, dir) = core_with_playbooks();
+    // The human's own point.
+    pb_edit(&c, json!([{"op": "add", "section": "How I decide", "text": "Never haul for Acme again."}]), json!([]), "human");
+    let id = c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"][0]["id"].as_str().unwrap().to_string();
+    let r = pb_edit(&c, json!([{"op": "retire", "id": id}]), json!([]), "ai");
+    assert_eq!(r["applied"], false, "{r}");
+    assert!(r["held"][0].as_str().unwrap().contains("points you wrote"));
+    assert!(pb_file(&dir).contains("Never haul for Acme"));
+    c.handle(&json!({"op": "answer", "plan_id": r["plan_id"], "text": "yes"}));
+    assert!(!pb_file(&dir).contains("Never haul for Acme"), "{}", pb_file(&dir));
+}
+
+#[test]
+fn changing_much_of_a_playbook_at_once_is_held() {
+    let (c, _, _) = core_with_playbooks();
+    let adds: Vec<Value> = (0..6).map(|i| json!({"op": "add", "section": "How I decide", "text": format!("Rule number {i} about lane {i}")})).collect();
+    pb_edit(&c, json!(adds), json!([]), "ai");
+    let ids: Vec<String> = c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"].as_array().unwrap()
+        .iter().map(|e| e["id"].as_str().unwrap().to_string()).collect();
+    let retire: Vec<Value> = ids[..3].iter().map(|i| json!({"op": "retire", "id": i})).collect();
+    let r = pb_edit(&c, json!(retire), json!([]), "ai");
+    assert_eq!(r["applied"], false, "{r}");
+    assert!(r["held"][0].as_str().unwrap().contains("3 of 6"));
+}
+
+#[test]
+fn the_humans_edits_to_the_file_are_read_back_in() {
+    let (c, _, dir) = core_with_playbooks();
+    pb_edit(&c, json!([{"op": "add", "section": "How I decide", "text": "Floor is $2.40/mi."},
+                      {"op": "add", "section": "Exceptions", "text": "OK under the floor to get home."}]), json!([]), "ai");
+    let md = pb_file(&dir);
+    // The human changes a line, deletes one, and adds a new section and line in their editor.
+    let edited = md.replace("Floor is $2.40/mi.", "Floor is $2.50/mi.")
+        .lines().filter(|l| !l.contains("OK under the floor")).collect::<Vec<_>>().join("\n")
+        + "\n\n## Weather\n- Snow in Atlanta adds a day.\n";
+    std::fs::write(dir.join("freight/negotiate.md"), edited).unwrap();
+    let entries = c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"].as_array().unwrap().clone();
+    let texts: Vec<&str> = entries.iter().map(|e| e["text"].as_str().unwrap()).collect();
+    assert_eq!(texts, ["Floor is $2.50/mi.", "Snow in Atlanta adds a day."], "{entries:?}");
+    assert!(entries.iter().all(|e| e["by"] == "human"));
+    // New lines got ids, so the next edit maps to the same entry.
+    assert!(pb_file(&dir).contains("Snow in Atlanta adds a day.  <!-- e"));
+    // And the AI now needs the human's OK to change the point they edited.
+    let r = pb_edit(&c, json!([{"op": "revise", "id": entries[0]["id"], "text": "Floor is $2.30/mi."}]), json!([]), "ai");
+    assert_eq!(r["applied"], false);
+}
+
+#[test]
+fn points_that_keep_hurting_get_flagged() {
+    let (c, _, dir) = core_with_playbooks();
+    pb_edit(&c, json!([{"op": "add", "section": "How I decide", "text": "Always counter at $2.60."}]), json!([]), "ai");
+    let id = c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"][0]["id"].as_str().unwrap().to_string();
+    for _ in 0..3 { c.handle(&json!({"op": "playbook_feedback", "id": id, "helped": false})); }
+    assert!(pb_file(&dir).contains("often wrong"));
+    let evs = c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().clone();
+    assert!(evs.iter().any(|e| e["kind"] == "playbook.entry_questioned"));
+}
