@@ -181,6 +181,7 @@ def test_refusal_runs_nothing(env):
 
 # ---- integration with the real LinuxAI core -------------------------------------------------------
 import shutil
+import sys
 import subprocess
 import time
 
@@ -617,3 +618,35 @@ def test_shared_browser_through_the_ai_tool(env, live_core, tmp_path):
     finally:
         proc.terminate()
         proc.wait(timeout=10)
+
+
+# ---- pictures -------------------------------------------------------------------------------------------
+def test_image_tool_edits_generates_and_minds_the_budget(env, live_core, tmp_path, monkeypatch):
+    if not (shutil.which("magick") or shutil.which("convert")):
+        pytest.skip("no ImageMagick")
+    cfg, mem, tb, _ = env
+    tb.core = live_core
+    monkeypatch.setenv("LINUXAI_IMAGES", str(tmp_path / "images"))
+    src = tmp_path / "truck.png"
+    subprocess.run([shutil.which("magick") or shutil.which("convert"), "-size", "640x480", "xc:orange", str(src)], check=True)
+
+    out, err = tb.execute("image", {"op": "edit", "input": str(src), "ops": [{"resize": "50%"}, {"text": "LinuxAI", "size": 20}]})
+    assert not err and out[1]["type"] == "image", out
+    assert "320x240" in out[0]["text"] and "imagemagick" in out[0]["text"]
+
+    # A paid backend (stand-in) costs 6 cents; the budget is 10.
+    maker = tmp_path / "maker.py"
+    maker.write_text("import json,sys,shutil; j=json.load(sys.stdin); shutil.copy(%r, j['output']); print(json.dumps({'cost_cents': 6}))" % str(src))
+    monkeypatch.setenv("LINUXAI_IMAGE_PAID_CMD", f"{sys.executable} {maker}")
+    monkeypatch.setenv("LINUXAI_IMAGE_BUDGET_CENTS", "10")
+    out, err = tb.execute("image", {"op": "generate", "prompt": "an orange truck", "size": "640x480"})
+    assert not err and "via paid" in out[0]["text"] and "$0.06" in out[0]["text"], out
+
+    # The next one would go over: in the session the human is asked; this one says something other than yes.
+    out, err = tb.execute("image", {"op": "generate", "prompt": "another truck"})
+    assert out == "The human said no to going over this month's picture budget.", out
+    tb.asker = lambda q, o: "yes"
+    out, err = tb.execute("image", {"op": "generate", "prompt": "another truck"})
+    assert not err and "via paid" in out[0]["text"], out
+    found = live_core.request("find", spec={"type": "image", "last": 10})["found"]
+    assert sum(f["cost_cents"] for f in found) == 12 and len(found) == 3

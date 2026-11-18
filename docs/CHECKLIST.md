@@ -104,12 +104,13 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
 - [x] **Prompt library** (`~/prompts/`, core `src/prompts.rs`, starter set in `library/prompts/`): markdown prompts by use case, with fill-in slots, which model they suit,
       helped/hurt counts, searchable. You edit them directly; the AI suggests changes, which are held for you.
       Starts with a starter set across freight, email, research, summaries, images and tasks.
-- [ ] **Image organ that doesn't depend on the laptop.** The OS detects what the machine can do (graphics card and
-      its memory) and picks how to do each job:
-      precise edits always local (ImageMagick, GIMP, Inkscape); 3D in Blender; generating and editing from a
-      description on a local model when there's a capable graphics card (FLUX, Qwen-Image-Edit via ComfyUI),
-      otherwise a paid service within a budget you set, otherwise slow CPU generation. Nothing is off the table.
-      The photo view is where you see results and comment to refine them.
+- [x] **Pictures** (`linuxai-core image`, core `src/images.rs`; see [IMAGES.md](IMAGES.md)): the OS detects what the
+      machine can do and picks how: precise edits always local (ImageMagick); making or changing a picture from a
+      description on a local graphics-card model, else a paid service within your monthly budget (asks past it),
+      else the CPU. Falls back when one fails. Every picture recorded with what made it and the cost. Adapters for
+      ComfyUI, Gemini ("Nano Banana") and stable-diffusion.cpp.
+- [ ] Pictures: the photo view with comments; try the real backends on the laptop; set up ComfyUI and a model
+      automatically when the card can run one.
 - [x] **Shared browser** (`linuxai-core browser`, core `src/browser.rs`; see [BROWSER.md](BROWSER.md)): one
       real Chromium, headless when there's no screen, that you and the AI use at the same time. Private pipe, no
       port. Per-tab owners: the AI reads any tab and acts only in its own (in its own window); tabs are handed back

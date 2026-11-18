@@ -8,12 +8,14 @@
 //!   linuxai-core reach                                               message the human when they're needed
 //!   linuxai-core mail ingest FILE.eml... | mail watch                email in, claims out (never instructions)
 //!   linuxai-core browser [--headless] [--profile DIR]                 the browser the AI and the human share
+//!   linuxai-core image caps | image do '<json>'                       make and edit pictures
 
 mod browser;
 mod client;
 mod core;
 mod engine;
 mod host;
+mod images;
 mod mail;
 mod memory;
 mod playbooks;
@@ -267,6 +269,20 @@ fn main() {
             args.iter().any(|a| a == "--headless"),
             Some(client::Client::new(arg(&args, "--core").map(PathBuf::from).unwrap_or_else(default_socket))),
         ),
+        Some("image") => {
+            let client = client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket));
+            let cfg = images::ImageConfig::from_env();
+            let req: Value = match args.get(2).map(String::as_str) {
+                Some("caps") => json!({"op": "caps"}),
+                Some("do") => serde_json::from_str(args.get(3).map(String::as_str).unwrap_or("")).unwrap_or(json!({})),
+                _ => {
+                    eprintln!("usage: linuxai-core image caps | image do '<json>'");
+                    std::process::exit(2);
+                }
+            };
+            println!("{}", images::handle(&req, &client, &cfg));
+            Ok(())
+        }
         Some("snapshot") => {
             println!("{}", serde_json::to_string_pretty(&host::snapshot(true, &Value::Null)).unwrap());
             Ok(())
@@ -276,7 +292,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image  (see source header)");
             std::process::exit(2);
         }
     };

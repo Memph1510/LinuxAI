@@ -9,11 +9,13 @@ Trust model (the human is the guardrail):
 
 from __future__ import annotations
 
+import base64
 import difflib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -286,6 +288,25 @@ CORE_TOOLS = [
 ]
 CORE_TOOL_NAMES = {t["name"] for t in CORE_TOOLS}
 
+IMAGE_TOOLS = [
+    _tool("image",
+          "Make and edit pictures. ops: caps (what this machine can do and which backends are set up); "
+          "info {input}; edit {input, ops, format?, name?}: precise local edits, ops is a list like "
+          "[{\"crop\": \"800x600+0+0\"}, {\"resize\": \"50%\"}, {\"rotate\": 90}, {\"flip\": \"horizontal\"}, "
+          "{\"brightness\": 10, \"contrast\": 5}, {\"grayscale\": true}, {\"sharpen\": 1}, {\"blur\": 2}, "
+          "{\"text\": \"SALE\", \"gravity\": \"south\", \"size\": 48, \"color\": \"white\"}, {\"strip\": true}]; "
+          "generate {prompt, size?, inputs?, backend?, approved?}: make a picture from a description, or change "
+          "pictures (inputs) as described; it picks the best backend here (local graphics card, paid service within "
+          "budget, CPU). Past the monthly budget it says so: ask the human, then send approved: true. "
+          "You see the result; check it against what was asked before calling it done.",
+          {"op": {"type": "string", "enum": ["caps", "info", "edit", "generate"]}, "input": {"type": "string"},
+           "ops": {"type": "array", "items": {"type": "object"}}, "format": {"type": "string"}, "name": {"type": "string"},
+           "prompt": {"type": "string"}, "size": {"type": "string", "description": "e.g. 1024x1024"},
+           "inputs": {"type": "array", "items": {"type": "string"}},
+           "backend": {"type": "string", "enum": ["local_gpu", "paid", "local_cpu"]}, "approved": {"type": "boolean"}},
+          ["op"]),
+]
+
 BROWSER_TOOLS = [
     _tool("browser",
           "The browser you share with the human (real Chromium, their logins, used by both of you at once). "
@@ -364,7 +385,7 @@ class Toolbox:
         self.browser = browser    # linuxai.core_client.Core pointed at the shared browser organ, when it runs
 
     def tools(self) -> list[dict]:
-        tools = TOOLS + (CORE_TOOLS if self.core else []) + (BROWSER_TOOLS if self.browser else [])
+        tools = TOOLS + (CORE_TOOLS + IMAGE_TOOLS if self.core else []) + (BROWSER_TOOLS if self.browser else [])
         if self.mind:
             tools = [t for t in tools if t["name"] not in ("write_file", "edit_file")]
         return tools
@@ -802,6 +823,41 @@ class Toolbox:
         else:
             ui.out("\n" + ui.magenta("◆ ") + text)
         return "Sent."
+
+    def t_image(self, op: str, **kw: Any) -> Any:
+        binary = os.environ.get("LINUXAI_CORE_BIN") or shutil.which("linuxai-core") or str(
+            Path(__file__).resolve().parents[1] / "core" / "target" / "release" / "linuxai-core")
+        req = {"op": op, **{k: v for k, v in kw.items() if v is not None}}
+        for k in ("input",):
+            if isinstance(req.get(k), str):
+                req[k] = str(self._path(req[k]))
+        if isinstance(req.get("inputs"), list):
+            req["inputs"] = [str(self._path(p)) for p in req["inputs"] if isinstance(p, str)]
+        out = subprocess.run([binary, "image", "do", json.dumps(req), "--socket", getattr(self.core, "path", "")],
+                             capture_output=True, text=True, timeout=1800)
+        try:
+            r = json.loads(out.stdout)
+        except ValueError:
+            return f"Error: {out.stderr.strip() or 'no answer from the image organ'}"
+        if r.get("needs_ok") and not self.mind:
+            # Past the budget. In the session the human is right here: ask them now.
+            if self.asker(r["error"].split(" Ask the human")[0] + " Go ahead?", ["yes", "no"]).strip().lower() in ("yes", "y"):
+                return self.t_image(op, **{**kw, "approved": True})
+            return "The human said no to going over this month's picture budget."
+        if not r.get("ok"):
+            return f"Error: {r.get('error')}" + (f" (tried: {json.dumps(r['tried'])})" if r.get("tried") else "")
+        if op not in ("edit", "generate"):
+            return json.dumps(r, indent=1)
+        text = (f"Saved {r['path']} ({r['info'].get('width')}x{r['info'].get('height')}) via {r['backend']}"
+                + (f", cost ${r['cost_cents'] / 100:.2f}" if r.get("cost_cents") else "")
+                + (f"; tried first: {json.dumps(r['tried'])}" if r.get("tried") else "") + f". Record {r['id']}.")
+        p = Path(r["path"])
+        media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+        if p.suffix.lower() in media and p.stat().st_size <= 3_500_000:
+            return [{"type": "text", "text": text},
+                    {"type": "image", "source": {"type": "base64", "media_type": media[p.suffix.lower()],
+                                                 "data": base64.b64encode(p.read_bytes()).decode()}}]
+        return text + " (too large or not previewable; use edit with a resize to look at it)"
 
     def t_browser(self, op: str, **kw: Any) -> Any:
         if not self.browser:
