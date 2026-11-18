@@ -110,9 +110,11 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
       description on a local model when there's a capable graphics card (FLUX, Qwen-Image-Edit via ComfyUI),
       otherwise a paid service within a budget you set, otherwise slow CPU generation. Nothing is off the table.
       The photo view is where you see results and comment to refine them.
-- [ ] **LinuxAI browser on a Chromium-based engine** (leaning), working headless for the AI and shared, so you
-      and the AI can use the same browser at the same time. Research how best to share one browser between a
-      person and the AI before choosing the exact setup. The same engine draws the Workspace screens.
+- [x] **Shared browser** (`linuxai-core browser`, core `src/browser.rs`; see [BROWSER.md](BROWSER.md)): one
+      real Chromium, headless when there's no screen, that you and the AI use at the same time. Private pipe, no
+      port. Per-tab owners: the AI reads any tab and acts only in its own (in its own window); tabs are handed back
+      and forth, and a handoff texts you. Pages are outside information.
+- [ ] Browser: live view for the Workspace screen and the phone; browser steps in the action language.
 
 ### Open: should the OS's own prompts live in the prompt library?
 

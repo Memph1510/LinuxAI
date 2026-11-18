@@ -7,7 +7,9 @@
 //!   linuxai-core verbs                                               list verbs
 //!   linuxai-core reach                                               message the human when they're needed
 //!   linuxai-core mail ingest FILE.eml... | mail watch                email in, claims out (never instructions)
+//!   linuxai-core browser [--headless] [--profile DIR]                 the browser the AI and the human share
 
+mod browser;
 mod client;
 mod core;
 mod engine;
@@ -259,6 +261,12 @@ fn main() {
         }
         Some("reach") => reach::run(client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket))),
         Some("mail") => mail_cmd(&args),
+        Some("browser") => browser::run(
+            arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(browser::default_socket),
+            arg(&args, "--profile").map(PathBuf::from).unwrap_or_else(browser::default_profile),
+            args.iter().any(|a| a == "--headless"),
+            Some(client::Client::new(arg(&args, "--core").map(PathBuf::from).unwrap_or_else(default_socket))),
+        ),
         Some("snapshot") => {
             println!("{}", serde_json::to_string_pretty(&host::snapshot(true, &Value::Null)).unwrap());
             Ok(())
@@ -268,7 +276,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser  (see source header)");
             std::process::exit(2);
         }
     };

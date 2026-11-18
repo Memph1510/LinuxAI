@@ -376,6 +376,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "ego-tree",
+ "libc",
  "mail-parser",
  "rusqlite",
  "scraper",

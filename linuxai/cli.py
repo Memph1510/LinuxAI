@@ -75,6 +75,13 @@ def connect_core():
     return core if core.available() else None
 
 
+def shared_browser(core):
+    """The browser organ, on the OS (alongside the core). It may start after us: requests just fail until it's up."""
+    from .core_client import Core, browser_socket
+
+    return Core(path=browser_socket(), timeout=120) if core else None
+
+
 def follow_activity(core, pending: dict) -> None:
     """Print what the system is doing as it happens (runs in a background thread)."""
     import threading
@@ -149,7 +156,7 @@ def repl(config: Config) -> None:
 
     memory = Memory(config)
     core = connect_core()
-    toolbox = Toolbox(config, memory, core=core)
+    toolbox = Toolbox(config, memory, core=core, browser=shared_browser(core))
     agent = Agent(config, memory, toolbox)
     _setup_readline(config)
     ui.out(BANNER.format(title=ui.bold("LinuxAI"), mode=config.mode, model=config.model,
@@ -227,7 +234,7 @@ def mind(config: Config) -> None:
         time.sleep(3)
     config.mode = "auto"
     memory = Memory(config)
-    toolbox = Toolbox(config, memory, core=core, mind=True)
+    toolbox = Toolbox(config, memory, core=core, mind=True, browser=shared_browser(core))
     agent = Agent(config, memory, toolbox)
     print("linuxai mind: connected to the core", flush=True)
 

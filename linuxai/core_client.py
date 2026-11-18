@@ -17,6 +17,13 @@ def default_socket() -> str:
     return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "linuxai-core.sock")
 
 
+def browser_socket() -> str:
+    """Where the shared browser organ (linuxai-core browser) listens."""
+    if os.environ.get("LINUXAI_BROWSER_SOCKET"):
+        return os.environ["LINUXAI_BROWSER_SOCKET"]
+    return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "linuxai-browser.sock")
+
+
 class CoreError(Exception):
     pass
 
