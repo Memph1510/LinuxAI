@@ -38,6 +38,26 @@ instructions aimed at an automated system, and you're told about it.
 The worst a hostile email can do is supply a wrong *fact*, such as a misstated rate. That's caught like any bad
 information: your playbook rules, anomaly checks and the second look.
 
+## Claims, not facts: people make mistakes
+
+Emails mostly come from people, and people misquote, round, get dates wrong and send corrections. So what an email
+says is treated as **claims** to weigh:
+
+- **Code checks each claim** for things that don't add up: a rate that doesn't match the stated per-mile figure for
+  the miles, delivery before pickup, "Thursday 11/20" when the 20th is a Friday, a pickup date before the email was
+  sent, two different amounts for the same load. The extractor also notes where an email contradicts itself. Each
+  problem is attached to the claim (⚠) and shown wherever the claim is used, including your approval messages.
+- **Corrections replace what they correct.** A later message from the same sender about the same load (same
+  reference, or a reply about the same lane) marks the earlier claim as *superseded*. A plan that cites the old
+  one is refused and pointed to the newer one.
+- **Each sender has a track record**: how many messages, how many corrections, and how many of their claims turned
+  out to be confirmed or contradicted (the AI records this as it learns, `confirm_fact`). Every claim carries the
+  record its sender had when it arrived.
+- **Each correspondent has a profile**, a playbook in `contacts/<domain>/<name>` with the sections
+  *Relationship* (broker, family, vendor…), *Reliability*, *How they communicate*, *How I read them* (the lens:
+  skeptical of a broker's numbers, generous with family) and *How I respond*. The AI reads it before judging
+  their messages and keeps it current with the same protected small edits as any playbook. You can edit it too.
+
 ## Setting it up
 
 `/etc/linuxai/mail.env`:

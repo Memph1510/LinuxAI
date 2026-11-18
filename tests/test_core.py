@@ -591,3 +591,64 @@ def test_web_results_count_as_outside_information(env, live_core):
     assert live_core.request("object", id=fid)["object"]["source"]["from"] == "dat.com"
     agent.reset()
     assert not tb.outside_seen
+
+
+# ---- claims, not facts: accuracy, corrections, track records, profiles -----------------------------
+
+def test_code_checks_what_doesnt_add_up():
+    good = {"rate_cents": 178000, "miles": 781, "rate_per_mile_cents": 228, "pickup": "2026-11-20T16:00:00-06:00",
+            "delivery": "2026-11-23T08:00:00-05:00", "pickup_as_written": "Fri 11/20 4pm"}
+    assert M.check_load(good, [{"amount_cents": 178000, "direction": "offered_to_us"}], "2026-11-17T16:31:00+00:00") == []
+    bad = {**good, "rate_per_mile_cents": 238, "delivery": "2026-11-19T08:00:00-05:00", "pickup_as_written": "Thursday 11/20"}
+    issues = M.check_load(bad, [{"amount_cents": 164000, "direction": "offered_to_us"}], "2026-11-25T10:00:00+00:00")
+    text = " | ".join(issues)
+    assert "is $2.28/mi, but the email says $2.38/mi" in text
+    assert "delivery is before pickup" in text
+    assert "pickup says Thursday, but 2026-11-20 is a Friday" in text
+    assert "before the email was sent" in text
+    assert "different amounts: $1,640.00, $1,780.00" in text
+    assert M.contact_category("Dana.Ruiz@Hollis-Logistics.com") == "contacts/hollis-logistics-com/dana-ruiz"
+
+
+def _offer_email(rate_text, msg_id, reply_to=None):
+    m = EmailMessage()
+    m["From"] = "Dana Ruiz <dana@hollis-logistics.com>"
+    m["To"] = "me@example.com"
+    m["Subject"] = "Re: Load HL-2209" if reply_to else "Load HL-2209"
+    m["Date"] = "Tue, 17 Nov 2026 10:31:00 -0600"
+    m["Message-ID"] = msg_id
+    if reply_to:
+        m["In-Reply-To"] = reply_to
+    m["Authentication-Results"] = "mx.linuxai.local; dmarc=pass"
+    m.set_content(rate_text)
+    return m.as_bytes()
+
+
+def test_a_correction_replaces_the_claim_it_corrects_and_builds_the_record(env, live_core, tmp_path):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    load = dict(origin="Dallas, TX", destination="Atlanta, GA", miles=781, reference="HL-2209")
+    first = M.ingest(_offer_email("Rate $1,640.", "<m1@hollis-logistics.com>"), live_core,
+                     M.Extractor(FakeExtractorClient(_facts(loads=[M.Load(**load, rate_cents=164000)])), "m"), tmp_path / "mail", "mx.linuxai.local")
+    second = M.ingest(_offer_email("Sorry, typo: rate is $1,780.", "<m2@hollis-logistics.com>", reply_to="<m1@hollis-logistics.com>"),
+                      live_core, M.Extractor(FakeExtractorClient(_facts(category="load_offer", loads=[M.Load(**load, rate_cents=178000)],
+                                                                         money=[M.Money(amount_cents=178000, direction="offered_to_us", what="rate")])), "m"),
+                      tmp_path / "mail", "mx.linuxai.local")
+    old_id = next(f for f in first["facts"] if f.startswith("obj:load_offer/"))
+    new_id = next(f for f in second["facts"] if f.startswith("obj:load_offer/"))
+    assert second["corrected"] == [old_id]
+    assert live_core.request("object", id=old_id)["object"]["superseded_by"] == new_id
+    assert live_core.request("object", id=new_id)["object"]["corrects"] == old_id
+    person = M.correspondent(live_core, "dana@hollis-logistics.com")
+    assert (person["messages"], person["corrections"]) == (2, 1)
+    assert second["contact"] == "contacts/hollis-logistics-com/dana"
+    # The second claim carries the record as it stood when it arrived.
+    assert "1 message(s)" in live_core.request("object", id=new_id)["object"]["reliability"]["track_record"]
+    # Learning whether a claim was right builds the record further.
+    assert tb.t_confirm_fact(new_id, "confirmed", "rate con matched") == "Recorded as confirmed."
+    assert M.correspondent(live_core, "dana@hollis-logistics.com")["confirmed"] == 1
+    # A plan can't rest on the corrected (old) claim.
+    plan = {"plan": "p", "taint": "outside", "assess": {"confidence": 0.9, "consequences": ["x"], "outcomes": ["y"]},
+            "reasoning": {"facts": [old_id]}, "steps": [{"do": "run", "program": "true"}]}
+    r = live_core.request("submit", plan=plan, source="ai")
+    assert "was corrected by" in r["report"]["errors"][0]

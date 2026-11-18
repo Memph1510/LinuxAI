@@ -923,3 +923,18 @@ fn the_human_sees_the_reasoning_modules() {
         assert!(q.contains(part), "missing {part:?} in {q}");
     }
 }
+
+#[test]
+fn claims_show_their_checks_and_a_corrected_fact_cannot_be_cited() {
+    let (c, _) = core();
+    let old = offer(&c, true);
+    let new = offer(&c, true);
+    c.handle(&json!({"op": "object_patch", "id": new, "fields": {"corrects": old, "checks": ["rate works out to $2.28/mi, the email says $2.38/mi"],
+        "reliability": {"track_record": "12 messages, 2 corrections, 1 contradicted"}, "source": {"from": "forged"}}}));
+    c.handle(&json!({"op": "object_patch", "id": old, "fields": {"superseded_by": new}}));
+    let r = c.submit(&outside_plan(json!([old])), "ai");
+    assert!(r["report"]["errors"][0].as_str().unwrap().contains("was corrected by"), "{r}");
+    let q = c.submit(&outside_plan(json!([new])), "ai")["result"]["wait"]["question"].as_str().unwrap().to_string();
+    assert!(q.contains("⚠ rate works out to $2.28/mi") && q.contains("sender's record: 12 messages") && q.contains("corrects"), "{q}");
+    assert!(q.contains("dana@hollis-logistics.com"), "provenance can't be patched: {q}");
+}

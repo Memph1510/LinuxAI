@@ -249,6 +249,21 @@ impl Memory {
         );
     }
 
+    /// Merge fields into a stored object (provenance is kept).
+    pub fn patch_object(&self, id: &str, patch: &Value) -> bool {
+        let db = self.c();
+        let Ok(f): Result<String, _> = db.query_row("SELECT fields FROM objects WHERE id=?1", params![id], |r| r.get(0)) else { return false };
+        let mut v: Value = serde_json::from_str(&f).unwrap_or(json!({}));
+        if let (Value::Object(m), Value::Object(p)) = (&mut v, patch) {
+            for (k, x) in p {
+                if k != "source" && k != "trust" {
+                    m.insert(k.clone(), x.clone());
+                }
+            }
+        }
+        db.execute("UPDATE objects SET fields=?1, updated=?2 WHERE id=?3", params![v.to_string(), now(), id]).map(|n| n > 0).unwrap_or(false)
+    }
+
     /// One stored object by id.
     pub fn object(&self, id: &str) -> Option<Value> {
         let db = self.c();

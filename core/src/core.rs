@@ -364,6 +364,7 @@ impl Core {
             op if op.starts_with("task") => self.task_op(op, req),
             op if op.starts_with("playbook") => self.playbook_op(op, req),
             "object_put" | "find" => self.object_op(op, req),
+            "object_patch" => json!({"ok": self.mem.patch_object(req["id"].as_str().unwrap_or(""), &req["fields"])}),
             "object" => match self.mem.object(req["id"].as_str().unwrap_or("")) {
                 Some(o) => json!({"ok": true, "object": o}),
                 None => json!({"ok": false, "error": "no such object"}),

@@ -400,6 +400,8 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
         }
         for f in cited {
             match f.as_str().and_then(|id| mem.object(id)) {
+                Some(o) if o["superseded_by"].is_string() => r.errors.push(format!(
+                    "fact {} was corrected by {}: cite the newer one", display(&f), display(&o["superseded_by"]))),
                 Some(o) => r.outside_facts.push(o),
                 None => r.errors.push(format!("reasoning.facts: no stored fact {f}")),
             }
@@ -1135,8 +1137,22 @@ pub fn describe_fact(f: &Value) -> String {
         Some(false) => "sender NOT verified",
         None => "unverified",
     };
-    let skip = ["id", "type", "source", "trust", "created", "handle", "category"];
+    let skip = ["id", "type", "source", "trust", "created", "handle", "category", "checks", "reliability", "corrects", "status"];
     let detail: Vec<String> = f.as_object().map(|m| m.iter().filter(|(k, v)| !skip.contains(&k.as_str()) && !v.is_null() && !v.is_object() && !v.is_array())
         .take(6).map(|(k, v)| format!("{k}: {}", display(v))).collect()).unwrap_or_default();
-    format!("{typ} from {from} ({auth}): {}", detail.join(", "))
+    let mut line = format!("{typ} from {from} ({auth}): {}", detail.join(", "));
+    if let Some(rec) = f["reliability"]["track_record"].as_str() {
+        line.push_str(&format!(" [sender's record: {rec}]"));
+    }
+    if let Some(st) = f["status"].as_str() {
+        line.push_str(&format!(" [{st}]"));
+    }
+    if let Some(c) = f["corrects"].as_str() {
+        line.push_str(&format!(" [corrects {c}]"));
+    }
+    let checks: Vec<String> = f["checks"].as_array().map(|a| a.iter().map(display).collect()).unwrap_or_default();
+    if !checks.is_empty() {
+        line.push_str(&format!(" ⚠ {}", checks.join("; ")));
+    }
+    line
 }
