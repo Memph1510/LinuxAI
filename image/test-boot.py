@@ -51,6 +51,10 @@ CHECKS = [
      " sudo -u linuxai python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/user/$(id -u linuxai)/linuxai-browser.sock');"
      "s.sendall(b'{\\\"op\\\":\\\"open\\\",\\\"url\\\":\\\"data:text/html,<p>Hello from LinuxAI</p>\\\"}\\\\n');print(s.makefile().readline())\" | grep -o 'Hello from LinuxAI' | head -1",
      r"^Hello from LinuxAI"),
+    ("pictures: a precise edit runs locally (ImageMagick)",
+     "sudo -u linuxai sh -c 'cd /tmp && magick -size 400x300 xc:orange t.png && LINUXAI_IMAGES=/tmp/pics linuxai-core image do "
+     "\"{\\\"op\\\":\\\"edit\\\",\\\"input\\\":\\\"/tmp/t.png\\\",\\\"ops\\\":[{\\\"resize\\\":\\\"50%\\\"}]}\"' | grep -o '\"width\":200'",
+     r'"width":200'),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),

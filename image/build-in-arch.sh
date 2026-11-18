@@ -24,6 +24,8 @@ install -Dm755 "$WORK/target/release/linuxai-core" "$PROFILE/airootfs/usr/local/
 echo "==> prompt library"
 mkdir -p "$PROFILE/airootfs/home/linuxai/prompts"
 cp -r "$SRC/library/prompts/." "$PROFILE/airootfs/home/linuxai/prompts/"
+mkdir -p "$PROFILE/airootfs/usr/share/linuxai/image-backends"
+cp -r "$SRC/library/image-backends/." "$PROFILE/airootfs/usr/share/linuxai/image-backends/"
 
 echo "==> installing the LinuxAI AI layer (python) into /opt/linuxai"
 rm -rf "$WORK/pysrc" && mkdir -p "$WORK/pysrc" && cp -r "$SRC/pyproject.toml" "$SRC/README.md" "$SRC/linuxai" "$WORK/pysrc/"
