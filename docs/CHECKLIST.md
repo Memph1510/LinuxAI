@@ -35,6 +35,10 @@ within each stage.
       (hidden text removed), tool-less extractor into typed facts, raw mail kept out of the AI's reach.
       Not yet: sending replies
 - [x] Reasoning modules in plans (facts, rules applied, chain, decision, downstream), shown in approvals
+- [x] OS parts in Rust: the reach service and the whole email organ moved from Python into the core binary
+      (`linuxai-core reach`, `linuxai-core mail`). Python is left only where the AI model is called (the mind,
+      the session, `cortex extract`). Reach: 4 MB of memory in Rust vs 75 MB for a Python process
+- [ ] Later: port the model-facing layer (mind, session, extractor) to Rust once its behavior settles
 - [ ] Multi-day soak on the real laptop (same harness, `--minutes 4320`)
 - [x] Second look before acting: assessments required; unknowns, low confidence and first-time situations go
       to the human; first-time situations need research

@@ -81,7 +81,7 @@ In the system (built):
 - The core sends follow-ups (a `plan.reminder` event). At the deadline it takes the fallback, tells you, and
   continues the plan.
 - Approvals also say why they're asked, and they schedule follow-ups.
-- `cortex reach` (the `linuxai-reach` service) turns these into messages and sends them through
+- `linuxai-core reach` (the `linuxai-reach` service, Rust) turns these into messages and sends them through
   `LINUXAI_NOTIFY_CMD`, which can be any SMS gateway, push service or chat bot, until the LinuxAI Android app
   exists. No AI model is needed for this, so it works even when the AI is offline.
 

@@ -732,9 +732,9 @@ class Toolbox:
         self._core("object_patch", id=id, fields={"status": verdict, "status_note": note})
         sender = (obj.get("source") or {}).get("from")
         if sender:
-            from .mail import correspondent
-            c = correspondent(self.core, sender)
-            self._core("object_patch", id=c["id"], fields={verdict: c.get(verdict, 0) + 1})
+            found = self._core("find", spec={"type": "correspondent", "where": {"address": sender}}).get("found") or []
+            if found:
+                self._core("object_patch", id=found[0]["id"], fields={verdict: found[0].get(verdict, 0) + 1})
         return f"Recorded as {verdict}."
 
     def t_record_fact(self, type: str, fields: Any, url: str) -> str:

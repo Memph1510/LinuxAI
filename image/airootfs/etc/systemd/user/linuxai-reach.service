@@ -3,7 +3,7 @@ Description=LinuxAI reach (tells you when the AI needs you)
 
 [Service]
 EnvironmentFile=-%h/.config/linuxai/env
-ExecStart=/usr/local/bin/cortex reach
+ExecStart=/usr/local/bin/linuxai-core reach
 Restart=on-failure
 RestartSec=10
 

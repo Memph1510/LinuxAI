@@ -297,38 +297,6 @@ def mind(config: Config) -> None:
             on_mail(d)
 
 
-def mail_cmd(config: Config, words: list[str]) -> None:
-    """cortex mail ingest FILE.eml... | cortex mail watch: email in, facts out (headless)."""
-    import time
-
-    import anthropic
-
-    from .core_client import Core
-    from .mail import Extractor, ingest, poll_imap
-
-    core = Core()
-    if not core.available():
-        sys.exit("the LinuxAI core isn't running")
-    extractor = Extractor(anthropic.Anthropic(), os.environ.get("LINUXAI_EXTRACT_MODEL", config.model))
-    authserv = os.environ.get("LINUXAI_AUTHSERV_ID") or None
-    if words[:1] == ["ingest"]:
-        for f in words[1:]:
-            r = ingest(Path(f).read_bytes(), core, extractor, config.mail_dir, authserv)
-            print(f"{f}: {r['category']}, message {r['message']}, {len(r['facts'])} fact(s)")
-    elif words[:1] == ["watch"]:
-        every = int(os.environ.get("LINUXAI_MAIL_EVERY", "60"))
-        while True:
-            try:
-                n = poll_imap(core, extractor, config.mail_dir, authserv)
-                if n:
-                    print(f"ingested {n} message(s)", flush=True)
-            except Exception as e:  # noqa: BLE001 - keep watching
-                print(f"mail: {e}", flush=True)
-            time.sleep(every)
-    else:
-        sys.exit("usage: cortex mail ingest FILE.eml... | cortex mail watch")
-
-
 def load_env(config: Config) -> None:
     """Read KEY=value lines from the LinuxAI env file (where the API key is kept)."""
     path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "linuxai" / "env"
@@ -405,11 +373,9 @@ def main(argv: list[str] | None = None) -> None:
         repl(config)
     elif words == ["mind"]:
         mind(config)
-    elif words[:1] == ["mail"]:
-        mail_cmd(config, words[1:])
-    elif words == ["reach"]:
-        from .reach import run as reach_run
-        reach_run()
+    elif words == ["extract"]:
+        from .mail import main as extract_main
+        sys.exit(extract_main(os.environ.get("LINUXAI_EXTRACT_MODEL", config.model)))
     elif words == ["observe"]:
         from .observer import run
         run()

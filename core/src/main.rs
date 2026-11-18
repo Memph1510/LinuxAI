@@ -5,12 +5,17 @@
 //!   linuxai-core check PLAN.json                                     check a plan without running it
 //!   linuxai-core snapshot                                            print what the host senses right now
 //!   linuxai-core verbs                                               list verbs
+//!   linuxai-core reach                                               message the human when they're needed
+//!   linuxai-core mail ingest FILE.eml... | mail watch                email in, claims out (never instructions)
 
+mod client;
 mod core;
 mod engine;
 mod host;
+mod mail;
 mod memory;
 mod playbooks;
+mod reach;
 mod tasks;
 mod verbs;
 
@@ -191,6 +196,50 @@ fn ctl(args: &[String]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// linuxai-core mail ingest FILE.eml... | linuxai-core mail watch
+fn mail_cmd(args: &[String]) -> std::io::Result<()> {
+    let client = client::Client::new(arg(args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket));
+    let cfg = mail::MailConfig::from_env();
+    match args.get(2).map(String::as_str) {
+        Some("ingest") => {
+            // Files are the arguments that aren't a --flag or a flag's value.
+            let mut files = Vec::new();
+            let mut it = args.iter().skip(3);
+            while let Some(a) = it.next() {
+                if a.starts_with("--") {
+                    it.next();
+                } else {
+                    files.push(a);
+                }
+            }
+            for f in files {
+                let raw = std::fs::read(f)?;
+                match mail::ingest(&raw, &client, &cfg) {
+                    Ok(r) => println!("{f}: {}", r),
+                    Err(e) => eprintln!("{f}: {e}"),
+                }
+            }
+            Ok(())
+        }
+        Some("watch") => {
+            client.wait_until_up();
+            let every: u64 = std::env::var("LINUXAI_MAIL_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+            loop {
+                match mail::poll_imap(&client, &cfg) {
+                    Ok(0) => {}
+                    Ok(n) => eprintln!("linuxai mail: ingested {n} message(s)"),
+                    Err(e) => eprintln!("linuxai mail: {e}"),
+                }
+                std::thread::sleep(Duration::from_secs(every));
+            }
+        }
+        _ => {
+            eprintln!("usage: linuxai-core mail ingest FILE.eml... | linuxai-core mail watch");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let result = match args.get(1).map(String::as_str) {
@@ -204,6 +253,8 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&r).unwrap());
             Ok(())
         }
+        Some("reach") => reach::run(client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket))),
+        Some("mail") => mail_cmd(&args),
         Some("snapshot") => {
             println!("{}", serde_json::to_string_pretty(&host::snapshot(true, &Value::Null)).unwrap());
             Ok(())
@@ -213,7 +264,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail  (see source header)");
             std::process::exit(2);
         }
     };
