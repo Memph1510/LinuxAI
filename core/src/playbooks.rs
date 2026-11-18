@@ -375,6 +375,15 @@ impl Core {
         let yes = kind == "plan.finished" && read_approval(answer.as_str().unwrap_or("")).is_some();
         p["status"] = json!(if yes { "applied" } else { "declined" });
         self.mem.pb_save_proposal(&p);
+        if p["kind"] == "prompt" {
+            let name = p["name"].as_str().unwrap_or("").to_string();
+            if yes {
+                self.write_prompt(&name, p["text"].as_str().unwrap_or(""), &format!("{} (approved by you)", p["reason"].as_str().unwrap_or("")));
+            } else {
+                self.bus.emit(&self.mem, "prompt.declined", json!({"name": name, "proposal": pid}));
+            }
+            return;
+        }
         let cat = p["category"].as_str().unwrap_or("").to_string();
         if yes {
             let edits = p["edits"].as_array().cloned().unwrap_or_default();

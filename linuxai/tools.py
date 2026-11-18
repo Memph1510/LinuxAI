@@ -272,6 +272,15 @@ CORE_TOOLS = [
           "Store a fact you found outside (on a web page, in a search result) so a plan can cite it: its type "
           "(e.g. lane_rate, weather, regulation, reputation), its fields, and the URL it came from.",
           {"type": {"type": "string"}, "fields": {"type": "object"}, "url": {"type": "string"}}, ["type", "fields", "url"]),
+    _tool("find_prompts", "Search the prompt library (reusable prompts the human keeps), best-performing first.",
+          {"query": {"type": "string"}, "model": {"type": "string", "enum": ["local", "claude"]}}, []),
+    _tool("use_prompt", "Fill in a prompt from the library with values for its {{slots}}; returns the finished prompt.",
+          {"name": {"type": "string"}, "vars": {"type": "object"}}, ["name", "vars"]),
+    _tool("prompt_feedback", "After using a library prompt, record whether it helped.",
+          {"name": {"type": "string"}, "helped": {"type": "boolean"}}, ["name", "helped"]),
+    _tool("suggest_prompt", "Suggest a new prompt or an improvement for the library (full markdown with a header). Held for the human's OK.",
+          {"name": {"type": "string", "description": "e.g. freight/counter-offer"}, "text": {"type": "string"},
+           "reason": {"type": "string"}}, ["name", "text", "reason"]),
     _tool("find_cases", "Find past cases in a category, optionally filtered by variables ({field: value} or {field: [op, value]}).",
           {"category": {"type": "string"}, "where": {"type": "object"}, "last": {"type": "integer"}}, ["category"]),
 ]
@@ -744,6 +753,25 @@ class Toolbox:
                        "source": {"kind": "web", "url": url, "from": host, "authenticated": None}})
         self.outside_seen = True
         return f"Stored as {r.get('id')}; cite it in reasoning.facts." if r.get("ok") else f"Error: {r.get('error')}"
+
+    def t_find_prompts(self, query: str = "", model: str | None = None) -> str:
+        r = self._core("prompts", query=query, **({"model": model} if model else {}))
+        rows = r.get("prompts") or []
+        if not rows:
+            return "No matching prompts."
+        return "\n".join(f"- {p['name']}: {p['title']} [{p['model']}] slots: {', '.join(p['slots'])} "
+                         f"(used {p['uses']}, helped {p['helped']}, hurt {p['hurt']})" for p in rows[:40])
+
+    def t_use_prompt(self, name: str, vars: Any) -> str:
+        r = self._core("prompt_render", name=name, vars=vars if isinstance(vars, dict) else {})
+        return r["text"] if r.get("ok") else f"Error: {r.get('error')}"
+
+    def t_prompt_feedback(self, name: str, helped: bool) -> str:
+        return "OK" if self._core("prompt_feedback", name=name, helped=helped).get("ok") else "No such prompt."
+
+    def t_suggest_prompt(self, name: str, text: str, reason: str) -> str:
+        r = self._core("prompt_suggest", name=name, text=text, reason=reason)
+        return "Held for the human's OK." if r.get("ok") else f"Error: {r.get('error')}"
 
     def t_find_cases(self, category: str, where: Any = None, last: int = 20) -> str:
         cond = {"category": category, **(where if isinstance(where, dict) else {})}

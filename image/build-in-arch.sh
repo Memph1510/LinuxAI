@@ -21,6 +21,10 @@ cp -a "$SRC/image/airootfs/." "$PROFILE/airootfs/"
 grep -v '^#' "$SRC/image/packages.extra" >> "$PROFILE/packages.x86_64"
 install -Dm755 "$WORK/target/release/linuxai-core" "$PROFILE/airootfs/usr/local/bin/linuxai-core"
 
+echo "==> prompt library"
+mkdir -p "$PROFILE/airootfs/home/linuxai/prompts"
+cp -r "$SRC/library/prompts/." "$PROFILE/airootfs/home/linuxai/prompts/"
+
 echo "==> installing the LinuxAI AI layer (python) into /opt/linuxai"
 rm -rf "$WORK/pysrc" && mkdir -p "$WORK/pysrc" && cp -r "$SRC/pyproject.toml" "$SRC/README.md" "$SRC/linuxai" "$WORK/pysrc/"
 python -m pip install --quiet --no-compile --break-system-packages --cert /etc/ssl/certs/ca-certificates.crt \

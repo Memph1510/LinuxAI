@@ -938,3 +938,39 @@ fn claims_show_their_checks_and_a_corrected_fact_cannot_be_cited() {
     assert!(q.contains("⚠ rate works out to $2.28/mi") && q.contains("sender's record: 12 messages") && q.contains("corrects"), "{q}");
     assert!(q.contains("dana@hollis-logistics.com"), "provenance can't be patched: {q}");
 }
+
+// ---- prompt library --------------------------------------------------------------------------------
+
+#[test]
+fn the_prompt_library_lists_fills_counts_and_holds_ai_changes() {
+    let (c0, _, dir) = core_with_playbooks();
+    let mut c = Arc::try_unwrap(c0).ok().unwrap();
+    c.prompt_dir = dir.join("prompts");
+    let c = Arc::new(c);
+    let counter = "---\ntitle: Counter a broker's offer\nuse: freight/negotiate\nmodel: any\ntags: email, negotiation\n---\nReply to {{broker}}: we can do {{lane}} at {{counter}}.";
+    assert_eq!(c.handle(&json!({"op": "prompt_put", "name": "freight/counter-offer", "text": counter}))["ok"], true);
+    c.handle(&json!({"op": "prompt_put", "name": "email/decline", "text": "---\ntitle: Decline politely\nmodel: local\n---\nDecline {{what}} kindly."}));
+    // Search and filter.
+    let l = c.handle(&json!({"op": "prompts", "query": "broker"}))["prompts"].clone();
+    assert_eq!(l.as_array().unwrap().len(), 1);
+    assert_eq!(l[0]["slots"], json!(["broker", "lane", "counter"]));
+    assert_eq!(c.handle(&json!({"op": "prompts", "model": "claude"}))["prompts"].as_array().unwrap().len(), 1, "local-only prompts are filtered out");
+    // Fill in; missing slots are refused.
+    let r = c.handle(&json!({"op": "prompt_render", "name": "freight/counter-offer", "vars": {"broker": "Dana", "lane": "DAL-ATL"}}));
+    assert_eq!(r["missing"], json!(["counter"]));
+    let r = c.handle(&json!({"op": "prompt_render", "name": "freight/counter-offer", "vars": {"broker": "Dana", "lane": "DAL-ATL", "counter": "$1,950"}}));
+    assert_eq!(r["text"], "Reply to Dana: we can do DAL-ATL at $1,950.");
+    // Feedback ranks prompts.
+    c.handle(&json!({"op": "prompt_feedback", "name": "email/decline", "helped": true}));
+    c.handle(&json!({"op": "prompt_feedback", "name": "email/decline", "helped": true}));
+    assert_eq!(c.handle(&json!({"op": "prompts"}))["prompts"][0]["name"], "email/decline");
+    // The AI's suggested change is held for the human; "yes" writes it.
+    let better = counter.replace("Reply to", "Thank {{broker}} and reply to");
+    let r = c.handle(&json!({"op": "prompt_suggest", "name": "freight/counter-offer", "text": better, "reason": "brokers respond better to thanks"}));
+    assert_eq!(r["held"], true, "{r}");
+    assert!(!std::fs::read_to_string(dir.join("prompts/freight/counter-offer.md")).unwrap().contains("Thank"));
+    c.handle(&json!({"op": "answer", "plan_id": r["plan_id"], "text": "yes"}));
+    assert!(std::fs::read_to_string(dir.join("prompts/freight/counter-offer.md")).unwrap().contains("Thank"));
+    assert_eq!(c.handle(&json!({"op": "prompt_put", "name": "../etc/x", "text": "---\ntitle: x\n---\ny"}))["ok"], false);
+    let _ = std::fs::remove_dir_all(&dir);
+}

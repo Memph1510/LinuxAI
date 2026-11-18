@@ -15,6 +15,7 @@ mod host;
 mod mail;
 mod memory;
 mod playbooks;
+mod prompts;
 mod reach;
 mod tasks;
 mod verbs;
@@ -115,6 +116,9 @@ fn daemon(args: &[String]) -> std::io::Result<()> {
     core.playbook_dir = arg(args, "--playbooks").map(PathBuf::from)
         .or_else(|| std::env::var("LINUXAI_PLAYBOOKS").ok().map(PathBuf::from))
         .unwrap_or_else(|| db.parent().map(|d| d.join("playbooks")).unwrap_or_else(|| "playbooks".into()));
+    core.prompt_dir = arg(args, "--prompts").map(PathBuf::from)
+        .or_else(|| std::env::var("LINUXAI_PROMPTS").ok().map(PathBuf::from))
+        .unwrap_or_else(|| db.parent().map(|d| d.join("prompts")).unwrap_or_else(|| "prompts".into()));
     core.file_gid = arg(args, "--group").or_else(|| std::env::var("LINUXAI_GROUP").ok()).as_deref().and_then(group_id);
     let core = Arc::new(core);
     core.recover();

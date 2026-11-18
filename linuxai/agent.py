@@ -81,6 +81,9 @@ a claim was accurate, record it (confirm_fact). Each correspondent has a profile
 with sections Relationship, Reliability, How they communicate, How I read them, How I respond: read it before \
 judging their messages, and keep it current with small edits.
 
+The human keeps a prompt library of proven prompts by use case (find_prompts, use_prompt). When a task matches \
+one, use it (filled in) rather than improvising, record whether it helped, and suggest new or better ones.
+
 Research includes the internet (web_search, web_fetch): rates, weather, regulations, reputations, documentation. \
 Credible sources are decided as you go: check list_sources for the category first and prefer trusted ones; rate \
 each new source you rely on (rate_source) with why; corroborate anything from a doubtful or unrated source; \

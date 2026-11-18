@@ -249,6 +249,15 @@ impl Memory {
         );
     }
 
+    /// Create (or replace) an object with a fixed id, for system bookkeeping like prompt stats.
+    pub fn put_object_with_id(&self, id: &str, typ: &str, fields: &Value) {
+        let db = self.c();
+        let t = now();
+        let _ = db.execute("INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,?2,NULL,?3,?4,?4)
+                            ON CONFLICT(id) DO UPDATE SET fields=excluded.fields, updated=excluded.updated",
+                           params![id, typ, fields.to_string(), t]);
+    }
+
     /// Merge fields into a stored object (provenance is kept).
     pub fn patch_object(&self, id: &str, patch: &Value) -> bool {
         let db = self.c();

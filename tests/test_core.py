@@ -544,3 +544,20 @@ def test_an_undecided_plan_carries_its_reason_for_the_human(live_core):
     live_core.request("submit", plan=plan, source="human")
     w = live_core.request("waiting")["plans"][0]["wait"]
     assert (w["why"], w["lean"], w["opts"]) == ("37% above usual", "ask about the new charge first", ["pay", "hold"])
+
+
+
+def test_the_ai_uses_the_prompt_library(env, live_core, tmp_path):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    lib = Path(__file__).resolve().parents[1] / "library" / "prompts"
+    text = (lib / "freight" / "counter-offer.md").read_text()
+    assert live_core.request("prompt_put", name="freight/counter-offer", text=text)["ok"]
+    listing = tb.t_find_prompts("broker")
+    assert "freight/counter-offer: Counter a broker's offer" in listing and "slots: broker, lane, offer" in listing
+    filled = tb.t_use_prompt("freight/counter-offer", {"broker": "Dana", "lane": "DAL-ATL", "offer": "$1,640", "counter": "$1,950",
+                                                       "reason": "reposted twice", "availability": "Friday 2pm"})
+    assert "reply to Dana about their DAL-ATL load" in filled and "{{" not in filled
+    assert "Error: fill in: availability" in tb.t_use_prompt("freight/counter-offer", {"broker": "x", "lane": "x", "offer": "x",
+                                                                                       "counter": "x", "reason": "x"})
+    assert tb.t_suggest_prompt("freight/thanks", "---\ntitle: Thank a broker\nuse: freight\n---\nThank {{broker}}.", "nice touch") == "Held for the human's OK."

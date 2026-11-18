@@ -101,7 +101,7 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
 
 ## Next pieces (decided 2026-11-18; any order; install to disk waits until you're at the laptop)
 
-- [ ] **Prompt library** (`~/prompts/`): markdown prompts by use case, with fill-in slots, which model they suit,
+- [x] **Prompt library** (`~/prompts/`, core `src/prompts.rs`, starter set in `library/prompts/`): markdown prompts by use case, with fill-in slots, which model they suit,
       helped/hurt counts, searchable. You edit them directly; the AI suggests changes, which are held for you.
       Starts with a starter set across freight, email, research, summaries, images and tasks.
 - [ ] **Image organ that doesn't depend on the laptop.** The OS detects what the machine can do (graphics card and

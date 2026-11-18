@@ -54,6 +54,8 @@ pub struct Core {
     /// Group that owns playbook files, so the human can edit them directly.
     pub file_gid: Option<u32>,
     pub retention: crate::memory::Retention,
+    /// Where the prompt library lives (markdown files the human reads and edits).
+    pub prompt_dir: std::path::PathBuf,
 }
 
 const RULE_MAX_PER_MINUTE: usize = 10;
@@ -76,6 +78,7 @@ impl Core {
             playbook_dir: std::env::var("LINUXAI_PLAYBOOKS").map(Into::into).unwrap_or_else(|_| "playbooks".into()),
             file_gid: None,
             retention: crate::memory::Retention::from_env(),
+            prompt_dir: std::env::var("LINUXAI_PROMPTS").map(Into::into).unwrap_or_else(|_| "prompts".into()),
         }
     }
 
@@ -363,6 +366,7 @@ impl Core {
             }
             op if op.starts_with("task") => self.task_op(op, req),
             op if op.starts_with("playbook") => self.playbook_op(op, req),
+            op if op.starts_with("prompt") => self.prompt_op(op, req),
             "object_put" | "find" => self.object_op(op, req),
             "object_patch" => json!({"ok": self.mem.patch_object(req["id"].as_str().unwrap_or(""), &req["fields"])}),
             "object" => match self.mem.object(req["id"].as_str().unwrap_or("")) {
