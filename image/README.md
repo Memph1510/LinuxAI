@@ -11,6 +11,7 @@ There is no desktop. The first screen is the AI.
 | LinuxAI session (tty1, automatic login) | Where you land. You talk in English. You see what the system is doing as it happens, and you answer its questions. |
 | `linuxai-mail` (system service, once `/etc/linuxai/mail.env` exists) | Email in, claims out, never instructions (Rust; see docs/MAIL.md) |
 | `linuxai-reach` (user service, Rust) | Reaches you when the AI is undecided or a follow-up is due. Set `LINUXAI_NOTIFY_CMD` in `~/.config/linuxai/env` to any command that sends a message from stdin (an SMS gateway, a push service), e.g. `LINUXAI_NOTIFY_CMD=curl -s -d @- https://ntfy.sh/<your-topic>`. |
+| `linuxai-browser` (user service, Rust + Chromium) | One browser you and the AI use at the same time (headless until there's a screen). See docs/BROWSER.md. |
 | `linuxai-mind` (user service) | The AI working behind the scenes. It handles anything the rules hand it ("a service failed, figure it out"). It starts once an API key is set. |
 | Linux kernel + drivers, `scx-scheds`/`scx-tools`, `power-profiles-daemon` | The hardware layer and the kernel controls the core uses |
 
