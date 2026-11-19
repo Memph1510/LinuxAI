@@ -10,9 +10,11 @@
 //!   linuxai-core browser [--headless] [--profile DIR]                 the browser the AI and the human share
 //!   linuxai-core image caps | image do '<json>'                       make and edit pictures
 //!   linuxai-core voice caps | listen | transcribe FILE | say          talk to it, hear it answer
+//!   linuxai-core compositor                                          the screen, through Hyprland
 
 mod browser;
 mod client;
+mod compositor;
 mod core;
 mod engine;
 mod host;
@@ -309,6 +311,10 @@ fn main() {
             println!("{r}");
             Ok(())
         }
+        Some("compositor") => compositor::run(
+            arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(compositor::default_socket),
+            Some(client::Client::new(arg(&args, "--core").map(PathBuf::from).unwrap_or_else(default_socket))),
+        ),
         Some("snapshot") => {
             println!("{}", serde_json::to_string_pretty(&host::snapshot(true, &Value::Null)).unwrap());
             Ok(())
@@ -318,7 +324,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice|compositor  (see source header)");
             std::process::exit(2);
         }
     };

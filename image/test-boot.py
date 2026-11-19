@@ -57,6 +57,9 @@ CHECKS = [
      r'"width":200'),
     ("voice: speech-to-text and speaking are installed",
      "linuxai-core voice caps", r'"speech_to_text":"whisper\.cpp.*"text_to_speech":"espeak-ng"'),
+    ("screen: Hyprland runs, or the text session took over and said why",
+     "sleep 20; if pgrep -x Hyprland >/dev/null; then echo hyprland; pgrep -f quickshell >/dev/null && echo quickshell; "
+     "else grep '^text:' /home/linuxai/.local/state/linuxai/screen.log; fi", r"^(hyprland|text: Hyprland could not start)"),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),

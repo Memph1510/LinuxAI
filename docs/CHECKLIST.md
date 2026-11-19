@@ -121,6 +121,10 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
       under your pointer (look), highlights and magnifies what the AI talks about (point), and pulls things up in
       front of you while you talk (show).
 - [ ] Voice: try with a real microphone on the laptop; natural voice (Piper) on the image; wake word.
+- [x] **The screen** ([SCREEN.md](SCREEN.md)): Hyprland with a Quickshell status line, the compositor organ
+      (windows, focus, pointer, arranging, effects off on battery), falling back to the text session where
+      it can't draw.
+- [ ] Quickshell: voice indicator, the AI's questions, its pointer and highlights over any app.
 - [ ] Pages inside the Workspace screen (the book).
 
 ### To decide later: ideas mined from similar projects ([RESEARCH_SIMILAR_PROJECTS.md](RESEARCH_SIMILAR_PROJECTS.md))

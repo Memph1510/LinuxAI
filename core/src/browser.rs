@@ -113,6 +113,8 @@ impl Cdp {
             .args(["--no-first-run", "--no-default-browser-check", "--disable-features=Translate", "--window-size=1280,900"]);
         if headless {
             cmd.arg("--headless");
+        } else {
+            cmd.arg("--ozone-platform-hint=auto"); // native Wayland under Hyprland, X11 elsewhere
         }
         if unsafe { libc::geteuid() } == 0 {
             cmd.arg("--no-sandbox"); // Chromium refuses to run as root otherwise (dev machines, containers)

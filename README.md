@@ -10,6 +10,7 @@ the hardware-driver layer; everything above it is LinuxAI.
 - **[docs/TASKS.md](docs/TASKS.md)**: tasks of any size, the human steps (action, evaluation, critique, decision), playbooks and cases
 - **[docs/MAIL.md](docs/MAIL.md)**: email as information, never instructions (the first outside-world organ)
 - **[docs/BROWSER.md](docs/BROWSER.md)**: the browser you and the AI use at the same time
+- **[docs/SCREEN.md](docs/SCREEN.md)**: the screen: Arch Linux underneath, Hyprland and Quickshell on top, driven by the AI
 - **[docs/PAGES_AND_VOICE.md](docs/PAGES_AND_VOICE.md)**: where it is going: web pages as pages in the book, talking about what is on the screen
 - **[docs/IMAGES.md](docs/IMAGES.md)**: making and editing pictures on any machine (local tools, local models, paid services)
 - **[docs/RESEARCH_SELF_LEARNING.md](docs/RESEARCH_SELF_LEARNING.md)**: what self-learning harnesses (DeepSeek Harness, ACE, Memento-Skills, Recuris, Hermes…) do, and what LinuxAI takes from them
