@@ -13,6 +13,8 @@
 //!   {"op":"windows"}  {"op":"active"}  {"op":"monitors"}
 //!   {"op":"focus","window":ADDR|"class":...}  {"op":"workspace","window":ADDR,"to":N}  {"op":"fullscreen","window":ADDR}
 //!   {"op":"float","window":ADDR}  {"op":"close","window":ADDR}  {"op":"effects","on":bool}
+//!   {"op":"shot","window"?:ADDR|"app"?:...}  → a screenshot to look at (grim), with its origin on screen
+//!   {"op":"point","x","y","w","h","note"?,"window"?|"app"?} → outline that area for the human, over any app
 
 use crate::client::Client;
 use serde_json::{json, Value};
@@ -141,6 +143,48 @@ impl Organ {
                 self.hypr.dispatch(&d)?;
                 Ok(json!({"ok": true, "window": a}))
             }
+            "shot" => {
+                // A picture of the screen, or of one window, for the AI to look at (grim).
+                let geom = match addr(&req["window"]).or_else(|| (req["window"].is_null() && (req["app"].is_string() || req["class"].is_string())).then(|| self.target(req).ok()).flatten()) {
+                    Some(a) => {
+                        let list = self.hypr.json("clients").map_err(|e| e.to_string())?;
+                        let c = list.as_array().and_then(|l| l.iter().find(|c| c["address"] == a.as_str()).cloned()).ok_or("no such window")?;
+                        Some((c["at"][0].as_i64().unwrap_or(0), c["at"][1].as_i64().unwrap_or(0), c["size"][0].as_i64().unwrap_or(0), c["size"][1].as_i64().unwrap_or(0)))
+                    }
+                    None => None,
+                };
+                let mut cmd = std::process::Command::new("grim");
+                cmd.args(["-t", "jpeg", "-q", "75"]);
+                if let Some((x, y, w, h)) = geom {
+                    cmd.args(["-g", &format!("{x},{y} {w}x{h}")]);
+                }
+                let o = cmd.arg("-").output().map_err(|e| format!("can't take a screenshot (grim): {e}"))?;
+                if !o.status.success() {
+                    return Err(format!("screenshot failed: {}", String::from_utf8_lossy(&o.stderr).trim()));
+                }
+                let (ox, oy) = geom.map(|g| (g.0, g.1)).unwrap_or((0, 0));
+                Ok(json!({"ok": true, "media_type": "image/jpeg", "data": b64(&o.stdout), "origin": [ox, oy],
+                          "note": "positions in this picture plus origin are screen positions, for point"}))
+            }
+            "point" => {
+                // Show the human what the AI means, over any app: an outline and a note, drawn by the screen's
+                // always-on layer (Quickshell), never blocking clicks. Screen coordinates, or relative to a window.
+                let n = |k: &str| req[k].as_f64();
+                let (Some(mut x), Some(mut y), Some(w), Some(h)) = (n("x"), n("y"), n("w"), n("h")) else {
+                    return Err("x, y, w, h: the area to show (screen pixels, or inside the window given)".into());
+                };
+                if addr(&req["window"]).is_some() || req["app"].is_string() {
+                    let a = self.target(req)?;
+                    let list = self.hypr.json("clients").map_err(|e| e.to_string())?;
+                    let c = list.as_array().and_then(|l| l.iter().find(|c| c["address"] == a.as_str()).cloned()).ok_or("no such window")?;
+                    x += c["at"][0].as_f64().unwrap_or(0.0);
+                    y += c["at"][1].as_f64().unwrap_or(0.0);
+                }
+                let mark = json!({"x": x, "y": y, "w": w, "h": h, "note": req["note"].as_str().unwrap_or(""),
+                                  "seconds": n("seconds").unwrap_or(8.0).clamp(1.0, 60.0)});
+                self.tell_core("screen.point", mark.clone());
+                Ok(json!({"ok": true, "shown": mark}))
+            }
             "effects" => {
                 let on = req["on"].as_bool().ok_or("on: true or false")?;
                 self.hypr.lua("eval", &format!("hl.config({{ animations = {{ enabled = {on} }}, decoration = {{ blur = {{ enabled = {on} }}, shadow = {{ enabled = {on} }} }} }})"))?;
@@ -209,6 +253,20 @@ impl Organ {
             std::thread::sleep(Duration::from_secs(5));
         });
     }
+}
+
+/// Standard base64 (for screenshots handed to the AI).
+pub fn b64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 pub fn default_socket() -> PathBuf {
@@ -301,7 +359,21 @@ mod tests {
         assert_eq!(o.handle(&json!({"op": "close", "window": "0x1; exec rm -rf ~"}))["ok"], false);
         assert_eq!(o.handle(&json!({"op": "workspace", "window": "0x5b2", "to": 500}))["ok"], false);
         assert_eq!(o.handle(&json!({"op": "focus", "app": "gimp"}))["error"], "no gimp window open");
+        // Pointing inside a window becomes screen coordinates (the chromium window is at 0,0; foot at 1280,0).
+        let p = o.handle(&json!({"op": "point", "app": "foot", "x": 10, "y": 20, "w": 100, "h": 30, "note": "this line"}));
+        assert_eq!(p["shown"]["x"], 1290.0, "{p}");
+        assert_eq!(p["shown"]["note"], "this line");
+        assert_eq!(o.handle(&json!({"op": "point", "x": 1}))["ok"], false);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn base64_matches_the_standard() {
+        assert_eq!(b64(b""), "");
+        assert_eq!(b64(b"f"), "Zg==");
+        assert_eq!(b64(b"fo"), "Zm8=");
+        assert_eq!(b64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(b64(&[0xff, 0xfe, 0x00]), "//4A");
     }
 
     #[test]

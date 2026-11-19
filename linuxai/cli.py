@@ -78,15 +78,26 @@ def connect_core():
 
 
 class Voice:
-    """Push to talk in the session: Enter to start, Enter to stop; the answer is spoken; talking again cuts it off."""
+    """Push to talk in the session: Enter to start, Enter to stop; the answer is spoken; talking again cuts it off.
+    Each state is also an event (voice.listening, voice.heard, voice.speaking, voice.done), for the screen's
+    voice indicator."""
 
-    def __init__(self):
+    def __init__(self, core=None):
         self.on = False
         self.speaking = None
+        self.core = core
+
+    def _tell(self, kind: str, **data) -> None:
+        if self.core:
+            try:
+                self.core.request("event", kind=kind, data=data)
+            except Exception:  # noqa: BLE001 - the indicator is a convenience
+                pass
 
     def hush(self) -> None:
         if self.speaking and self.speaking.poll() is None:
             self.speaking.terminate()
+            self._tell("voice.done")
         self.speaking = None
 
     def listen(self) -> str | None:
@@ -95,6 +106,7 @@ class Voice:
         from .tools import core_binary
         self.hush()
         ui.out(ui.magenta("  ● listening… press Enter when you're done"))
+        self._tell("voice.listening")
         r = subprocess.run([core_binary(), "voice", "listen"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         try:
             out = json.loads(r.stdout)
@@ -102,8 +114,10 @@ class Voice:
             out = {"ok": False, "error": "the voice organ didn't answer"}
         if not out.get("ok"):
             ui.out(ui.dim(f"  {out.get('error')}"))
+            self._tell("voice.done")
             return None
         ui.out(ui.dim("  you said: ") + out["text"])
+        self._tell("voice.heard", text=out["text"])
         return out["text"]
 
     def say(self, text: str) -> None:
@@ -117,6 +131,15 @@ class Voice:
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
         self.speaking.stdin.write(text)
         self.speaking.stdin.close()
+        self._tell("voice.speaking", text=text[:300])
+
+
+def shared_screen(core):
+    """The screen organ (Hyprland). It may start after us, or not at all in the text session: the tool is offered
+    only while it's running."""
+    from .core_client import Core, compositor_socket
+
+    return Core(path=compositor_socket(), timeout=60) if core else None
 
 
 def shared_browser(core):
@@ -200,13 +223,13 @@ def repl(config: Config) -> None:
 
     memory = Memory(config)
     core = connect_core()
-    toolbox = Toolbox(config, memory, core=core, browser=shared_browser(core))
+    toolbox = Toolbox(config, memory, core=core, browser=shared_browser(core), screen=shared_screen(core))
     agent = Agent(config, memory, toolbox)
     _setup_readline(config)
     ui.out(BANNER.format(title=ui.bold("LinuxAI"), mode=config.mode, model=config.model,
                          solutions=len(memory.list_solutions()), notes=len(memory.all_notes())))
     pending: dict = {}
-    voice = Voice()
+    voice = Voice(core)
     if core:
         ui.out(ui.dim("connected to the LinuxAI core: you'll see what the system is doing as it happens"))
         for w in core.request("waiting").get("plans", []):
@@ -304,7 +327,7 @@ def mind(config: Config) -> None:
         time.sleep(3)
     config.mode = "auto"
     memory = Memory(config)
-    toolbox = Toolbox(config, memory, core=core, mind=True, browser=shared_browser(core))
+    toolbox = Toolbox(config, memory, core=core, mind=True, browser=shared_browser(core), screen=shared_screen(core))
     agent = Agent(config, memory, toolbox)
     print("linuxai mind: connected to the core", flush=True)
 

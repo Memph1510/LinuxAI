@@ -124,7 +124,9 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
 - [x] **The screen** ([SCREEN.md](SCREEN.md)): Hyprland with a Quickshell status line, the compositor organ
       (windows, focus, pointer, arranging, effects off on battery), falling back to the text session where
       it can't draw.
-- [ ] Quickshell: voice indicator, the AI's questions, its pointer and highlights over any app.
+- [x] Quickshell: the AI's questions as cards you tap, the voice indicator, its pointer over any app; the AI's
+      `screen` tool (windows, what you're in, screenshots, pointing, arranging).
+- [ ] Magnifier over any app (a zoomed copy of the area, like the browser's).
 - [ ] Pages inside the Workspace screen (the book).
 
 ### To decide later: ideas mined from similar projects ([RESEARCH_SIMILAR_PROJECTS.md](RESEARCH_SIMILAR_PROJECTS.md))

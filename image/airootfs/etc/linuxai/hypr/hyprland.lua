@@ -6,7 +6,7 @@ hl.on("hyprland.start", function ()
     -- Bring the session environment to the user services; the shared browser restarts on screen, not headless.
     hl.exec_cmd("systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP && systemctl --user restart linuxai-browser")
     hl.exec_cmd("/usr/local/bin/linuxai-core compositor")
-    hl.exec_cmd("quickshell -p /etc/linuxai/quickshell/shell.qml")
+    hl.exec_cmd("mkdir -p $HOME/.local/state/linuxai && quickshell -p /etc/linuxai/quickshell/shell.qml > $HOME/.local/state/linuxai/quickshell.log 2>&1")
     hl.exec_cmd("foot --title LinuxAI /usr/local/bin/linuxai-session")
 end)
 
