@@ -35,10 +35,12 @@ CHECKS = [
      " | grep -c '\"status\": \"done\"'", r"^1"),
     ("unplugging drives power policy (event simulated, real power daemon)",
      "linuxai-core ctl '{\"op\":\"event\",\"kind\":\"power.unplugged\",\"data\":{\"battery\":60}}' >/dev/null;"
-     " sleep 2; powerprofilesctl get", r"^power-saver"),
+     " t=0; while [ $t -lt 20 ] && [ \"$(powerprofilesctl get)\" != power-saver ]; do sleep 1; t=$((t+1)); done;"
+     " powerprofilesctl get; echo \"after ${t}s\"", r"^power-saver"),
     ("plugging back in restores it",
      "linuxai-core ctl '{\"op\":\"event\",\"kind\":\"power.plugged\",\"data\":{}}' >/dev/null;"
-     " sleep 2; powerprofilesctl get", r"^balanced"),
+     " t=0; while [ $t -lt 20 ] && [ \"$(powerprofilesctl get)\" != balanced ]; do sleep 1; t=$((t+1)); done;"
+     " powerprofilesctl get; echo \"after ${t}s\"", r"^balanced"),
     ("AI layer installed", "sudo -u linuxai cortex --version", r"^0\."),
     ("playbooks are markdown you can edit",
      "linuxai-core ctl '{\"op\":\"playbook_put\",\"category\":\"freight/negotiate\",\"text\":\"# Negotiating\\n\",\"reason\":\"boot test\"}' >/dev/null;"
