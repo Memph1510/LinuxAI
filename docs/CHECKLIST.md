@@ -123,6 +123,16 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
 - [ ] Voice: try with a real microphone on the laptop; natural voice (Piper) on the image; wake word.
 - [ ] Pages inside the Workspace screen (the book).
 
+### Ideas mined from similar projects ([RESEARCH_SIMILAR_PROJECTS.md](RESEARCH_SIMILAR_PROJECTS.md))
+
+- [ ] Undo for what the AI changes: a filesystem snapshot before each plan that changes the system (installed system)
+- [ ] Heartbeat checklist: a markdown "keep an eye on" list the mind checks now and then
+- [ ] Your messaging apps (Telegram, WhatsApp, Signal) as two-way reach channels
+- [ ] "Show me how" mode: a ghost cursor and voice guide you instead of doing it
+- [ ] Hold-to-talk hotkey; wake word
+- [ ] Local vision model for private or offline screen reading
+- [ ] Measure how often it asks you, and make it go down
+
 ### Open: should the OS's own prompts live in the prompt library?
 
 The prompts the OS runs on are things like the email extractor's instructions and the mind's planning and
