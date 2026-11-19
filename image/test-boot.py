@@ -75,7 +75,7 @@ CHECKS = [
     ("screen: the always-on layer (Quickshell) loaded without errors",
      "f=/home/linuxai/.local/state/linuxai/quickshell.log; pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; };"
      # Graphics-driver and desktop-portal notices in a VM aren't LinuxAI's problems; anything else is.
-     " grep -vE 'MESA|ZINK|qt.qpa.services|portal|^\\s*$' $f | grep -iE 'error|warn|is not a type|unavailable|cannot|undefined|failed' | head -12 > /tmp/qs.err;"
+     " grep -vE 'MESA|ZINK|qt.qpa.services|portal|dmabuf|render device|fall back to SHM|^\\s*$' $f | grep -iE 'error|warn|is not a type|unavailable|cannot|undefined|failed' | head -12 > /tmp/qs.err;"
      " if [ -s /tmp/qs.err ]; then cat /tmp/qs.err; else echo clean; fi",
      r"^(clean|no-hyprland)"),
     ("the core answers you, not only root (bar, reach, organs)",
