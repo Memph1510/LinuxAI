@@ -151,8 +151,11 @@ impl Cdp {
         std::thread::spawn(move || reader.read_loop(input));
         if let Err(e) = cdp.call("Target.setDiscoverTargets", json!({"discover": true}), None) {
             let said = std::fs::read_to_string(&log).unwrap_or_default();
-            let tail: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
-            let tail = tail[tail.len().saturating_sub(6)..].join(" | ");
+            // The line that says why (a crash dump after it says nothing useful).
+            let lines: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
+            let why: Vec<&str> = lines.iter().copied().filter(|l| l.contains("FATAL") || l.contains("ERROR") || l.contains("sandbox")).collect();
+            let pick = if why.is_empty() { &lines[lines.len().saturating_sub(4)..] } else { &why[why.len().saturating_sub(3)..] };
+            let tail = pick.join(" | ");
             return Err(std::io::Error::other(format!("{e}{}", if tail.is_empty() { String::new() } else { format!("; Chromium said: {tail}") })));
         }
         Ok(cdp)
