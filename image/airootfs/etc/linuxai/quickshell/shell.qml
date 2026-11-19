@@ -103,14 +103,16 @@ ShellRoot {
 
     // ---- the AI's questions ------------------------------------------------------------------------------
     // Explicit sizes throughout: a layer window takes its size from these, so nothing may depend on the window.
+    // These windows are never shown, hidden or resized (the first such change after start didn't reach the screen):
+    // they stay mapped at a fixed size, transparent, and only what's drawn inside them changes.
     PanelWindow {
-        visible: root.questions.length > 0
         anchors { top: true; right: true }
         margins { top: 38; right: 12 }
         exclusionMode: ExclusionMode.Ignore
         implicitWidth: 380
-        implicitHeight: Math.max(1, cards.height)
+        implicitHeight: 640
         color: "transparent"
+        mask: Region { item: cards }   // clicks are caught only where a card is drawn
 
         Column {
             id: cards
@@ -153,7 +155,6 @@ ShellRoot {
 
     // ---- the voice indicator -----------------------------------------------------------------------------
     PanelWindow {
-        visible: root.voiceState !== ""
         anchors { bottom: true }
         margins { bottom: 24 }
         exclusionMode: ExclusionMode.Ignore
@@ -163,6 +164,7 @@ ShellRoot {
         mask: Region {}
 
         Rectangle {
+            visible: root.voiceState !== ""
             width: 600; height: 44; radius: 22
             color: root.panel
             border.color: root.voiceState === "speaking" ? root.ai : root.you; border.width: 2
@@ -186,25 +188,22 @@ ShellRoot {
     }
 
     // ---- the AI's pointer, over any app ------------------------------------------------------------------
-    // A small window placed exactly over the area (plus room for the note below it); clicks pass through.
+    // A full-screen, fully transparent window that never takes a click; the outline and note are drawn in it.
     PanelWindow {
-        visible: root.mark !== null
-        anchors { top: true; left: true }
-        margins { top: root.mark ? Math.max(0, root.mark.y - 6) : 0; left: root.mark ? Math.max(0, root.mark.x - 6) : 0 }
+        anchors { top: true; bottom: true; left: true; right: true }
         exclusionMode: ExclusionMode.Ignore
-        implicitWidth: root.mark ? Math.max(root.mark.w + 12, noteBox.width) : 1
-        implicitHeight: root.mark ? root.mark.h + 12 + (root.mark.note ? noteBox.height + 8 : 0) : 1
         color: "transparent"
         mask: Region {}
 
         Rectangle {
+            visible: root.mark !== null
+            x: root.mark ? root.mark.x - 6 : 0; y: root.mark ? root.mark.y - 6 : 0
             width: root.mark ? root.mark.w + 12 : 0; height: root.mark ? root.mark.h + 12 : 0
             radius: 8; color: "transparent"; border.color: root.you; border.width: 3
         }
         Rectangle {
-            id: noteBox
             visible: root.mark !== null && !!root.mark.note
-            y: root.mark ? root.mark.h + 20 : 0
+            x: root.mark ? root.mark.x - 6 : 0; y: root.mark ? root.mark.y + root.mark.h + 14 : 0
             width: note.implicitWidth + 20; height: note.implicitHeight + 14; radius: 8; color: "#1c1c1e"
             Text { id: note; anchors.centerIn: parent; text: root.mark ? root.mark.note : ""; color: "white"; font.pixelSize: 13 }
         }
