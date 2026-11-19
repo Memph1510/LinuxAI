@@ -245,6 +245,18 @@ pub fn read_message(raw: &[u8], authserv_id: Option<&str>) -> Result<Value, Stri
             extra.push(format!("[attachment {name}]\n{}", clean_text(&t, None)));
         }
     }
+    // Invitations: calendar data anywhere in the message (inline, or an .ics attachment). Read as data, never obeyed.
+    let mut calendars: Vec<String> = Vec::new();
+    for part in msg.parts.iter() {
+        let is_cal = part.content_type().map(|c| c.ctype().eq_ignore_ascii_case("text") && c.subtype().map(|s| s.eq_ignore_ascii_case("calendar")).unwrap_or(false)).unwrap_or(false)
+            || part.attachment_name().map(|n| n.to_lowercase().ends_with(".ics")).unwrap_or(false);
+        if is_cal {
+            let text = String::from_utf8_lossy(part.contents()).to_string();
+            if text.contains("BEGIN:VCALENDAR") && calendars.len() < 5 && !calendars.contains(&text) {
+                calendars.push(text);
+            }
+        }
+    }
     let full = std::iter::once(body).chain(extra).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n");
     let total = full.chars().count();
     let to: Vec<String> = msg.to().map(|a| a.iter().filter_map(|x| x.address.as_deref().map(|s| s.to_lowercase())).take(20).collect()).unwrap_or_default();
@@ -263,6 +275,7 @@ pub fn read_message(raw: &[u8], authserv_id: Option<&str>) -> Result<Value, Stri
         "total_chars": total,
         "hidden_text_removed": hidden,
         "attachments": attachments,
+        "calendars": calendars,
     }))
 }
 
@@ -503,6 +516,11 @@ pub fn ingest(raw: &[u8], api: &dyn Api, cfg: &MailConfig) -> Result<Value, Stri
     let mid = api.call("object_put", json!({"type": "message", "fields": message}))["id"].as_str().unwrap_or("").to_string();
     let mut src = source.clone();
     src["message"] = json!(mid);
+    let mut invites = Vec::new();
+    for ics in info["calendars"].as_array().cloned().unwrap_or_default() {
+        let r = api.call("calendar_import", json!({"ics": ics, "kind": "invite", "source": src}));
+        invites.extend(r["invites"].as_array().cloned().unwrap_or_default());
+    }
     let put = |typ: &str, mut fields: Map<String, Value>| -> String {
         fields.insert("trust".into(), json!("outside"));
         fields.insert("source".into(), src.clone());
@@ -538,9 +556,10 @@ pub fn ingest(raw: &[u8], api: &dyn Api, cfg: &MailConfig) -> Result<Value, Stri
     }
     api.call("event", json!({"kind": "message.received", "data": {
         "message": mid, "facts": derived, "category": facts["category"], "from": from, "authenticated": source["authenticated"],
-        "subject": info["subject"], "trust": "outside", "contact": person["contact"], "corrected": corrected, "issues": issues}}));
+        "subject": info["subject"], "trust": "outside", "contact": person["contact"], "corrected": corrected, "issues": issues,
+        "invites": invites}}));
     Ok(json!({"message": mid, "facts": derived, "category": facts["category"], "corrected": corrected, "contact": person["contact"],
-              "extract_error": extract_error}))
+              "extract_error": extract_error, "invites": invites}))
 }
 
 /// Fetch unseen mail over IMAP with curl (LINUXAI_IMAP_HOST / _USER / _PASSWORD / _MAILBOX) and ingest it.
@@ -691,6 +710,27 @@ mod tests {
         let f = dir.join(format!("{name}.json"));
         std::fs::write(&f, facts.to_string()).unwrap();
         format!("cat >/dev/null; cat {}", f.display())
+    }
+
+    #[test]
+    fn an_invitation_in_an_email_becomes_a_pending_invite() {
+        let dir = std::env::temp_dir().join(format!("linuxai-mail-ics-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let core: Arc<Core> = Arc::new(Core::new(Memory::in_memory(), Box::new(NoOrgans)));
+        let cfg = MailConfig { mail_dir: dir.join("mail"), authserv_id: Some("mx.linuxai.local".into()),
+            extract_cmd: fake_extractor(&dir, "inv", json!({"category": "meeting", "summary": "Dana invites you to a rate review."})) };
+        let start = (chrono::Local::now() + chrono::Duration::days(5)).format("%Y%m%dT150000Z");
+        let ics = format!("BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:rr@hollis\r\nDTSTART:{start}\r\nSUMMARY:Rate review\r\n\
+            ORGANIZER:mailto:dana@hollis-logistics.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n");
+        let raw = email(&["mx.linuxai.local; dmarc=pass"], None, Some("See invite."), "", Some(("invite.ics", "text/calendar; method=REQUEST", &ics)));
+        let r = ingest(&raw, &core, &cfg).unwrap();
+        assert_eq!(r["invites"][0]["title"], "Rate review", "{r}");
+        let inv = core.call("invites", json!({}))["invites"][0].clone();
+        assert_eq!(inv["trust"], "outside");
+        assert_eq!(inv["source"]["message"], r["message"], "linked to the email it came in");
+        assert!(core.call("calendar", json!({"from": 0, "to": 4.0e9}))["events"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1113,7 +1113,15 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
     let text = verbs::explain(spec, &args);
     let jid = ctx.mem.journal_begin(&exec.id, &key, verb, &args, &text);
     ctx.bus.emit(ctx.mem, "action.started", json!({"plan": exec.name, "plan_id": exec.id, "explain": text}));
-    match ctx.organs.invoke(verb, &args) {
+    // The calendar is the core's own; everything else goes to the organs. Both are journaled, so nothing repeats.
+    let result = match verb {
+        "schedule" => crate::calendar::add(ctx.mem, ctx.bus, &args, "ai"),
+        "unschedule" => crate::calendar::cancel(ctx.mem, ctx.bus, args["id"].as_str().unwrap_or("")),
+        "reschedule" => crate::calendar::change(ctx.mem, ctx.bus, args["id"].as_str().unwrap_or(""), &args),
+        "answer_invite" => crate::calendar::answer_invite(ctx.mem, ctx.bus, args["id"].as_str().unwrap_or(""), args["answer"].as_str().unwrap_or(""), "ai"),
+        _ => ctx.organs.invoke(verb, &args),
+    };
+    match result {
         Ok(v) => {
             ctx.mem.journal_end(jid, "done", &v.to_string());
             ctx.bus.emit(ctx.mem, "action.done", json!({"plan": exec.name, "plan_id": exec.id, "explain": text, "result": v}));

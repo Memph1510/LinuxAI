@@ -12,8 +12,10 @@
 //!   linuxai-core image caps | image do '<json>'                       make and edit pictures
 //!   linuxai-core voice caps | listen | transcribe FILE | say          talk to it, hear it answer
 //!   linuxai-core compositor                                          the screen, through Hyprland
+//!   linuxai-core calendar import FILE.ics | calendar watch           subscribed calendars and invitations in
 
 mod browser;
+mod calendar;
 mod client;
 mod compositor;
 mod core;
@@ -326,6 +328,46 @@ fn main() {
             println!("{r}");
             Ok(())
         }
+        Some("calendar") => (|| -> std::io::Result<()> {
+            // linuxai-core calendar import FILE.ics [--name NAME] [--invite] | calendar watch
+            let client = client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket));
+            match args.get(2).map(String::as_str) {
+                Some("import") => {
+                    let file = args.get(3).ok_or_else(|| std::io::Error::other("which .ics file?"))?;
+                    let ics = std::fs::read_to_string(file)?;
+                    let invite = args.iter().any(|a| a == "--invite");
+                    let name = arg(&args, "--name").unwrap_or_else(|| std::path::Path::new(file).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+                    let r = client.request("calendar_import", json!({"ics": ics, "kind": if invite { "invite" } else { "feed" },
+                        "source": {"name": name, "file": file}}))?;
+                    println!("{r}");
+                    Ok(())
+                }
+                Some("watch") => {
+                    // Subscribed calendars: LINUXAI_CALENDARS="work=https://...ics;school=https://...ics", every 15 min.
+                    client.wait_until_up();
+                    let every: u64 = std::env::var("LINUXAI_CALENDAR_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(900);
+                    loop {
+                        for pair in std::env::var("LINUXAI_CALENDARS").unwrap_or_default().split(';').filter(|p| !p.trim().is_empty()) {
+                            let (name, url) = pair.split_once('=').unwrap_or(("subscribed", pair));
+                            match std::process::Command::new("curl").args(["-fsSL", "--max-time", "60", url.trim()]).output() {
+                                Ok(o) if o.status.success() => {
+                                    let r = client.request("calendar_import", json!({"ics": String::from_utf8_lossy(&o.stdout), "kind": "feed",
+                                        "source": {"name": name.trim(), "url": url.trim()}}));
+                                    eprintln!("linuxai calendar: {}: {}", name.trim(), r.map(|v| v.to_string()).unwrap_or_else(|e| e.to_string()));
+                                }
+                                Ok(o) => eprintln!("linuxai calendar: {}: {}", name.trim(), String::from_utf8_lossy(&o.stderr).trim()),
+                                Err(e) => eprintln!("linuxai calendar: {e}"),
+                            }
+                        }
+                        std::thread::sleep(Duration::from_secs(every));
+                    }
+                }
+                _ => {
+                    eprintln!("usage: linuxai-core calendar import FILE.ics [--name NAME] [--invite] | calendar watch");
+                    std::process::exit(2);
+                }
+            }
+        })(),
         Some("compositor") => compositor::run(
             arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(compositor::default_socket),
             Some(client::Client::new(arg(&args, "--core").map(PathBuf::from).unwrap_or_else(default_socket))),
@@ -339,7 +381,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice|compositor  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice|compositor|calendar  (see source header)");
             std::process::exit(2);
         }
     };

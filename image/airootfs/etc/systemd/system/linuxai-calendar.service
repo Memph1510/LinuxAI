@@ -1,0 +1,16 @@
+[Unit]
+Description=LinuxAI calendar (subscribed calendars in, read-only: outside information)
+After=linuxai-core.service network-online.target
+Wants=network-online.target
+# Starts once subscriptions are set in /etc/linuxai/calendar.env: LINUXAI_CALENDARS="work=https://...ics;school=https://...ics"
+ConditionPathExists=/etc/linuxai/calendar.env
+
+[Service]
+EnvironmentFile=/etc/linuxai/calendar.env
+User=linuxai
+ExecStart=/usr/local/bin/linuxai-core calendar watch
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

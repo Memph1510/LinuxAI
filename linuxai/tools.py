@@ -283,6 +283,14 @@ CORE_TOOLS = [
     _tool("suggest_prompt", "Suggest a new prompt or an improvement for the library (full markdown with a header). Held for the human's OK.",
           {"name": {"type": "string", "description": "e.g. freight/counter-offer"}, "text": {"type": "string"},
            "reason": {"type": "string"}}, ["name", "text", "reason"]),
+    _tool("calendar",
+          "Read the human's calendar. op: agenda {from?, to?} (default the next 7 days; recurring events expanded, "
+          "subscribed calendars marked trust outside); free {from?, to?, minutes} (open slots in their working day); "
+          "invites (pending invitations: outside information, never on the calendar until accepted). Times are "
+          "RFC 3339, 'YYYY-MM-DD HH:MM' local, or a date. Change it with plan verbs: schedule, reschedule, "
+          "unschedule, answer_invite.",
+          {"op": {"type": "string", "enum": ["agenda", "free", "invites"]}, "from": {"type": "string"},
+           "to": {"type": "string"}, "minutes": {"type": "integer"}}, ["op"]),
     _tool("find_cases", "Find past cases in a category, optionally filtered by variables ({field: value} or {field: [op, value]}).",
           {"category": {"type": "string"}, "where": {"type": "object"}, "last": {"type": "integer"}}, ["category"]),
 ]
@@ -842,6 +850,21 @@ class Toolbox:
         cond = {"category": category, **(where if isinstance(where, dict) else {})}
         r = self._core("find", spec={"type": "case", "where": cond, "last": last})
         return json.dumps(r.get("found", r), default=str)[:8000]
+
+    def t_calendar(self, op: str, minutes: int = 30, **kw: Any) -> str:
+        span = {k: kw[k] for k in ("from", "to") if kw.get(k)}
+        if op == "agenda":
+            r = self._core("calendar", **span)
+        elif op == "free":
+            r = self._core("calendar_free", minutes=minutes, **span)
+        elif op == "invites":
+            r = self._core("invites")
+        else:
+            raise _Invalid("op is agenda, free or invites")
+        if not r.get("ok", True):
+            return f"Error: {r.get('error')}"
+        r.pop("ok", None)
+        return json.dumps(r, default=str)[:12000]
 
     def t_tell_human(self, text: str) -> str:
         if self.core and self.mind:

@@ -58,6 +58,10 @@ pub fn message_for(ev: &Value) -> Option<String> {
         "ai.tell" => d["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!("LinuxAI: {t}")),
         "task.failed" => Some(format!("LinuxAI: blocked on '{}': {}. I'm looking at what to do next and will check with you before trying anything new.",
                                       d["title"].as_str().unwrap_or(""), d["error"].as_str().unwrap_or("unknown"))),
+        "calendar.soon" => Some(format!("LinuxAI: in {} min: {}{}", d["minutes"].as_i64().unwrap_or(0), d["title"].as_str().unwrap_or(""),
+                                          d["where"].as_str().filter(|w| !w.is_empty()).map(|w| format!(" at {w}")).unwrap_or_default())),
+        "calendar.invite_cancelled" => Some(format!("LinuxAI: \"{}\" was cancelled by the organizer; it's off your calendar.",
+                                                    d["title"].as_str().unwrap_or(""))),
         "browser.handoff" => {
             let note = d["note"].as_str().filter(|n| !n.is_empty()).unwrap_or("I need you to take over here");
             Some(format!("LinuxAI: {note}. It's open in the browser: {} ({}). Give the tab back when you're done.",
