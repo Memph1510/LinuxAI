@@ -307,14 +307,21 @@ impl Cdp {
         let _ = self.call("Browser.close", json!({}), None);
         let mut c = self.child.lock().unwrap();
         let start = Instant::now();
+        let mut exited = false;
         while start.elapsed() < Duration::from_secs(5) {
             if let Ok(Some(_)) = c.try_wait() {
-                return;
+                exited = true;
+                break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        let _ = c.kill();
-        let _ = c.wait();
+        if !exited {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        // The process is gone: say so now, rather than when the reader notices the pipe closed.
+        self.alive.store(false, Ordering::SeqCst);
+        self.pending.lock().unwrap().clear();
     }
 }
 
