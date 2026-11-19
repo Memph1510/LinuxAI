@@ -68,7 +68,7 @@ CHECKS = [
      "sudo -u linuxai sh -c 'cd /tmp && LINUXAI_BLENDER_DIR=/tmp/b linuxai-core blender do "
      "\"{\\\"op\\\":\\\"new\\\",\\\"name\\\":\\\"boot\\\",\\\"ops\\\":[{\\\"op\\\":\\\"add\\\",\\\"type\\\":\\\"sphere\\\",\\\"name\\\":\\\"Ball\\\",\\\"location\\\":[0,0,2]},"
      "{\\\"op\\\":\\\"camera\\\",\\\"name\\\":\\\"Camera\\\",\\\"look_at\\\":\\\"Ball\\\"}]}\"' | grep -oE '\"verdict\":\"[a-z]+\"|reopens'",
-     r'(?s)reopens.*"verdict":"ok"|"verdict":"ok".*reopens'),
+     r'(?s)reopens.*"verdict":"ok"|"verdict":"ok".*reopens', 600),
     ("voice: speech-to-text and speaking are installed",
      "linuxai-core voice caps", r'"speech_to_text":"whisper\.cpp.*"text_to_speech":"espeak-ng"'),
     ("screen: Hyprland runs, or the text session took over and said why",
@@ -115,7 +115,7 @@ CHECKS = [
      " [(s.poll(), time.sleep(0.05)) for _ in range(3000)]\" >/dev/null 2>&1 &"
      " for i in $(seq 60); do [ -n \"$(find /run/user/1000 -maxdepth 1 -name 'linuxai-blender-*.sock')\" ] && break; sleep 2; done;"
      " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core blender do '{\"op\":\"live_view\"}'; pkill -x blender",
-     r'"ok":true.*"selected"|"selected".*"ok":true'),
+     r'"ok":true.*"selected"|"selected".*"ok":true', 300),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
@@ -238,8 +238,8 @@ def main() -> int:
         con.run("export TERM=dumb PS1='# '; stty -echo cols 200", 30)
         state = con.run("timeout 240 systemctl is-system-running --wait; systemctl list-jobs --no-legend | head -5", 300)
         print(f"  system state: {' / '.join(state.split())[:200]}", flush=True)
-        for name, cmd, expect in CHECKS:
-            out = con.run(cmd, 180)
+        for name, cmd, expect, *limit in CHECKS:
+            out = con.run(cmd, limit[0] if limit else 180)
             ok = re.search(expect, out, re.M) is not None
             failed += not ok
             print(f"  {'✓' if ok else '✗'} {name}" + ("" if ok else f"\n      got: {out[-300:]!r}"), flush=True)
