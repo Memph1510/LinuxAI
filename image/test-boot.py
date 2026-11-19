@@ -107,12 +107,15 @@ CHECKS = [
      "print('main' if all(ws['at'][0]<=x['at'][0] and ws['size'][0]>=x['size'][0] for x in others) else 'not-main', ws['at'], ws['size'])\n"
      "print('pages-hidden' if not any('chrom' in str(x['app']).lower() for x in others) else 'pages-visible', [x['title'][:20] for x in others])\"",
      r"(?s)^main.*^pages-hidden|no-hyprland"),
-    ("screen: the AI sees what's open in Blender (live bridge in the human's Blender)",
-     "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sig=$(ls /run/user/1000/hypr | head -1);"
-     " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl dispatch \"hl.dsp.exec_cmd('blender --factory-startup')\" >/dev/null;"
-     " for i in $(seq 90); do ls /run/user/1000/linuxai-blender-*.sock >/dev/null 2>&1 && break; sleep 2; done;"
-     " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core blender do '{\"op\":\"live_view\"}';"
-     " pkill -x blender", r'"ok":true.*"selected"|"selected".*"ok":true|no-hyprland'),
+    # Blender's window needs OpenGL 4.3, which a VM with neither a graphics card nor KVM can't give it; so the
+    # bridge is started by hand in a headless Blender, loaded from where the session points real Blender.
+    ("3D: the live bridge loads in Blender and the AI can see the open scene",
+     ". /etc/profile.d/linuxai-blender.sh; sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 BLENDER_SYSTEM_SCRIPTS=$BLENDER_SYSTEM_SCRIPTS"
+     " timeout 170 blender -b --factory-startup --python-expr \"import linuxai_bridge as b, time; s=b.Server(b.socket_path());"
+     " [(s.poll(), time.sleep(0.05)) for _ in range(3000)]\" >/dev/null 2>&1 &"
+     " for i in $(seq 60); do [ -n \"$(find /run/user/1000 -maxdepth 1 -name 'linuxai-blender-*.sock')\" ] && break; sleep 2; done;"
+     " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core blender do '{\"op\":\"live_view\"}'; pkill -x blender",
+     r'"ok":true.*"selected"|"selected".*"ok":true'),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
@@ -220,7 +223,7 @@ def main() -> int:
     ser, mon = str(tmp / "serial.sock"), str(tmp / "mon.sock")
     accel = "kvm" if os.path.exists("/dev/kvm") else "tcg,thread=multi"
     qemu = subprocess.Popen([
-        "qemu-system-x86_64", "-accel", accel, "-m", "3072", "-smp", str(min(os.cpu_count() or 2, 4)),
+        "qemu-system-x86_64", "-accel", accel, "-cpu", "Haswell-noTSX", "-m", "3072", "-smp", str(min(os.cpu_count() or 2, 4)),
         "-cdrom", args.iso, "-boot", "d", "-display", "none", "-vga", "std",
         "-serial", f"unix:{ser},server,nowait", "-monitor", f"unix:{mon},server,nowait",
         "-nic", "user,model=virtio-net-pci"], stderr=subprocess.DEVNULL)

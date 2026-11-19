@@ -518,12 +518,12 @@ def run_ops(ops: list) -> list:
 # Rendering, checking and exporting
 # ------------------------------------------------------------------------------------------------
 
-def render(output: str, frame=None, width=None, height=None, samples=None, engine=None) -> dict:
+def render(output: str, frame=None, width=None, height=None, samples=None, engine=None, denoise=None) -> dict:
     s = bpy.context.scene
     if s.camera is None:
         raise OpError("the scene has no camera to render from (add one with the camera op)")
     keep = (s.render.engine, s.render.resolution_x, s.render.resolution_y, s.render.resolution_percentage,
-            s.render.filepath, s.render.image_settings.file_format)
+            s.render.filepath, s.render.image_settings.file_format, s.cycles.use_denoising)
     try:
         if engine:
             op_render_settings({"engine": engine})
@@ -537,6 +537,8 @@ def render(output: str, frame=None, width=None, height=None, samples=None, engin
             s.cycles.device = "CPU" if os.environ.get("LINUXAI_BLENDER_GPU") != "1" else s.cycles.device
             if samples:
                 s.cycles.samples = int(samples)
+            if denoise is not None:
+                s.cycles.use_denoising = bool(denoise)
         elif samples:
             s.eevee.taa_render_samples = int(samples)
         if frame is not None:
@@ -549,7 +551,7 @@ def render(output: str, frame=None, width=None, height=None, samples=None, engin
                 "size": [s.render.resolution_x, s.render.resolution_y], "check": picture_check(output)}
     finally:
         (s.render.engine, s.render.resolution_x, s.render.resolution_y, s.render.resolution_percentage,
-         s.render.filepath, s.render.image_settings.file_format) = keep
+         s.render.filepath, s.render.image_settings.file_format, s.cycles.use_denoising) = keep
 
 
 def picture_check(path: str) -> dict:
@@ -611,10 +613,11 @@ def job(j: dict) -> dict:
         if j.get("preview") and bpy.context.scene.camera:
             p = j["preview"]
             out["preview"] = render(p["output"], width=p.get("width", 480), height=p.get("height", 270),
-                                    samples=p.get("samples", 16), engine=p.get("engine", "CYCLES"))
+                                    samples=p.get("samples", 16), engine=p.get("engine", "CYCLES"), denoise=False)
         return out
     if op == "render":
-        return {"ok": True, **render(j["output"], j.get("frame"), j.get("width"), j.get("height"), j.get("samples"), j.get("engine"))}
+        return {"ok": True, **render(j["output"], j.get("frame"), j.get("width"), j.get("height"), j.get("samples"),
+                                     j.get("engine"), j.get("denoise"))}
     if op == "export":
         return {"ok": True, **export(j["format"], j["output"], j.get("selection"))}
     raise OpError(f"unknown job op {op!r}")

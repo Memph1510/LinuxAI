@@ -60,7 +60,8 @@ def handle(req: dict) -> dict:
             return {"ok": True, "done": done, "view": view()}
         if op == "render":
             return {"ok": True, **eng.render(req["output"], req.get("frame"), req.get("width", 640),
-                                             req.get("height", 360), req.get("samples", 16), req.get("engine", "CYCLES"))}
+                                             req.get("height", 360), req.get("samples", 16), req.get("engine", "CYCLES"),
+                                             req.get("denoise", False))}
         return {"ok": False, "error": f"unknown op {op!r}"}
     except eng.OpError as e:
         return {"ok": False, "error": str(e), "view": view()}

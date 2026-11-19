@@ -126,6 +126,8 @@ fn run_job(cfg: &BlenderConfig, file: Option<&Path>, job: &Value, timeout: Durat
     match (status, result) {
         (None, _) => Err(format!("Blender took longer than {}s and was stopped", timeout.as_secs())),
         (Some(_), Some(r)) => Ok(r),
+        (Some(s), None) if s.to_string().contains("SIGILL") => Err(
+            "Blender can't run on this processor: it needs newer CPU instructions (x86-64-v2 or later) than this machine (or virtual machine) offers".into()),
         (Some(s), None) => {
             let why: Vec<&String> = log.iter().filter(|l| l.contains("Error") || l.contains("error") || l.contains("Traceback")).collect();
             Err(format!("Blender stopped ({s}) without an answer: {}", if why.is_empty() { log.iter().rev().take(5).cloned().collect::<Vec<_>>().join(" | ") }
@@ -298,7 +300,7 @@ fn render(req: &Value, api: &dyn Api, cfg: &BlenderConfig) -> Result<Value, Stri
     let file = blend_path(req["file"].as_str().ok_or("file: the .blend to render")?)?;
     let output = out_dir(cfg, "renders")?.join(format!("{}-{}.png", file.file_stem().unwrap_or_default().to_string_lossy(), stamp()));
     let mut job = json!({"op": "render", "output": output});
-    for k in ["frame", "width", "height", "samples", "engine"] {
+    for k in ["frame", "width", "height", "samples", "engine", "denoise"] {
         if !req[k].is_null() {
             job[k] = req[k].clone();
         }
