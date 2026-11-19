@@ -107,12 +107,13 @@ CHECKS = [
      "print('main' if all(ws['at'][0]<=x['at'][0] and ws['size'][0]>=x['size'][0] for x in others) else 'not-main', ws['at'], ws['size'])\n"
      "print('pages-hidden' if not any('chrom' in str(x['app']).lower() for x in others) else 'pages-visible', [x['title'][:20] for x in others])\"",
      r"(?s)^main.*^pages-hidden|no-hyprland"),
+    # (Started from a subshell: a job of the test's own shell would print a notice into the next typed command.)
     # Blender's window needs OpenGL 4.3, which a VM with neither a graphics card nor KVM can't give it; so the
     # bridge is started by hand in a headless Blender, loaded from where the session points real Blender.
     ("3D: the live bridge loads in Blender and the AI can see the open scene",
-     ". /etc/profile.d/linuxai-blender.sh; sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 BLENDER_SYSTEM_SCRIPTS=$BLENDER_SYSTEM_SCRIPTS"
-     " timeout 170 blender -b --factory-startup --python-expr \"import linuxai_bridge as b, time; s=b.Server(b.socket_path());"
-     " [(s.poll(), time.sleep(0.05)) for _ in range(3000)]\" >/dev/null 2>&1 &"
+     ". /etc/profile.d/linuxai-blender.sh; ( sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 BLENDER_SYSTEM_SCRIPTS=$BLENDER_SYSTEM_SCRIPTS"
+     " setsid timeout 170 blender -b --factory-startup --python-expr \"import linuxai_bridge as b, time; s=b.Server(b.socket_path());"
+     " [(s.poll(), time.sleep(0.05)) for _ in range(3000)]\" </dev/null >/dev/null 2>&1 & );"
      " for i in $(seq 60); do [ -n \"$(find /run/user/1000 -maxdepth 1 -name 'linuxai-blender-*.sock')\" ] && break; sleep 2; done;"
      " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core blender do '{\"op\":\"live_view\"}'; pkill -x blender",
      r'"ok":true.*"selected"|"selected".*"ok":true', 300),
