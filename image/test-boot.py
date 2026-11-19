@@ -213,7 +213,7 @@ def main() -> int:
             # The always-on layer, seen on the real screen: a question card, the voice indicator, the AI's pointer.
             con.run("""linuxai-core ctl '{"op":"submit","source":"human","plan":{"plan":"boot-question","why":"boot test","steps":[{"ask":"Book the test drive Saturday 10am?","opts":["Book it","Not now"],"why":"It is a $38,000 decision","lean":"Book it","as":"a"}]}}' >/dev/null;"""
                     """ linuxai-core ctl '{"op":"event","kind":"voice.listening","data":{}}' >/dev/null;"""
-                    """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
+                    """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","magnify":true,"seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
             time.sleep(2)
             monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
             if (tmp / "overlay.ppm").exists():
@@ -222,10 +222,11 @@ def main() -> int:
                 ppm_to_png(tmp / "overlay.ppm", shots / "linuxai-overlay.png")
                 found = {"question card (top right)": amber_in(img, w - 400, 30, w, 330),
                          "voice indicator (bottom)": amber_in(img, w // 2 - 330, h - 80, w // 2 + 330, h),
-                         "the AI's pointer (around 120,300 360x60)": amber_in(img, 110, 290, 490, 370)}
+                         "the AI's pointer (around 120,300 360x60)": amber_in(img, 110, 290, 490, 370),
+                         "the magnifier (beside it)": amber_in(img, 500, 210, 870, 450)}
                 ok = all(n > 150 for n in found.values())
                 failed += not ok
-                print(f"  {'✓' if ok else '✗'} screen: the question card, voice indicator and the AI's pointer are drawn"
+                print(f"  {'✓' if ok else '✗'} screen: the question card, voice indicator, the AI's pointer and its magnifier are drawn"
                       + ("" if ok else f"\n      amber pixels found: {found}"), flush=True)
                 print(f"  screenshot with the overlay: {shots / 'linuxai-overlay.png'}")
         monitor(mon, f"screendump {tmp / 'tty1.ppm'}")

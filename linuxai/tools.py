@@ -312,12 +312,14 @@ SCREEN_TOOLS = [
           "The whole screen (Hyprland), across every app. ops: windows (what's open, most recently used first); "
           "active (the window the human is in and where their pointer is, also relative to that window: what "
           "\"this\" means outside the browser); shot {window? | app?} (a screenshot to look at, with its origin on "
-          "screen); point {x, y, w, h, note?, window? | app?} (outline an area for the human while you talk about "
-          "it, over any app; coordinates are on screen, or inside the window given; read them off a shot); "
+          "screen); point {x, y, w, h, note?, magnify?, window? | app?} (outline an area for the human while you talk "
+          "about it, over any app; magnify also shows it enlarged, for small print; coordinates are on screen, or "
+          "inside the window given; read them off a shot); "
           "focus / fullscreen / float / close {window | app}; workspace {window | app, to}.",
           {"op": {"type": "string", "enum": ["windows", "active", "shot", "point", "focus", "fullscreen", "float", "close", "workspace"]},
            "window": {"type": "string"}, "app": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"},
-           "w": {"type": "number"}, "h": {"type": "number"}, "note": {"type": "string"}, "to": {"type": "integer"}},
+           "w": {"type": "number"}, "h": {"type": "number"}, "note": {"type": "string"}, "magnify": {"type": "boolean"},
+           "to": {"type": "integer"}},
           ["op"]),
 ]
 
@@ -885,7 +887,7 @@ class Toolbox:
     def t_screen(self, op: str, **kw: Any) -> Any:
         if not self.screen:
             raise _Invalid("there's no graphical screen in this session")
-        args = {k: v for k, v in kw.items() if v is not None and k in ("window", "app", "x", "y", "w", "h", "note", "to")}
+        args = {k: v for k, v in kw.items() if v is not None and k in ("window", "app", "x", "y", "w", "h", "note", "magnify", "to")}
         r = self.screen.request(op, **args)
         if not r.get("ok"):
             return f"Error: {r.get('error')}"

@@ -46,6 +46,6 @@ app while it talks, and arranging windows. Screenshots count as outside informat
 
 | Event | Shown as |
 |---|---|
-| `plan.waiting` (a question for you) | A card at the top right with the question, why the AI is unsure, what it would pick, and the answers to tap |
+| `plan.waiting` (a question for you) | A card at the top right with the question, why the AI is unsure, what it would pick, and the answers to tap (or, for a question with no ready answers, where to answer it) |
 | `voice.listening`, `voice.heard`, `voice.speaking`, `voice.done` | The voice indicator at the bottom |
-| `screen.point` | An amber outline and a note over the area, for a few seconds |
+| `screen.point` | An amber outline and a note over the area, for a few seconds; with `magnify`, also a lens beside it showing the area twice as large (a still capture of the screen) |

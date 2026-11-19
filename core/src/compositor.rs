@@ -14,7 +14,8 @@
 //!   {"op":"focus","window":ADDR|"class":...}  {"op":"workspace","window":ADDR,"to":N}  {"op":"fullscreen","window":ADDR}
 //!   {"op":"float","window":ADDR}  {"op":"close","window":ADDR}  {"op":"effects","on":bool}
 //!   {"op":"shot","window"?:ADDR|"app"?:...}  → a screenshot to look at (grim), with its origin on screen
-//!   {"op":"point","x","y","w","h","note"?,"window"?|"app"?} → outline that area for the human, over any app
+//!   {"op":"point","x","y","w","h","note"?,"magnify"?,"window"?|"app"?} → outline that area for the human, over any app
+//!     (magnify: also show it enlarged in a lens, for small print)
 
 use crate::client::Client;
 use serde_json::{json, Value};
@@ -181,6 +182,7 @@ impl Organ {
                     y += c["at"][1].as_f64().unwrap_or(0.0);
                 }
                 let mark = json!({"x": x, "y": y, "w": w, "h": h, "note": req["note"].as_str().unwrap_or(""),
+                                  "magnify": req["magnify"].as_bool().unwrap_or(false),
                                   "seconds": n("seconds").unwrap_or(8.0).clamp(1.0, 60.0)});
                 self.tell_core("screen.point", mark.clone());
                 Ok(json!({"ok": true, "shown": mark}))
@@ -360,8 +362,9 @@ mod tests {
         assert_eq!(o.handle(&json!({"op": "workspace", "window": "0x5b2", "to": 500}))["ok"], false);
         assert_eq!(o.handle(&json!({"op": "focus", "app": "gimp"}))["error"], "no gimp window open");
         // Pointing inside a window becomes screen coordinates (the chromium window is at 0,0; foot at 1280,0).
-        let p = o.handle(&json!({"op": "point", "app": "foot", "x": 10, "y": 20, "w": 100, "h": 30, "note": "this line"}));
+        let p = o.handle(&json!({"op": "point", "app": "foot", "x": 10, "y": 20, "w": 100, "h": 30, "note": "this line", "magnify": true}));
         assert_eq!(p["shown"]["x"], 1290.0, "{p}");
+        assert_eq!(p["shown"]["magnify"], true);
         assert_eq!(p["shown"]["note"], "this line");
         assert_eq!(o.handle(&json!({"op": "point", "x": 1}))["ok"], false);
         let _ = std::fs::remove_dir_all(&dir);
