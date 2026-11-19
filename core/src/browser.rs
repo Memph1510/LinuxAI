@@ -117,7 +117,10 @@ impl Cdp {
         if unsafe { libc::geteuid() } == 0 {
             cmd.arg("--no-sandbox"); // Chromium refuses to run as root otherwise (dev machines, containers)
         }
-        cmd.arg("about:blank").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        // Chromium's own messages go to a log in the profile, so a browser that won't start can say why.
+        let log = profile.join("chromium.log");
+        let err_out = File::create(&log).map(Stdio::from).unwrap_or_else(|_| Stdio::null());
+        cmd.arg("about:blank").stdin(Stdio::null()).stdout(Stdio::null()).stderr(err_out);
         unsafe {
             cmd.pre_exec(move || {
                 // Move both ends out of the way first, in case either already sits on 3 or 4.
@@ -146,7 +149,12 @@ impl Cdp {
         let reader = cdp.clone();
         let input = unsafe { File::from_raw_fd(our_in) };
         std::thread::spawn(move || reader.read_loop(input));
-        cdp.call("Target.setDiscoverTargets", json!({"discover": true}), None)?;
+        if let Err(e) = cdp.call("Target.setDiscoverTargets", json!({"discover": true}), None) {
+            let said = std::fs::read_to_string(&log).unwrap_or_default();
+            let tail: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
+            let tail = tail[tail.len().saturating_sub(6)..].join(" | ");
+            return Err(std::io::Error::other(format!("{e}{}", if tail.is_empty() { String::new() } else { format!("; Chromium said: {tail}") })));
+        }
         Ok(cdp)
     }
 
