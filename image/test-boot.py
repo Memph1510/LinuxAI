@@ -70,6 +70,8 @@ CHECKS = [
      "print('focus',q({'op':'focus','app':'foot'}).get('ok'),q({'op':'focus','app':'foot'}).get('error',''))\n"
      "print('effects',q({'op':'effects','on':False}).get('ok'),q({'op':'effects','on':False}).get('error',''))\"",
      r"(?s)windows [1-9].*focus True.*effects True|no-hyprland"),
+    ("the core answers you, not only root (bar, reach, organs)",
+     "sudo -u linuxai linuxai-core ctl '{\"op\":\"ping\"}' | grep -c '\"ok\": true'", r"^[1-9]"),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
