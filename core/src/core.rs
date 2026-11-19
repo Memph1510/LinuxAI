@@ -272,10 +272,26 @@ impl Core {
     // API operations
     // ---------------------------------------------------------------------------------------
 
+    /// One request. If anything it wrote to memory failed to save (a full disk, say), it didn't happen as
+    /// reported: the answer says so instead of claiming success.
     pub fn handle(self: &Arc<Self>, req: &Value) -> Value {
+        let (failed_before, _) = self.mem.write_failures();
+        let mut r = self.handle_inner(req);
+        let (failed_after, why) = self.mem.write_failures();
+        if failed_after > failed_before && req["op"] != "ping" {
+            r = json!({"ok": false, "error": format!("the core couldn't save this to its memory: {why}"), "partial": r});
+        }
+        r
+    }
+
+    fn handle_inner(self: &Arc<Self>, req: &Value) -> Value {
         let op = req["op"].as_str().unwrap_or("");
         match op {
-            "ping" => json!({"ok": true, "version": env!("CARGO_PKG_VERSION")}),
+            "ping" => {
+                let (failed, why) = self.mem.write_failures();
+                json!({"ok": true, "version": env!("CARGO_PKG_VERSION"),
+                       "memory": if failed == 0 { json!({"healthy": true}) } else { json!({"healthy": false, "failed_writes": failed, "last_error": why}) }})
+            }
             "state" => json!({"ok": true, "state": *self.state.lock().unwrap()}),
             "verbs" => json!({"ok": true, "verbs": verbs::registry_json()}),
             "check" => {

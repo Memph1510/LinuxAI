@@ -1,5 +1,7 @@
 [Unit]
 Description=LinuxAI reach (tells you when the AI needs you)
+# Not for root: an admin logging in on a console gets no LinuxAI services (and no unsandboxed browser).
+ConditionUser=!root
 
 [Service]
 EnvironmentFile=-%h/.config/linuxai/env

@@ -974,3 +974,17 @@ fn the_prompt_library_lists_fills_counts_and_holds_ai_changes() {
     assert_eq!(c.handle(&json!({"op": "prompt_put", "name": "../etc/x", "text": "---\ntitle: x\n---\ny"}))["ok"], false);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_full_disk_is_reported_not_hidden() {
+    let (core, _fake) = core();
+    assert_eq!(core.handle(&json!({"op": "ping"}))["memory"]["healthy"], true);
+    core.mem.refuse_writes();
+    let r = core.handle(&json!({"op": "task_create", "source": "human", "spec": {"title": "Boot test", "subtasks": [{"title": "Pick one", "kind": "decision"}]}}));
+    assert_eq!(r["ok"], false, "a task that couldn't be saved isn't reported as created: {r}");
+    assert!(r["error"].as_str().unwrap().contains("couldn't save"), "{r}");
+    let p = core.handle(&json!({"op": "ping"}));
+    assert_eq!(p["ok"], true, "the core still answers");
+    assert_eq!(p["memory"]["healthy"], false, "{p}");
+    assert!(p["memory"]["failed_writes"].as_u64().unwrap() > 0);
+}

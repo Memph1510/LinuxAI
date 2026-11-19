@@ -48,9 +48,10 @@ sed -i -e "s/^iso_name=.*/iso_name=\"linuxai\"/" \
        -e "s/^iso_version=.*/iso_version=\"$VERSION\"/" "$PROFILE/profiledef.sh"
 sed -i '/^file_permissions=(/a\  ["/etc/gshadow"]="0:0:400"\n  ["/etc/sudoers.d/10-linuxai"]="0:0:440"\n  ["/home/linuxai"]="1000:1000:750"\n  ["/home/linuxai/.bash_profile"]="1000:1000:644"\n  ["/usr/local/bin/linuxai-core"]="0:0:755"\n  ["/usr/local/bin/cortex"]="0:0:755"\n  ["/usr/local/bin/linuxai-session"]="0:0:755"\n  ["/usr/local/bin/linuxai-voice-setup"]="0:0:755"\n  ["/usr/local/bin/linuxai-screen"]="0:0:755"' "$PROFILE/profiledef.sh"
 
-# Also show boot and login on the serial port (handy for VMs and automated tests).
+# Also show boot and login on the serial port (handy for VMs and automated tests). Give the live system room to
+# write (archiso's default is 256 MB, which a browser profile and a Blender scene outgrow; it's RAM, used only as needed).
 grep -rl 'archisobasedir' "$PROFILE/efiboot" "$PROFILE/syslinux" "$PROFILE/grub" 2>/dev/null \
-    | xargs sed -i '/archisobasedir/ s/$/ console=tty0 console=ttyS0,115200/'
+    | xargs sed -i '/archisobasedir/ s/$/ console=tty0 console=ttyS0,115200 cow_spacesize=50%/'
 # Rename the boot menu entries.
 grep -rl 'Arch Linux install medium' "$PROFILE" 2>/dev/null | xargs -r sed -i 's/Arch Linux install medium/LinuxAI live/g'
 

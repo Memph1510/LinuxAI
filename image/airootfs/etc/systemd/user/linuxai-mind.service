@@ -1,5 +1,7 @@
 [Unit]
 Description=LinuxAI mind (the AI working behind the scenes)
+# Not for root: an admin logging in on a console gets no LinuxAI services (and no unsandboxed browser).
+ConditionUser=!root
 ConditionPathExists=%h/.config/linuxai/env
 
 [Service]
