@@ -6,6 +6,7 @@
 //!     app, not only the browser);
 //!   - control: focus, move to a workspace, fullscreen, float, close a window;
 //!   - power: turns animations and blur off on battery and back on when plugged in (it follows the core's events).
+//! Hyprland 0.55+ takes Lua over its control socket (`dispatch hl.dsp…`, `eval …`); the info queries are JSON.
 //! It reports focus changes and windows opening and closing to the core as events.
 //!
 //! Requests: one JSON object per line on `$XDG_RUNTIME_DIR/linuxai-compositor.sock`:
@@ -50,14 +51,14 @@ impl Hypr {
         serde_json::from_str(&raw).map_err(|e| std::io::Error::other(format!("{what}: {e}")))
     }
 
-    fn dispatch(&self, args: &str) -> Result<(), String> {
-        let r = self.ask(&format!("dispatch {args}")).map_err(|e| e.to_string())?;
+    /// Hyprland 0.55+ takes Lua: `dispatch <hl.dsp…>` runs a dispatcher, `eval <lua>` anything else.
+    fn lua(&self, verb: &str, code: &str) -> Result<(), String> {
+        let r = self.ask(&format!("{verb} {code}")).map_err(|e| e.to_string())?;
         if r.trim() == "ok" { Ok(()) } else { Err(format!("Hyprland: {}", r.trim())) }
     }
 
-    fn keyword(&self, k: &str, v: &str) -> Result<(), String> {
-        let r = self.ask(&format!("keyword {k} {v}")).map_err(|e| e.to_string())?;
-        if r.trim() == "ok" { Ok(()) } else { Err(format!("Hyprland: {}", r.trim())) }
+    fn dispatch(&self, dsp: &str) -> Result<(), String> {
+        self.lua("dispatch", dsp)
     }
 }
 
@@ -121,32 +122,28 @@ impl Organ {
             "monitors" => Ok(json!({"ok": true, "monitors": self.hypr.json("monitors").map_err(|e| e.to_string())?})),
             "focus" => {
                 let a = self.target(req)?;
-                self.hypr.dispatch(&format!("focuswindow address:{a}"))?;
+                self.hypr.dispatch(&format!("hl.dsp.focus({{ window = \"address:{a}\" }})"))?;
                 Ok(json!({"ok": true, "window": a}))
             }
             "workspace" => {
                 let a = self.target(req)?;
                 let to = req["to"].as_i64().filter(|n| (1..=99).contains(n)).ok_or("to: a workspace number 1-99")?;
-                self.hypr.dispatch(&format!("movetoworkspacesilent {to},address:{a}"))?;
+                self.hypr.dispatch(&format!("hl.dsp.window.move({{ window = \"address:{a}\", workspace = \"{to}\", follow = false }})"))?;
                 Ok(json!({"ok": true, "window": a, "workspace": to}))
             }
             "fullscreen" | "float" | "close" => {
                 let a = self.target(req)?;
-                // Fullscreen and float act on the focused window, so focus it first.
                 let d = match req["op"].as_str().unwrap_or("") {
-                    "fullscreen" => { self.hypr.dispatch(&format!("focuswindow address:{a}"))?; "fullscreen".to_string() }
-                    "float" => format!("togglefloating address:{a}"),
-                    _ => format!("closewindow address:{a}"),
+                    "fullscreen" => format!("hl.dsp.window.fullscreen({{ window = \"address:{a}\", action = \"toggle\" }})"),
+                    "float" => format!("hl.dsp.window.float({{ window = \"address:{a}\", action = \"toggle\" }})"),
+                    _ => format!("hl.dsp.window.close({{ window = \"address:{a}\" }})"),
                 };
                 self.hypr.dispatch(&d)?;
                 Ok(json!({"ok": true, "window": a}))
             }
             "effects" => {
                 let on = req["on"].as_bool().ok_or("on: true or false")?;
-                let v = if on { "1" } else { "0" };
-                for k in ["animations:enabled", "decoration:blur:enabled", "decoration:shadow:enabled"] {
-                    self.hypr.keyword(k, v)?;
-                }
+                self.hypr.lua("eval", &format!("hl.config({{ animations = {{ enabled = {on} }}, decoration = {{ blur = {{ enabled = {on} }}, shadow = {{ enabled = {on} }} }} }})"))?;
                 Ok(json!({"ok": true, "effects": on}))
             }
             other => Err(format!("unknown compositor op {other:?}")),
@@ -270,7 +267,7 @@ mod tests {
                         {"address": "0x5b2", "class": "foot", "title": "LinuxAI", "workspace": {"id": 1}, "at": [1280, 0], "size": [640, 900], "floating": false, "fullscreen": 0, "pid": 11, "focusHistoryID": 0}]).to_string(),
                     "j/activewindow" => json!({"address": "0x5a1", "class": "chromium", "title": "Compare SUVs", "workspace": {"id": 1}, "at": [0, 40], "size": [1280, 860]}).to_string(),
                     "j/cursorpos" => json!({"x": 300, "y": 240}).to_string(),
-                    r if r.starts_with("dispatch ") || r.starts_with("keyword ") => "ok".into(),
+                    r if r.starts_with("dispatch hl.dsp.") || r.starts_with("eval hl.") => "ok".into(),
                     _ => "unknown request".into(),
                 };
                 let _ = s.write_all(out.as_bytes());
@@ -296,9 +293,9 @@ mod tests {
         assert_eq!(o.handle(&json!({"op": "workspace", "window": "0x5b2", "to": 3}))["ok"], true);
         assert_eq!(o.handle(&json!({"op": "effects", "on": false}))["ok"], true);
         let got = asked.lock().unwrap().clone();
-        assert!(got.contains(&"dispatch focuswindow address:0x5a1".to_string()), "{got:?}");
-        assert!(got.contains(&"dispatch movetoworkspacesilent 3,address:0x5b2".to_string()));
-        assert!(got.contains(&"keyword animations:enabled 0".to_string()) && got.contains(&"keyword decoration:blur:enabled 0".to_string()));
+        assert!(got.contains(&r#"dispatch hl.dsp.focus({ window = "address:0x5a1" })"#.to_string()), "{got:?}");
+        assert!(got.contains(&r#"dispatch hl.dsp.window.move({ window = "address:0x5b2", workspace = "3", follow = false })"#.to_string()));
+        assert!(got.iter().any(|g| g.starts_with("eval hl.config({ animations = { enabled = false }")), "{got:?}");
 
         // Nothing but a real window address reaches a dispatch.
         assert_eq!(o.handle(&json!({"op": "close", "window": "0x1; exec rm -rf ~"}))["ok"], false);

@@ -26,7 +26,7 @@ Started by the Hyprland session. Talks to Hyprland's control and event sockets.
 
 ## Starting the screen
 
-`linuxai-screen` (run at login on the main console) starts Hyprland with `/etc/linuxai/hypr/hyprland.conf`.
+`linuxai-screen` (run at login on the main console) starts Hyprland with `/etc/linuxai/hypr/hyprland.lua` (Hyprland 0.55+ is configured in Lua).
 If the machine can't draw it (a VM without graphics acceleration, typically), it falls back to the text
 session and writes why to `~/.local/state/linuxai/screen.log`. `LINUXAI_SCREEN=text` always uses the text
 session.

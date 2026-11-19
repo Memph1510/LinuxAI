@@ -7,7 +7,7 @@ log="$state/screen.log"
 if [ "${LINUXAI_SCREEN:-graphical}" != "text" ] && command -v Hyprland >/dev/null; then
     start=$(date +%s)
     echo "starting Hyprland $(date)" > "$log"
-    Hyprland --config /etc/linuxai/hypr/hyprland.conf >> "$log" 2>&1
+    Hyprland --config /etc/linuxai/hypr/hyprland.lua >> "$log" 2>&1
     code=$?
     # A session that ended within 15 seconds never really started (no usable graphics, typically in a VM).
     if [ $(( $(date +%s) - start )) -ge 15 ]; then exit 0; fi

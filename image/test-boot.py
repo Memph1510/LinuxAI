@@ -60,6 +60,16 @@ CHECKS = [
     ("screen: Hyprland runs, or the text session took over and said why",
      "sleep 20; if pgrep -x Hyprland >/dev/null; then echo hyprland; pgrep -f quickshell >/dev/null && echo quickshell; "
      "else grep '^text:' /home/linuxai/.local/state/linuxai/screen.log; fi", r"^(hyprland|text: Hyprland could not start)"),
+    ("screen: the LinuxAI bar (Quickshell) and session window are up",
+     "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; for i in $(seq 30); do pgrep -f 'quickshell' >/dev/null && pgrep -x foot >/dev/null && break; sleep 2; done;"
+     " pgrep -f quickshell >/dev/null && echo bar; pgrep -x foot >/dev/null && echo session", r"(?s)bar.*session|no-hyprland"),
+    ("screen: the AI sees and steers windows (compositor organ, real Hyprland)",
+     "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sudo -u linuxai python3 -c \"import socket,json\n"
+     "def q(r):\n s=socket.socket(socket.AF_UNIX);s.connect('/run/user/%d/linuxai-compositor.sock'%1000);s.sendall((json.dumps(r)+'\\\\n').encode());return json.loads(s.makefile().readline())\n"
+     "w=q({'op':'windows'});print('windows',len(w.get('windows',[])),w.get('error',''))\n"
+     "print('focus',q({'op':'focus','app':'foot'}).get('ok'),q({'op':'focus','app':'foot'}).get('error',''))\n"
+     "print('effects',q({'op':'effects','on':False}).get('ok'),q({'op':'effects','on':False}).get('error',''))\"",
+     r"(?s)windows [1-9].*focus True.*effects True|no-hyprland"),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
