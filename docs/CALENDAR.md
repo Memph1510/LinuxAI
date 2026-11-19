@@ -1,33 +1,37 @@
 # Calendar
 
-The calendar is part of the OS, not an app. It works the same way as email: what comes from outside is
-information, the AI reads it and proposes, and the calendar only changes through the human or through a plan.
+The calendar is part of the AI, not an app. There is no calendar screen: it's the AI's knowledge of your time.
+You tell it things in conversation ("I've got the dentist Thursday at 11", "the kids are off school next week")
+and it keeps them. It uses the calendar whenever it plans, decides or talks with you: what's coming up,
+conflicts, free time, travel and preparation, and when to bring something up.
 
-## What's on it
+Outside content works the same way as email: it's information, never instructions.
 
-| Kind | Where it comes from | Trust | Who can change it |
-|---|---|---|---|
-| Your events | You (Workspace, `ctl`), or a plan with `schedule` | yours | You; the AI through a plan |
-| Accepted invitations | An invitation you (or a plan) accepted | yours, linked to the invite | as above |
-| Subscribed calendars | `.ics` feeds you subscribe to (school, team, holidays) | outside | Nobody: they are refreshed from the source |
-| Invitations | `.ics` in an email, or imported with `--invite` | outside, pending | Only answered: accept, maybe, decline |
+## What's in it
 
-An invitation **never puts itself on your calendar**. It waits under "Needs you" in the Workspace, with any
-clashes, until you or a plan answers it. Its description is outside text: facts to weigh, never instructions.
-If the organizer cancels it, it comes off again.
+| Kind | Where it comes from | Who can change it |
+|---|---|---|
+| Your events | You, in conversation; the AI writes them down | The AI, directly (it's its record of your time) |
+| Accepted invitations | An invitation you said yes to | as above |
+| Subscribed calendars | `.ics` feeds (school, team, holidays) | Nobody: refreshed from the source, read-only |
+| Invitations | `.ics` in an email, or imported with `--invite` | Only answered, after the AI brings it up with you |
+
+An invitation **never puts itself on the calendar**. The AI weighs who sent it and what it clashes with, brings
+it up with you (or follows its playbook), and records your answer. Its description is outside text. If the
+organizer cancels, it comes off.
 
 ## How the AI uses it
 
-- Reads it with the `calendar` tool: `agenda`, `free` (open slots in your working day, default 8:00–18:00) and
-  `invites`. Recurring events are expanded (daily, weekly by day, monthly, yearly; interval, count, until).
-- Changes it only with plan verbs, which are journaled and checked like any other plan:
-  `schedule(title, at, minutes?, end?, where?, notes?, rrule?)`, `reschedule(id, …)`, `unschedule(id)`,
-  `answer_invite(id, answer)`. The core refuses direct changes from the AI (`calendar_add` and friends need
-  `source: human`).
-- An arriving invitation fires the default rule `invitation-arrived`: the AI thinks about it (who sent it,
-  when, what it clashes with) and either asks you or follows its playbook.
-- `calendar.soon` fires once, 30 minutes before each event (`LINUXAI_CALENDAR_LEAD` to change), and reaches you
-  as a text if you're away: "LinuxAI: in 10 min: Call the dealer at phone".
+- **Every turn**, the next four days and any pending invitations are in the AI's context (`<calendar>`), so your
+  schedule is part of every answer and plan without the AI having to look it up.
+- **The `calendar` tool:** `agenda`, `free`, `invites` to read; `add`, `change`, `cancel`, `answer_invite` to
+  keep it up to date. Recurring events are expanded (daily, weekly by day, monthly, yearly; interval, count,
+  until).
+- **In plans**, the verbs `schedule`, `reschedule`, `unschedule`, `answer_invite` let a bigger job include a
+  calendar step (book the test drive, then put it on the calendar).
+- **An arriving invitation** fires the default rule `invitation-arrived`, and the AI thinks about it.
+- **`calendar.soon`** fires once, 30 minutes before each event (`LINUXAI_CALENDAR_LEAD` to change). If you're
+  away, it reaches you as a text.
 
 Times are stored as UTC seconds. `.ics` times with `TZID`, `Z`, floating and all-day dates are all understood;
 times you type ("2026-11-24 14:00") are your local time.
@@ -60,7 +64,7 @@ Invitations in email need nothing: the mail organ finds `text/calendar` parts an
 | `calendar_free {from?, to?, minutes, day_start?, day_end?}` | anyone | open slots |
 | `invites` | anyone | pending invitations |
 | `calendar_import {ics, kind: feed\|invite, source}` | organs | read `.ics` in as outside information |
-| `calendar_add {event}`, `calendar_change {id, fields}`, `calendar_cancel {id}`, `invite_answer {id, answer}` | human only | direct changes |
+| `calendar_add {event}`, `calendar_change {id, fields}`, `calendar_cancel {id}`, `invite_answer {id, answer}` | the AI, the session | keeping it up to date |
 
 Events: `calendar.added`, `calendar.changed`, `calendar.cancelled`, `calendar.invite`,
 `calendar.invite_cancelled`, `calendar.feed_updated`, `calendar.soon`.

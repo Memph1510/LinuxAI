@@ -163,7 +163,7 @@ Not decided yet. Each is an option to discuss, not planned work.
 ### Calendar ([CALENDAR.md](CALENDAR.md))
 
 - [x] Events, repeats, free time, conflicts; invitations from email wait for you; subscribed calendars read-only
-- [x] AI changes only through plan verbs; reminders by text; Workspace agenda and invitation answers
+- [x] Part of the AI, not an app: kept from conversation, in the AI's context every turn; reminders by text
 - [ ] Reply to the organizer by email when you answer an invitation
 - [ ] Two-way sync with calendar servers (CalDAV)
 - [ ] Exceptions to repeating events (EXDATE, moved occurrences)

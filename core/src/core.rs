@@ -373,16 +373,12 @@ impl Core {
             op if op.starts_with("prompt") => self.prompt_op(op, req),
             "object_put" | "find" => self.object_op(op, req),
             "calendar" | "calendar_free" | "invites" | "calendar_import" => crate::calendar::op(&self.mem, &self.bus, op, req),
-            // Changing your calendar directly: only you (the session or the Workspace, as the human). The AI changes
-            // it through plans (schedule, unschedule, answer_invite), where trust and your OK apply.
+            // The calendar is the AI's working knowledge of the human's time: it writes what the human tells it
+            // directly. Subscribed calendars and invitations stay outside information (calendar.rs refuses to edit them).
             "calendar_add" | "calendar_change" | "calendar_cancel" | "invite_answer" => {
-                if req["source"] != "human" {
-                    json!({"ok": false, "error": "the AI changes the calendar through a plan (schedule, unschedule, answer_invite)"})
-                } else {
-                    let r = crate::calendar::op(&self.mem, &self.bus, op, req);
-                    self.settle();
-                    r
-                }
+                let r = crate::calendar::op(&self.mem, &self.bus, op, req);
+                self.settle();
+                r
             }
             "object_patch" => json!({"ok": self.mem.patch_object(req["id"].as_str().unwrap_or(""), &req["fields"])}),
             "object" => match self.mem.object(req["id"].as_str().unwrap_or("")) {

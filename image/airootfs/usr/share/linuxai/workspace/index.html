@@ -77,13 +77,6 @@ button { cursor: pointer; }
 .ev time { font: 11px var(--mono); color: var(--fg-faint); padding-top: 2px; }
 .ev.you { color: var(--you); }
 .demo { font: 11px var(--mono); color: var(--fg-faint); }
-.day { font: 600 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-faint); padding: 4px 6px 0; }
-.cal { display: grid; grid-template-columns: 66px minmax(0, 1fr); gap: 6px; font-size: 13px; padding: 2px 6px; }
-.cal time { font: 11px var(--mono); color: var(--ai); padding-top: 2px; white-space: nowrap; }
-.cal .where { color: var(--fg-dim); font-size: 12px; }
-.cal.outside time { color: var(--fg-faint); }
-.cal.clash time { color: var(--bad); }
-.q.invite { border-color: var(--line); background: var(--panel-2); }
 
 /* Half a screen: the page beside one column holding what needs you, the work, and the steps. */
 @media (max-width: 1100px) {
@@ -122,10 +115,6 @@ button { cursor: pointer; }
       <div class="panel-h"><span class="label" id="stepsTitle">Steps</span></div>
       <div class="scroll" id="steps"><div class="empty">Pick a piece of work to see its steps.</div></div>
     </section>
-    <section class="panel" style="flex:1" aria-label="Calendar">
-      <div class="panel-h"><span class="label">Coming up</span><span class="label" id="calNext"></span></div>
-      <div class="scroll" id="agenda"></div>
-    </section>
     <section class="panel" style="flex:1" aria-label="Activity">
       <div class="panel-h"><span class="label">What's happening</span></div>
       <div class="scroll" id="activity"></div>
@@ -161,15 +150,9 @@ let state = { questions: [], tasks: [], selected: null, pages: [], watching: nul
 async function loadQuestions() {
   const r = await core({ op: "waiting" });
   state.questions = (r.plans || []).filter((p) => p.wait && p.wait.question);
-  const inv = await core({ op: "invites" });
-  state.invites = inv.invites || [];
-  const n = state.questions.length + state.invites.length;
+  const n = state.questions.length;
   $("needCount").textContent = n ? `${n} waiting` : "";
-  const invites = state.invites.map((v) => `<div class="q invite"><div class="q-t">Invitation: ${esc(v.title)}</div>
-      <div class="q-why">${esc(when(v))}${v.where ? " · " + esc(v.where) : ""} · from ${esc((v.organizer && (v.organizer.name || v.organizer.address)) || "someone")}</div>
-      ${v.conflicts && v.conflicts.length ? `<div class="q-why" style="color:var(--bad)">Clashes with ${esc(v.conflicts.map((c) => c.title).join(", "))}</div>` : ""}
-      <div class="q-row"><button class="btn you" data-invite="${esc(v.id)}" data-reply="accept">Accept</button><button class="btn line-you" data-invite="${esc(v.id)}" data-reply="tentative">Maybe</button><button class="btn line-you" data-invite="${esc(v.id)}" data-reply="decline">Decline</button></div></div>`);
-  $("needs").innerHTML = n ? invites.join("") + state.questions.map((q, i) => {
+  $("needs").innerHTML = n ? state.questions.map((q, i) => {
     const w = q.wait, opts = w.opts && w.opts.length ? w.opts : null;
     return `<div class="q"><div class="q-t">${esc(w.question)}</div>
       ${w.why ? `<div class="q-why">Why I'm unsure: ${esc(w.why)}</div>` : ""}${w.lean ? `<div class="q-why">I'd lean: ${esc(w.lean)}</div>` : ""}
@@ -183,32 +166,6 @@ async function answer(i, text) {
   await core({ op: "answer", plan_id: q.plan_id, text });
   addActivity({ kind: "you.answered", ts: Date.now() / 1000, data: { text } });
   loadQuestions();
-}
-
-// ---- the calendar ----
-const dayWord = (ts) => { const d = new Date(ts * 1000), t = new Date(); t.setHours(0, 0, 0, 0);
-  const diff = Math.round((new Date(d).setHours(0, 0, 0, 0) - t) / 864e5);
-  return diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }); };
-const when = (e) => `${dayWord(e.start)}${e.all_day ? "" : " " + hhmm(e.start)}`;
-async function loadAgenda() {
-  const r = await core({ op: "calendar" });
-  const evs = r.events || [];
-  let last = "", html = "";
-  for (const e of evs.slice(0, 30)) {
-    const d = dayWord(e.start);
-    if (d !== last) { html += `<div class="day">${esc(d)}</div>`; last = d; }
-    html += `<div class="cal ${e.trust === "outside" ? "outside" : ""} ${e.conflicts && e.conflicts.length ? "clash" : ""}"><time>${e.all_day ? "all day" : hhmm(e.start)}</time>
-      <span>${esc(e.title)}${e.where ? `<br><span class="where">${esc(e.where)}</span>` : ""}</span></div>`;
-  }
-  $("agenda").innerHTML = html || `<div class="empty">Nothing on the calendar this week.</div>`;
-  const next = evs.find((e) => e.start * 1000 > Date.now());
-  $("calNext").textContent = next ? `next ${hhmm(next.start)}` : "";
-}
-async function replyInvite(id, answer) {
-  const r = await core({ op: "invite_answer", id, answer });
-  if (r.ok === false) return;
-  addActivity({ kind: "you.answered", ts: Date.now() / 1000, data: { text: `${answer} the invitation` } });
-  loadQuestions(); loadAgenda();
 }
 
 // ---- the work ----
@@ -286,8 +243,7 @@ const words = {
   "task.done": (d) => `Done: ${d.title || ""}`, "task.failed": (d) => `Blocked: ${d.title || ""}`, "ai.tell": (d) => d.text || "",
   "browser.handoff": (d) => `Handed you a page: ${d.note || d.title || ""}`, "browser.showing": (d) => `Showing you: ${d.note || d.url || ""}`,
   "voice.heard": (d) => `You said: ${d.text || ""}`, "power.unplugged": () => "Unplugged: saving power", "power.plugged": () => "Plugged in",
-  "service.failed": (d) => `A service failed: ${d.unit || ""}`, "calendar.soon": (d) => `In ${d.minutes} min: ${d.title || ""}`,
-  "calendar.invite": (d) => `Invitation: ${d.title || ""}`, "calendar.added": (d) => `On the calendar: ${d.title || ""}`, "you.answered": (d) => `You answered: ${d.text || ""}`,
+  "service.failed": (d) => `A service failed: ${d.unit || ""}`, "you.answered": (d) => `You answered: ${d.text || ""}`,
 };
 function addActivity(ev) {
   const f = words[ev.kind];
@@ -301,7 +257,6 @@ window.linuxaiEvent = (ev) => {
   const k = ev.kind || "";
   if (k.startsWith("plan.")) loadQuestions();
   if (k.startsWith("task.")) loadTasks();
-  if (k.startsWith("calendar.")) { loadAgenda(); if (k.startsWith("calendar.invite")) loadQuestions(); }
   // The AI showing you a page, or handing one over for you to act on: it opens here.
   if ((k === "browser.showing" || k === "browser.handoff") && ev.data && ev.data.tab) { loadPages().then(() => watch(ev.data.tab)); }
   else if (k.startsWith("browser.")) loadPages();
@@ -313,8 +268,6 @@ document.addEventListener("click", (e) => {
   if (a) return answer(+a.dataset.answer, a.dataset.text);
   const s = e.target.closest("[data-send]");
   if (s) return answer(+s.dataset.send, document.querySelector(`[data-free="${s.dataset.send}"]`).value);
-  const v = e.target.closest("[data-invite]");
-  if (v) return replyInvite(v.dataset.invite, v.dataset.reply);
   const t = e.target.closest("[data-task]");
   if (t) { state.selected = t.dataset.task; loadTasks(); return; }
   const p = e.target.closest("[data-page]");
@@ -334,7 +287,6 @@ $("openForm").addEventListener("submit", async (e) => {
 });
 
 // ---- example data, when the page is opened on its own ----
-function DAY(n, h, m = 0) { const d = new Date(); d.setDate(d.getDate() + n); d.setHours(h, m, 0, 0); return d.getTime() / 1000; }
 const DEMO = {
   waiting: { ok: true, plans: [
     { plan_id: "p1", wait: { question: "Book the test drive Saturday 10am?", opts: ["Book it", "Not now"], why: "It's a $38,000 decision and you haven't driven it yet.", lean: "Book it" } },
@@ -348,18 +300,12 @@ const DEMO = {
     { title: "Compare towing, mileage and price", kind: "work", status: "done", result: "Only the Summit Trail tows the camper with margin" },
     { title: "Decide on a test drive", kind: "decision", status: "waiting" },
     { title: "Book the test drive", kind: "work", status: "pending" }] } },
-  invites: { ok: true, invites: [{ id: "i1", title: "Rate review, Q4 lanes", start: DAY(1, 14), where: "Hollis office", organizer: { name: "Dana Ruiz" }, conflicts: [] }] },
-  calendar: { ok: true, events: [
-    { title: "Call Lone Star Motors", start: DAY(0, 15, 30), where: "phone" },
-    { title: "Pickup Hollis #HL-2209", start: DAY(1, 9), where: "Dallas, TX" },
-    { title: "Test drive: Summit Trail", start: DAY(2, 10), where: "Lone Star Motors" },
-    { title: "Soccer: Tigers vs Hawks", start: DAY(2, 13), where: "Field 4", trust: "outside" }] },
   pages: { ok: true, pages: [{ tab: "a", owner: "ai", title: "Compare SUVs", url: "https://drivelist.example/compare" }, { tab: "b", owner: "human", title: "Lone Star Motors", url: "https://lonestarmotors.example" }] },
 };
 
 (async function start() {
   $("mode").textContent = live ? "" : "example data (not connected)";
-  await Promise.all([loadQuestions(), loadTasks(), loadPages(), loadAgenda()]);
+  await Promise.all([loadQuestions(), loadTasks(), loadPages()]);
   if (!live) {
     state.selected = "t1"; loadTasks();
     [["Showing you: the two SUVs", 1795060200], ["You said: is this one a good deal", 1795060150], ["New work: Choosing a family SUV", 1795059000]]
@@ -368,7 +314,6 @@ const DEMO = {
   }
   setInterval(loadPages, 15000);
   setInterval(loadQuestions, 30000);
-  setInterval(loadAgenda, 60000);
 })();
 </script>
 </body>

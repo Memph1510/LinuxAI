@@ -1,13 +1,16 @@
-//! The calendar: your time, kept by the OS, with the same rule as email.
+//! The calendar: the AI's knowledge of the human's time. Not an app the human looks at: something the AI keeps up
+//! from conversation and consults when it plans, decides, and talks to the human.
 //!
-//! Your events live in the core's memory (type "event"). Anything from outside is information, never instructions:
+//! Events live in the core's memory (type "event"). The AI adds and changes them directly when the human mentions
+//! something ("dentist Tuesday at 11"). Anything from outside is information, never instructions:
 //!   - **invitations** (from email, or an .ics file) become pending invites (type "invite"). An invitation never
-//!     puts itself on your calendar: the AI decides with your calendar playbook, or asks you with its lean;
-//!   - **subscribed calendars** (work, school, a team's schedule: .ics feeds) are shown as outside events, kept up
-//!     to date, and never changed by the AI.
-//! The AI changes your calendar only through plans (verbs `schedule`, `unschedule`, `answer_invite`), so trust,
-//! assessment and your OK apply as everywhere else. It finds free time, notices conflicts, and reminds you before
-//! things start (`calendar.soon`, which reach texts you).
+//!     puts itself on the calendar: the AI brings it up with the human, or decides with its playbook, and records
+//!     the answer;
+//!   - **subscribed calendars** (work, school, a team's schedule: .ics feeds) are outside events, kept up to date,
+//!     and never changed by the AI.
+//! Plans can also use the verbs `schedule`, `unschedule`, `reschedule`, `answer_invite` when changing the calendar
+//! is one step of a bigger job. The core notices conflicts and finds free time, and `calendar.soon` fires before
+//! things start.
 //!
 //! Times are stored as Unix seconds; .ics times with a time zone, in UTC, floating (local) and all-day are read.
 //! Repeating events (RRULE: daily, weekly with days, monthly, yearly; interval, count, until) are expanded.
@@ -619,8 +622,10 @@ mod tests {
         let free = c.handle(&json!({"op": "calendar_free", "from": at(0, 0), "to": at(23, 59), "minutes": 60}));
         let slots: Vec<(f64, f64)> = free["free"].as_array().unwrap().iter().map(|s| (s["start"].as_f64().unwrap(), s["end"].as_f64().unwrap())).collect();
         assert_eq!(slots, vec![(at(8, 0), at(10, 0)), (at(12, 0), at(18, 0))], "{free}");
-        // The AI can't change the calendar directly; it goes through a plan.
-        assert_eq!(c.handle(&json!({"op": "calendar_add", "event": {"title": "x", "start": at(9, 0)}}))["ok"], false);
+        // The AI writes to it directly too: it's the AI's record of the human's time.
+        let x = c.handle(&json!({"op": "calendar_add", "event": {"title": "x", "start": at(9, 0)}}));
+        assert_eq!(x["ok"], true, "{x}");
+        assert_eq!(c.handle(&json!({"op": "calendar_cancel", "id": x["id"]}))["ok"], true);
         let id = r["id"].as_str().unwrap();
         assert_eq!(c.handle(&json!({"op": "calendar_change", "source": "human", "id": id, "fields": {"at": at(13, 0)}}))["ok"], true);
         assert_eq!(c.handle(&json!({"op": "calendar_cancel", "source": "human", "id": r2["id"]}))["ok"], true);
@@ -657,8 +662,8 @@ mod tests {
         assert_eq!(pending["invites"][0]["status"], "pending");
         let evs = c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().clone();
         assert!(evs.iter().any(|e| e["kind"] == "calendar.invite" && e["data"]["trust"] == "outside"));
-        // Accepting (here by the human) puts it on the calendar; the organizer cancelling takes it off again.
-        let a = c.handle(&json!({"op": "invite_answer", "source": "human", "id": inv, "answer": "accept"}));
+        // Accepting (the AI recording the human's answer) puts it on the calendar; the organizer cancelling takes it off again.
+        let a = c.handle(&json!({"op": "invite_answer", "id": inv, "answer": "accept"}));
         assert_eq!(a["ok"], true, "{a}");
         assert_eq!(c.handle(&json!({"op": "calendar", "from": now(), "to": now() + 9.0 * 86400.0}))["events"].as_array().unwrap().len(), 1);
         c.handle(&json!({"op": "calendar_import", "kind": "invite", "ics": invite_ics("CANCEL", "u1@hollis", &start), "source": {}}));
