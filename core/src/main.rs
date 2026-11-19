@@ -2,6 +2,7 @@
 //!
 //!   linuxai-core daemon [--socket PATH] [--db PATH] [--group NAME]   run the core
 //!   linuxai-core ctl '<json request>'                                talk to a running core
+//!   linuxai-core follow                                              every event as it happens, one per line
 //!   linuxai-core check PLAN.json                                     check a plan without running it
 //!   linuxai-core snapshot                                            print what the host senses right now
 //!   linuxai-core verbs                                               list verbs
@@ -258,6 +259,18 @@ fn main() {
     let result = match args.get(1).map(String::as_str) {
         Some("daemon") => daemon(&args),
         Some("ctl") => ctl(&args),
+        Some("follow") => (|| -> std::io::Result<()> {
+            // Every event from now on, one JSON object per line (for the screen's always-on layer).
+            let c = client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket));
+            c.wait_until_up();
+            let mut out = std::io::stdout().lock();
+            for ev in c.follow()? {
+                if writeln!(out, "{ev}").and_then(|_| out.flush()).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        })(),
         Some("check") => {
             let text = std::fs::read_to_string(args.get(2).map(String::as_str).unwrap_or("/dev/stdin")).unwrap_or_default();
             let plan: Value = serde_json::from_str(&text).unwrap_or(Value::Null);

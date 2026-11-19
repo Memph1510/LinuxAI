@@ -24,6 +24,13 @@ def browser_socket() -> str:
     return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "linuxai-browser.sock")
 
 
+def compositor_socket() -> str:
+    """Where the screen organ (linuxai-core compositor) listens, inside the Hyprland session."""
+    if os.environ.get("LINUXAI_COMPOSITOR_SOCKET"):
+        return os.environ["LINUXAI_COMPOSITOR_SOCKET"]
+    return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "linuxai-compositor.sock")
+
+
 class CoreError(Exception):
     pass
 

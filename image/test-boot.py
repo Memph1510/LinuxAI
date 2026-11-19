@@ -72,6 +72,12 @@ CHECKS = [
      "print('focus',q({'op':'focus','app':'foot'}).get('ok'),q({'op':'focus','app':'foot'}).get('error',''))\n"
      "print('effects',q({'op':'effects','on':False}).get('ok'),q({'op':'effects','on':False}).get('error',''))\"",
      r"(?s)windows [1-9].*focus True.*effects True|no-hyprland"),
+    ("screen: the always-on layer (Quickshell) loaded without errors",
+     "f=/home/linuxai/.local/state/linuxai/quickshell.log; pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; };"
+     # Graphics-driver and desktop-portal notices in a VM aren't LinuxAI's problems; anything else is.
+     " grep -vE 'MESA|ZINK|qt.qpa.services|portal|^\\s*$' $f | grep -iE 'error|warn|is not a type|unavailable|cannot|undefined|failed' | head -12 > /tmp/qs.err;"
+     " if [ -s /tmp/qs.err ]; then cat /tmp/qs.err; else echo clean; fi",
+     r"^(clean|no-hyprland)"),
     ("the core answers you, not only root (bar, reach, organs)",
      "sudo -u linuxai linuxai-core ctl '{\"op\":\"ping\"}' | grep -c '\"ok\": true'", r"^[1-9]"),
     ("a task's decision step waits on the human",
@@ -144,6 +150,24 @@ def ppm_to_png(ppm: Path, png: Path) -> None:
                     + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
 
 
+def read_ppm(ppm: Path) -> tuple[int, int, bytes]:
+    parts = ppm.read_bytes().split(b"\n", 3)
+    w, h = map(int, parts[1].split())
+    return w, h, parts[3]
+
+
+def amber_in(img: tuple[int, int, bytes], x0: int, y0: int, x1: int, y1: int) -> int:
+    """How many pixels in the box are the human's amber (#e8b04a), the color of the AI's marks and questions."""
+    w, h, px = img
+    n = 0
+    for y in range(max(0, y0), min(h, y1)):
+        row = y * w * 3
+        for x in range(max(0, x0), min(w, x1)):
+            r, g, b = px[row + x * 3: row + x * 3 + 3]
+            n += abs(r - 232) < 30 and abs(g - 176) < 30 and abs(b - 74) < 40
+    return n
+
+
 def monitor(path: str, command: str) -> None:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as m:
         m.connect(path)
@@ -185,6 +209,25 @@ def main() -> int:
             print(f"  {'✓' if ok else '✗'} {name}" + ("" if ok else f"\n      got: {out[-300:]!r}"), flush=True)
         shots = Path(args.shots)
         shots.mkdir(parents=True, exist_ok=True)
+        if "yes" in con.run("pgrep -x Hyprland >/dev/null && echo yes", 30):
+            # The always-on layer, seen on the real screen: a question card, the voice indicator, the AI's pointer.
+            con.run("""linuxai-core ctl '{"op":"submit","source":"human","plan":{"plan":"boot-question","why":"boot test","steps":[{"ask":"Book the test drive Saturday 10am?","opts":["Book it","Not now"],"why":"It is a $38,000 decision","lean":"Book it","as":"a"}]}}' >/dev/null;"""
+                    """ linuxai-core ctl '{"op":"event","kind":"voice.listening","data":{}}' >/dev/null;"""
+                    """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
+            time.sleep(2)
+            monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
+            if (tmp / "overlay.ppm").exists():
+                img = read_ppm(tmp / "overlay.ppm")
+                w, h, _ = img
+                ppm_to_png(tmp / "overlay.ppm", shots / "linuxai-overlay.png")
+                found = {"question card (top right)": amber_in(img, w - 400, 30, w, 330),
+                         "voice indicator (bottom)": amber_in(img, w // 2 - 330, h - 80, w // 2 + 330, h),
+                         "the AI's pointer (around 120,300 360x60)": amber_in(img, 110, 290, 490, 370)}
+                ok = all(n > 150 for n in found.values())
+                failed += not ok
+                print(f"  {'✓' if ok else '✗'} screen: the question card, voice indicator and the AI's pointer are drawn"
+                      + ("" if ok else f"\n      amber pixels found: {found}"), flush=True)
+                print(f"  screenshot with the overlay: {shots / 'linuxai-overlay.png'}")
         monitor(mon, f"screendump {tmp / 'tty1.ppm'}")
         if (tmp / "tty1.ppm").exists():
             ppm_to_png(tmp / "tty1.ppm", shots / "linuxai-tty1.png")

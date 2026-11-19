@@ -673,7 +673,7 @@ def test_image_tool_edits_generates_and_minds_the_budget(env, live_core, tmp_pat
 
 
 # ---- voice -----------------------------------------------------------------------------------------------
-def test_push_to_talk_turn(env, tmp_path, monkeypatch):
+def test_push_to_talk_turn(env, tmp_path, monkeypatch, live_core):
     """Speech in (stand-in microphone and speech-to-text), a spoken turn, the answer said out loud (stand-in voice)."""
     if not CORE_BIN.exists():
         pytest.skip("build core first")
@@ -684,9 +684,11 @@ def test_push_to_talk_turn(env, tmp_path, monkeypatch):
     monkeypatch.setenv("LINUXAI_STT_CMD", "cat >/dev/null; echo 'is this one a good deal'")
     monkeypatch.setenv("LINUXAI_TTS_CMD", f"cat > {tmp_path}/said.txt")
 
-    v = Voice()
+    v = Voice(live_core)
     heard = v.listen()  # stdin isn't a keyboard here, so the recording stops at once, as if Enter was pressed
     assert heard == "is this one a good deal"
+    kinds = [e["kind"] for e in live_core.request("events", limit=500)["events"]]
+    assert "voice.listening" in kinds and "voice.heard" in kinds, kinds  # for the screen's voice indicator
 
     client = FakeClient([_msg([NS(type="text", text="**Yes**: it's $1,200 under [the average](https://x.y).")], "end_turn")])
     agent = Agent(cfg, mem, tb, client=client)
@@ -696,3 +698,40 @@ def test_push_to_talk_turn(env, tmp_path, monkeypatch):
     v.say(agent.last_text())
     v.speaking.wait(timeout=10)
     assert (tmp_path / "said.txt").read_text() == "Yes: it's $1,200 under the average."
+
+
+
+# ---- the screen (Hyprland) ------------------------------------------------------------------------------
+def test_screen_tool_through_the_organ(env, tmp_path):
+    """The AI's screen tool talks to the screen organ; a stand-in organ answers here. Screenshots are outside
+    information; the tool is offered only while the organ runs."""
+    import socketserver
+    import threading
+    from linuxai.core_client import Core
+    cfg, mem, tb, _ = env
+    sock = tmp_path / "comp.sock"
+    seen = []
+
+    class H(socketserver.StreamRequestHandler):
+        def handle(self):
+            req = json.loads(self.rfile.readline())
+            seen.append(req)
+            out = {"windows": {"ok": True, "windows": [{"window": "0x5a1", "app": "foot", "title": "LinuxAI", "workspace": 1, "at": [0, 0], "size": [640, 900]}]},
+                   "shot": {"ok": True, "media_type": "image/jpeg", "data": "AAAA", "origin": [0, 0]},
+                   "point": {"ok": True, "shown": {"x": req.get("x"), "y": req.get("y")}}}.get(req["op"], {"ok": False, "error": "nope"})
+            self.wfile.write((json.dumps(out) + "\n").encode())
+
+    tb.screen = Core(str(sock))
+    assert "screen" not in {t["name"] for t in tb.tools()}  # not running yet
+    srv = socketserver.UnixStreamServer(str(sock), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        assert "screen" in {t["name"] for t in tb.tools()}
+        out, err = tb.execute("screen", {"op": "windows"})
+        assert not err and "0x5a1 foot" in out
+        shot, err = tb.execute("screen", {"op": "shot"})
+        assert not err and shot[1]["type"] == "image" and tb.outside_seen
+        out, err = tb.execute("screen", {"op": "point", "x": 10, "y": 20, "w": 50, "h": 10, "note": "here"})
+        assert not err and seen[-1] == {"op": "point", "x": 10, "y": 20, "w": 50, "h": 10, "note": "here"}
+    finally:
+        srv.shutdown()
