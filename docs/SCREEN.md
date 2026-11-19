@@ -65,3 +65,10 @@ page itself. Through it the Workspace:
 
 It can ask the core only for `tasks`, `task`, `waiting`, `answer`, `events` and `state`.
 Opened on its own (without the OS) it shows example data.
+
+## Layout
+
+Hyprland's master layout: the Workspace is the main window (70% of the screen), the LinuxAI session beside it.
+The compositor organ keeps it that way: the Workspace is never floating, it's moved into the main spot once when
+it opens, and the AI's page windows go to a hidden workspace (`special:pages`), because their pages show inside the
+Workspace. Hidden windows keep drawing, so the live picture keeps coming (checked in a VM).

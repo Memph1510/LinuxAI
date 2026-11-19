@@ -129,6 +129,7 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
 - [x] Magnifier over any app: a lens beside the area, twice as large; open questions say where to answer.
 - [x] **The Workspace (the book)**: the main screen in the shared browser's first window, connected to the OS by a
       private channel; what needs you, the work, steps, activity, and web pages live inside it (click, scroll, type).
+- [x] Workspace layout: the main window (70%); the AI's page windows out of sight, their pages inside the Workspace.
 - [ ] Workspace: the reasoning view and comments from the mock-up; the AI's pointer inside the page picture.
 
 ### To decide later: ideas mined from similar projects ([RESEARCH_SIMILAR_PROJECTS.md](RESEARCH_SIMILAR_PROJECTS.md))
