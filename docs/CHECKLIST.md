@@ -116,9 +116,12 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
       port. Per-tab owners: the AI reads any tab and acts only in its own (in its own window); tabs are handed back
       and forth, and a handoff texts you. Pages are outside information.
 - [ ] Browser: live view for the Workspace screen and the phone; browser steps in the action language.
-- [ ] **Pages and voice** ([PAGES_AND_VOICE.md](PAGES_AND_VOICE.md)): web pages as pages in the Workspace book;
-      the AI always knows what you're looking at; push-to-talk voice with local speech-to-text and text-to-speech;
-      it highlights what it's talking about; your voice interrupts.
+- [x] **Voice and talking about what's on screen** ([PAGES_AND_VOICE.md](PAGES_AND_VOICE.md)): push to talk with
+      local speech to text (whisper.cpp) and speaking (espeak-ng, Piper or any command); the browser knows what's
+      under your pointer (look), highlights and magnifies what the AI talks about (point), and pulls things up in
+      front of you while you talk (show).
+- [ ] Voice: try with a real microphone on the laptop; natural voice (Piper) on the image; wake word.
+- [ ] Pages inside the Workspace screen (the book).
 
 ### Open: should the OS's own prompts live in the prompt library?
 

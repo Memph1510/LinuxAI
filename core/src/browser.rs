@@ -20,6 +20,9 @@
 //!   {"op":"type","tab":...,"ref":3,"text":"...","enter":true}   {"op":"key","tab":...,"key":"Enter"}
 //!   {"op":"shot","tab":...}          → a screenshot (base64 JPEG) to look at
 //!   {"op":"give","tab":...,"to":"human"|"ai","note":"..."}   {"op":"close","tab":...}   {"op":"tabs"}
+//!   {"op":"look","tab":...,"x"?:..,"y"?:..} → what's under the human's pointer (or that point), what's selected, a close-up
+//!   {"op":"point","tab":...,"quote"|"ref"|"target":...,"note"?:"...","magnify"?:true} → highlight it for the human
+//!   {"op":"show","url":...,"note"?:"..."} → pull a page up in front of the human while you talk about it
 
 use crate::client::Client;
 use crate::mail::clean_text;
@@ -221,6 +224,9 @@ impl Cdp {
         }
         let r = self.call("Target.attachToTarget", json!({"targetId": tab, "flatten": true}), None)?;
         let s = r["sessionId"].as_str().unwrap_or("").to_string();
+        // Know where the human's pointer is, on this page and every page this tab loads from now on.
+        let _ = self.call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACK_JS}), Some(&s));
+        let _ = self.call("Runtime.evaluate", json!({"expression": TRACK_JS}), Some(&s));
         if let Some(t) = self.tabs.lock().unwrap().get_mut(tab) {
             t.session = Some(s.clone());
         }
@@ -285,6 +291,75 @@ impl Cdp {
     }
 }
 
+/// Remembers where the pointer last was (page coordinates are recomputed from it when asked).
+const TRACK_JS: &str = r#"(() => { if (window.__lxTrack) return; window.__lxTrack = true;
+  addEventListener('mousemove', e => { window.__lxPointer = {x: e.clientX, y: e.clientY, t: Date.now()}; }, {passive: true, capture: true});
+})()"#;
+
+/// What's at a point (the human's pointer, or a point the Workspace passes in): the meaningful thing there, not
+/// just the innermost tag, plus what's selected.
+const LOOK_JS: &str = r#"((px, py) => {
+  const p = (px != null && py != null) ? {x: px, y: py} : (window.__lxPointer || null);
+  const sel = String(getSelection ? getSelection() : '').trim().slice(0, 2000);
+  let at = null, rect = null;
+  if (p) {
+    let e = document.elementFromPoint(p.x, p.y);
+    const meaningful = 'a,button,img,video,li,tr,td,th,article,section,figure,label,input,select,textarea,h1,h2,h3,h4,h5,h6,p,[role],[data-lx]';
+    const m = e && (e.closest(meaningful) || e);
+    if (m) {
+      const r = m.getBoundingClientRect();
+      rect = {x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height};
+      at = {tag: m.tagName.toLowerCase(), text: (m.innerText || m.alt || m.title || m.value || '').trim().slice(0, 1000),
+            label: m.getAttribute('aria-label') || '', href: m.href || '', src: m.currentSrc || m.src || '', alt: m.alt || '',
+            ref: m.getAttribute('data-lx') || ''};
+      // The thing it belongs to (the row of a table, the card in a list), for "what's this?"
+      const c = m.parentElement && m.parentElement.closest('tr,li,article,figure,form,[role=row],[role=listitem]');
+      if (c) at.context = (c.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 1000);
+    }
+  }
+  return {pointer: p, at, rect, selection: sel, title: document.title, url: location.href,
+          scroll: {y: Math.round(scrollY), height: document.documentElement.scrollHeight, view: innerHeight}};
+})"#;
+
+/// Draw the AI's attention marker (and, if asked, a magnifying glass) over an element, without blocking the page.
+const POINT_JS: &str = r#"((e, note, magnify, seconds) => {
+  if (!e) return null;
+  document.querySelectorAll('.__lx-mark').forEach(x => x.remove());
+  e.scrollIntoView({block: 'center', behavior: 'smooth'});
+  const r = e.getBoundingClientRect();
+  const box = document.createElement('div');
+  box.className = '__lx-mark';
+  Object.assign(box.style, {position: 'absolute', left: (r.left + scrollX - 6) + 'px', top: (r.top + scrollY - 6) + 'px',
+    width: (r.width + 12) + 'px', height: (r.height + 12) + 'px', border: '3px solid #ffb000', borderRadius: '8px',
+    boxShadow: '0 0 0 9999px rgba(0,0,0,0.18)', pointerEvents: 'none', zIndex: 2147483646, transition: 'opacity .4s'});
+  document.body.appendChild(box);
+  if (note) {
+    const tip = document.createElement('div');
+    tip.className = '__lx-mark';
+    tip.textContent = note;
+    Object.assign(tip.style, {position: 'absolute', left: (r.left + scrollX) + 'px', top: (r.bottom + scrollY + 10) + 'px',
+      maxWidth: '360px', background: '#1c1c1e', color: '#fff', font: '14px/1.4 system-ui, sans-serif', padding: '8px 10px',
+      borderRadius: '8px', pointerEvents: 'none', zIndex: 2147483647});
+    document.body.appendChild(tip);
+  }
+  if (magnify) {
+    const lens = document.createElement('div');
+    lens.className = '__lx-mark';
+    const copy = e.cloneNode(true);
+    copy.removeAttribute('id');
+    copy.querySelectorAll('.__lx-mark').forEach(x => x.remove());
+    Object.assign(copy.style, {transform: 'scale(2)', transformOrigin: 'top left', width: r.width + 'px', margin: 0});
+    lens.appendChild(copy);
+    const w = Math.min(r.width * 2 + 24, innerWidth - 40), h = Math.min(r.height * 2 + 24, innerHeight - 40);
+    Object.assign(lens.style, {position: 'fixed', right: '20px', top: '20px', width: w + 'px', height: h + 'px', overflow: 'hidden',
+      background: getComputedStyle(document.body).backgroundColor || '#fff', border: '3px solid #ffb000', borderRadius: '12px',
+      padding: '12px', boxShadow: '0 12px 40px rgba(0,0,0,.35)', pointerEvents: 'none', zIndex: 2147483647});
+    document.body.appendChild(lens);
+  }
+  setTimeout(() => document.querySelectorAll('.__lx-mark').forEach(x => x.remove()), (seconds || 8) * 1000);
+  return {x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height, text: (e.innerText || e.alt || '').trim().slice(0, 300)};
+})"#;
+
 /// Collects what's visible on the page: text, and the controls numbered so the AI can say "click 7".
 const READ_JS: &str = r#"(() => {
   const vis = e => !e.checkVisibility || e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
@@ -312,6 +387,17 @@ fn find_js(req: &Value) -> Option<String> {
         format!("document.querySelector('[data-lx=\"{r}\"]')")
     } else if let Some(s) = req["selector"].as_str() {
         format!("document.querySelector({})", json!(s))
+    } else if let Some(q) = req["quote"].as_str() {
+        // The smallest element whose visible text contains these words.
+        format!(r#"(() => {{ const want = {}.toLowerCase().replace(/\s+/g, ' ');
+            const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let n; while ((n = w.nextNode())) {{
+              const el = n.parentElement;
+              if (el && (!el.checkVisibility || el.checkVisibility()) && n.textContent.toLowerCase().replace(/\s+/g, ' ').includes(want)) return el;
+            }}
+            const all = [...document.querySelectorAll('body *')].filter(e => (e.innerText || '').toLowerCase().replace(/\s+/g, ' ').includes(want));
+            all.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);
+            return all.length ? all[0] : null; }})()"#, json!(q))
     } else if let Some(t) = req["target"].as_str().or(req["label"].as_str()) {
         format!(r#"(() => {{ const want = {}.toLowerCase();
             const all = [...document.querySelectorAll('a[href], button, input, textarea, select, [role=button], [role=link], label, [contenteditable=true]')]
@@ -402,7 +488,7 @@ impl Organ {
         };
         let tab = req["tab"].as_str().unwrap_or("").to_string();
         let max = req["max"].as_u64().unwrap_or(20000) as usize;
-        if !matches!(op, "tabs" | "open") && b.owner(&tab).is_none() {
+        if !matches!(op, "tabs" | "open" | "show") && b.owner(&tab).is_none() {
             return err(format!("no tab {tab:?}; see tabs"));
         }
         // The AI acts only in its own tabs; your tabs are yours until you give one to it.
@@ -475,6 +561,57 @@ impl Organ {
                 let s = b.session(&tab)?;
                 let r = b.call("Page.captureScreenshot", json!({"format": "jpeg", "quality": 70}), Some(&s))?;
                 Ok(json!({"ok": true, "tab": tab, "trust": "outside", "media_type": "image/jpeg", "data": r["data"]}))
+            }
+            "look" => {
+                // What the human is looking at: under their pointer (or the point the screen passes in), and selected.
+                let (x, y) = (req["x"].as_f64().map(|v| v.to_string()).unwrap_or("null".into()),
+                              req["y"].as_f64().map(|v| v.to_string()).unwrap_or("null".into()));
+                b.session(&tab)?;
+                let mut v = b.eval(&tab, &format!("{LOOK_JS}({x}, {y})"))?;
+                if let Some(at) = v.get_mut("at").filter(|a| a.is_object()) {
+                    at["text"] = json!(clean_text(at["text"].as_str().unwrap_or(""), Some(1000)));
+                    if let Some(c) = at["context"].as_str().map(|c| clean_text(c, Some(1000))) {
+                        at["context"] = json!(c);
+                    }
+                }
+                v["selection"] = json!(clean_text(v["selection"].as_str().unwrap_or(""), Some(2000)));
+                // A close-up of that spot, so the AI sees it the way the human does (the AI's magnifying glass).
+                let r = &v["rect"];
+                if let (Some(rx), Some(ry), Some(w), Some(h)) = (r["x"].as_f64(), r["y"].as_f64(), r["w"].as_f64(), r["h"].as_f64()) {
+                    let (cw, ch) = (w.clamp(120.0, 900.0) + 80.0, h.clamp(80.0, 700.0) + 80.0);
+                    let clip = json!({"x": (rx + w / 2.0 - cw / 2.0).max(0.0), "y": (ry + h / 2.0 - ch / 2.0).max(0.0), "width": cw, "height": ch, "scale": 1.5});
+                    let s = b.session(&tab)?;
+                    if let Ok(shot) = b.call("Page.captureScreenshot", json!({"format": "jpeg", "quality": 75, "clip": clip}), Some(&s)) {
+                        v["closeup"] = shot["data"].clone();
+                    }
+                }
+                Ok(json!({"ok": true, "tab": tab, "owner": b.owner(&tab), "trust": "outside", "look": v}))
+            }
+            "point" => {
+                // The AI showing the human what it means: allowed on any tab, it only draws over the page.
+                let Some(pick) = find_js(req) else { return Ok(err("say what to point at: ref, quote (words on the page), target or selector")) };
+                let r = b.eval(&tab, &format!("{POINT_JS}({pick}, {}, {}, {})", json!(req["note"].as_str().unwrap_or("")),
+                                               req["magnify"].as_bool().unwrap_or(false), req["seconds"].as_f64().unwrap_or(8.0)))?;
+                if r.is_null() {
+                    return Ok(err("couldn't find that on the page"));
+                }
+                Ok(json!({"ok": true, "tab": tab, "at": r}))
+            }
+            "show" => {
+                // Pull something up in front of the human while you talk about it. The AI keeps driving it.
+                let url = req["url"].as_str().unwrap_or("about:blank");
+                let id = b.call("Target.createTarget", json!({"url": url}), None)?["targetId"].as_str().unwrap_or("").to_string();
+                let start = Instant::now();
+                while b.owner(&id).is_none() && start.elapsed() < Duration::from_secs(5) {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                b.set_owner(&id, "ai");
+                let _ = b.call("Target.activateTarget", json!({"targetId": id}), None);
+                b.settle(&id);
+                self.tell_core("browser.showing", json!({"tab": id, "url": url, "note": req["note"]}));
+                let mut page = self.read(&b, &id, max);
+                page["showing"] = json!(true);
+                Ok(page)
             }
             "give" => {
                 let to = if req["to"] == "ai" { "ai" } else { "human" };
@@ -656,5 +793,65 @@ mod reach_tests {
         let m = crate::reach::message_for(&serde_json::json!({"kind": "browser.handoff",
             "data": {"note": "Please log in to the load board", "title": "DAT", "url": "https://one.dat.com"}})).unwrap();
         assert!(m.contains("Please log in to the load board") && m.contains("https://one.dat.com"), "{m}");
+    }
+}
+
+#[cfg(test)]
+mod attention_tests {
+    use super::*;
+
+    const CARS: &str = r#"<!doctype html><title>Compare SUVs</title><body style="font:16px sans-serif">
+      <h1>Compare SUVs</h1>
+      <table><tr><th>Model</th><th>Price</th><th>MPG</th></tr>
+      <tr id=a><td>Ridgeway LX</td><td>$34,900</td><td>31</td></tr>
+      <tr id=b style="height:60px"><td>Summit Trail</td><td>$38,250</td><td>27</td></tr></table>
+      <p>Towing capacity for the Summit Trail is 5,000 lb.</p></body>"#;
+
+    #[test]
+    fn look_point_and_show() {
+        let Some(bin) = find_browser().or_else(|| {
+            let p = "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome";
+            std::path::Path::new(p).exists().then(|| p.to_string())
+        }) else { return };
+        let dir = std::env::temp_dir().join(format!("lx-attn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let page = dir.join("cars.html");
+        std::fs::write(&page, CARS).unwrap();
+        let organ = Organ::new(bin, dir.join("profile"), true, None);
+
+        // The AI pulls a page up for the human while they talk.
+        let r = organ.handle(&json!({"op": "show", "url": format!("file://{}", page.display()), "note": "the two SUVs"}));
+        assert_eq!(r["showing"], true, "{r}");
+        let tab = r["tab"].as_str().unwrap().to_string();
+
+        // The human moves the pointer onto the Summit Trail row; "what's this?" means that row.
+        let b = organ.browser().unwrap();
+        organ.handle(&json!({"op": "look", "tab": tab})); // attaches and starts tracking
+        let row = b.eval(&tab, "(() => { const r = document.getElementById('b').getBoundingClientRect(); return [r.left + 20, r.top + 20]; })()").unwrap();
+        let s = b.session(&tab).unwrap();
+        b.call("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": row[0], "y": row[1]}), Some(&s)).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let r = organ.handle(&json!({"op": "look", "tab": tab}));
+        assert_eq!(r["trust"], "outside");
+        let at = &r["look"]["at"];
+        assert!(at["text"].as_str().unwrap().contains("Summit Trail"), "{r}");
+        assert!(at["context"].as_str().unwrap().contains("$38,250"), "the row it's in: {r}");
+        assert!(r["look"]["closeup"].as_str().map(|c| c.len() > 500).unwrap_or(false), "close-up for the AI's eyes");
+
+        // Or the screen passes the point (Workspace, phone).
+        let r = organ.handle(&json!({"op": "look", "tab": tab, "x": 20, "y": 20}));
+        assert!(r["look"]["at"]["text"].as_str().unwrap().contains("Compare SUVs"), "{r}");
+
+        // The AI points at what it's talking about, with a magnifying glass; it never blocks the page.
+        let r = organ.handle(&json!({"op": "point", "tab": tab, "quote": "towing capacity", "note": "5,000 lb: enough for your trailer", "magnify": true}));
+        assert!(r["at"]["text"].as_str().unwrap().contains("5,000 lb"), "{r}");
+        let marks = b.eval(&tab, "[...document.querySelectorAll('.__lx-mark')].map(e => getComputedStyle(e).pointerEvents)").unwrap();
+        assert_eq!(marks.as_array().unwrap().len(), 3, "box, note, lens: {marks}");
+        assert!(marks.as_array().unwrap().iter().all(|m| m == "none"));
+        // Pointing works on the human's tabs too: it only draws.
+        organ.handle(&json!({"op": "give", "tab": tab, "to": "human"}));
+        assert_eq!(organ.handle(&json!({"op": "point", "tab": tab, "quote": "Ridgeway"}))["ok"], true);
+        organ.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -52,8 +52,10 @@ The AI doesn't submit forms that spend money, send messages or accept terms for 
 
 `tabs` · `open {url}` · `read {tab}` · `go {tab,url}` · `click {tab, ref|target|selector}` ·
 `type {tab, ref|target|selector, text, enter?}` · `key {tab,key}` · `shot {tab}` · `give {tab,to,note}` ·
-`close {tab}`. `open`, `go`, `click`, `key` and `type … enter` return the page as it is afterward, so one step is
-one round trip.
+`close {tab}` · `look {tab, x?, y?}` (what's under the human's pointer, selected, plus a close-up) ·
+`point {tab, quote|ref|target, note?, magnify?}` (highlight for the human) · `show {url, note?}` (pull a page up
+in front of them). `open`, `go`, `click`, `key` and `type … enter` return the page as it is afterward, so one step is
+one round trip. See [PAGES_AND_VOICE.md](PAGES_AND_VOICE.md) for how this works with voice.
 
 ## Next
 

@@ -607,6 +607,16 @@ def test_shared_browser_through_the_ai_tool(env, live_core, tmp_path):
         shot, err = tb.execute("browser", {"op": "shot", "tab": tab})
         assert not err and shot[1]["type"] == "image" and shot[1]["source"]["data"]
 
+        # Talking about what's on screen: pull a page up, point at something, see what's under a point.
+        out, err = tb.execute("browser", {"op": "show", "url": f"file://{page}", "note": "the rates"})
+        assert not err and "DAL-ATL" in out, out
+        shown = out.split("Page in tab ", 1)[1].split(" ", 1)[0]
+        out, err = tb.execute("browser", {"op": "point", "tab": shown, "quote": "$2.10", "magnify": True})
+        assert not err and out.startswith("Highlighted") and "2.10" in out, out
+        look, err = tb.execute("browser", {"op": "look", "tab": shown, "x": 15, "y": 15})
+        assert not err and "Under their pointer" in look[0]["text"] and "DAL-ATL" in look[0]["text"], look
+        assert look[1]["type"] == "image"
+
         tabs, _ = tb.execute("browser", {"op": "tabs"})
         human = next(l for l in tabs.splitlines() if "[human]" in l).split()[1]
         out, _ = tb.execute("browser", {"op": "go", "tab": human, "url": "about:blank"})
@@ -650,3 +660,29 @@ def test_image_tool_edits_generates_and_minds_the_budget(env, live_core, tmp_pat
     assert not err and "via paid" in out[0]["text"], out
     found = live_core.request("find", spec={"type": "image", "last": 10})["found"]
     assert sum(f["cost_cents"] for f in found) == 12 and len(found) == 3
+
+
+# ---- voice -----------------------------------------------------------------------------------------------
+def test_push_to_talk_turn(env, tmp_path, monkeypatch):
+    """Speech in (stand-in microphone and speech-to-text), a spoken turn, the answer said out loud (stand-in voice)."""
+    if not CORE_BIN.exists():
+        pytest.skip("build core first")
+    from linuxai.cli import Voice
+    cfg, mem, tb, _ = env
+    monkeypatch.setenv("LINUXAI_CORE_BIN", str(CORE_BIN))
+    monkeypatch.setenv("LINUXAI_RECORD_CMD", "head -c 4000 /dev/zero > {out}; sleep 30")
+    monkeypatch.setenv("LINUXAI_STT_CMD", "cat >/dev/null; echo 'is this one a good deal'")
+    monkeypatch.setenv("LINUXAI_TTS_CMD", f"cat > {tmp_path}/said.txt")
+
+    v = Voice()
+    heard = v.listen()  # stdin isn't a keyboard here, so the recording stops at once, as if Enter was pressed
+    assert heard == "is this one a good deal"
+
+    client = FakeClient([_msg([NS(type="text", text="**Yes**: it's $1,200 under [the average](https://x.y).")], "end_turn")])
+    agent = Agent(cfg, mem, tb, client=client)
+    agent.turn(heard, spoken=True)
+    sent = client.requests[0]["messages"][-1]["content"]
+    assert any("said this out loud" in b["text"] and "browser's look" in b["text"] for b in sent)
+    v.say(agent.last_text())
+    v.speaking.wait(timeout=10)
+    assert (tmp_path / "said.txt").read_text() == "Yes: it's $1,200 under the average."

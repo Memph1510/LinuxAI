@@ -9,3 +9,6 @@ git
 poppler
 chromium
 imagemagick
+whisper-cpp
+espeak-ng
+alsa-utils

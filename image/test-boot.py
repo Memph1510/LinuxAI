@@ -55,6 +55,8 @@ CHECKS = [
      "sudo -u linuxai sh -c 'cd /tmp && magick -size 400x300 xc:orange t.png && LINUXAI_IMAGES=/tmp/pics linuxai-core image do "
      "\"{\\\"op\\\":\\\"edit\\\",\\\"input\\\":\\\"/tmp/t.png\\\",\\\"ops\\\":[{\\\"resize\\\":\\\"50%\\\"}]}\"' | grep -o '\"width\":200'",
      r'"width":200'),
+    ("voice: speech-to-text and speaking are installed",
+     "linuxai-core voice caps", r'"speech_to_text":"whisper\.cpp.*"text_to_speech":"espeak-ng"'),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),

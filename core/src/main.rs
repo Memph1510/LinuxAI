@@ -9,6 +9,7 @@
 //!   linuxai-core mail ingest FILE.eml... | mail watch                email in, claims out (never instructions)
 //!   linuxai-core browser [--headless] [--profile DIR]                 the browser the AI and the human share
 //!   linuxai-core image caps | image do '<json>'                       make and edit pictures
+//!   linuxai-core voice caps | listen | transcribe FILE | say          talk to it, hear it answer
 
 mod browser;
 mod client;
@@ -23,6 +24,7 @@ mod prompts;
 mod reach;
 mod tasks;
 mod verbs;
+mod voice;
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -283,6 +285,30 @@ fn main() {
             println!("{}", images::handle(&req, &client, &cfg));
             Ok(())
         }
+        Some("voice") => {
+            let r = match args.get(2).map(String::as_str) {
+                Some("caps") => voice::caps(),
+                Some("listen") => voice::listen(std::time::Duration::from_secs(arg(&args, "--max").and_then(|m| m.parse().ok()).unwrap_or(60))),
+                Some("transcribe") => match voice::transcribe(std::path::Path::new(args.get(3).map(String::as_str).unwrap_or(""))) {
+                    Ok(t) => json!({"ok": true, "text": t}),
+                    Err(e) => json!({"ok": false, "error": e}),
+                },
+                Some("say") => {
+                    let mut text = String::new();
+                    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text);
+                    match voice::say(&text) {
+                        Ok(()) => json!({"ok": true}),
+                        Err(e) => json!({"ok": false, "error": e}),
+                    }
+                }
+                _ => {
+                    eprintln!("usage: linuxai-core voice caps | listen [--max SECS] | transcribe FILE | say");
+                    std::process::exit(2);
+                }
+            };
+            println!("{r}");
+            Ok(())
+        }
         Some("snapshot") => {
             println!("{}", serde_json::to_string_pretty(&host::snapshot(true, &Value::Null)).unwrap());
             Ok(())
@@ -292,7 +318,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice  (see source header)");
             std::process::exit(2);
         }
     };

@@ -29,6 +29,8 @@ HELP = """\
 /notes                facts it keeps about this machine and you
 /log                  recent actions and your decisions
 /allow                commands you've told it to always run
+/voice on|off         talk instead of typing: Enter on an empty line to talk, Enter when done; it answers out loud
+/talk                 say one thing (push to talk)
 /new                  start a fresh conversation (memory is kept)
 /quit                 leave (Ctrl-D works too)
 !<command>            run a shell command yourself, bypassing the AI"""
@@ -73,6 +75,48 @@ def connect_core():
 
     core = Core()
     return core if core.available() else None
+
+
+class Voice:
+    """Push to talk in the session: Enter to start, Enter to stop; the answer is spoken; talking again cuts it off."""
+
+    def __init__(self):
+        self.on = False
+        self.speaking = None
+
+    def hush(self) -> None:
+        if self.speaking and self.speaking.poll() is None:
+            self.speaking.terminate()
+        self.speaking = None
+
+    def listen(self) -> str | None:
+        import subprocess
+
+        from .tools import core_binary
+        self.hush()
+        ui.out(ui.magenta("  ● listening… press Enter when you're done"))
+        r = subprocess.run([core_binary(), "voice", "listen"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        try:
+            out = json.loads(r.stdout)
+        except ValueError:
+            out = {"ok": False, "error": "the voice organ didn't answer"}
+        if not out.get("ok"):
+            ui.out(ui.dim(f"  {out.get('error')}"))
+            return None
+        ui.out(ui.dim("  you said: ") + out["text"])
+        return out["text"]
+
+    def say(self, text: str) -> None:
+        import subprocess
+
+        from .tools import core_binary
+        if not text.strip():
+            return
+        self.hush()
+        self.speaking = subprocess.Popen([core_binary(), "voice", "say"], stdin=subprocess.PIPE,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        self.speaking.stdin.write(text)
+        self.speaking.stdin.close()
 
 
 def shared_browser(core):
@@ -162,6 +206,7 @@ def repl(config: Config) -> None:
     ui.out(BANNER.format(title=ui.bold("LinuxAI"), mode=config.mode, model=config.model,
                          solutions=len(memory.list_solutions()), notes=len(memory.all_notes())))
     pending: dict = {}
+    voice = Voice()
     if core:
         ui.out(ui.dim("connected to the LinuxAI core: you'll see what the system is doing as it happens"))
         for w in core.request("waiting").get("plans", []):
@@ -179,6 +224,13 @@ def repl(config: Config) -> None:
             return
         except KeyboardInterrupt:
             ui.out()
+            continue
+        voice.hush()  # anything you do cuts off what it's saying
+        if not line and voice.on:
+            heard = voice.listen()
+            if heard:
+                agent.turn(heard, spoken=True)
+                voice.say(agent.last_text())
             continue
         if not line:
             continue
@@ -198,6 +250,24 @@ def repl(config: Config) -> None:
                 ui.out(ui.dim(f"  mode is now {arg}"))
             elif cmd == "mode":
                 ui.out(ui.dim(f"  mode is {config.mode}; choose ask, trusted or auto"))
+            elif cmd == "talk":
+                heard = voice.listen()
+                if heard:
+                    agent.turn(heard, spoken=True)
+                    voice.say(agent.last_text())
+            elif cmd == "voice":
+                import subprocess
+
+                from .tools import core_binary
+                if arg in ("on", "off"):
+                    voice.on = arg == "on"
+                    ui.out(ui.dim("  voice on: press Enter on an empty line to talk, Enter again when done; "
+                                  "anything you type or say cuts off what it's saying" if voice.on else "  voice off"))
+                caps = json.loads(subprocess.run([core_binary(), "voice", "caps"], capture_output=True, text=True).stdout or "{}")
+                ui.out(ui.dim(f"  listening: {caps.get('record') or 'no recorder'} → {caps.get('speech_to_text') or 'no speech-to-text'}; "
+                              f"speaking: {caps.get('text_to_speech') or 'nothing'}"))
+                if caps.get("advice"):
+                    ui.out(ui.dim("  " + caps["advice"]))
             elif cmd == "new":
                 agent.reset()
                 ui.out(ui.dim("  fresh conversation; long-term memory kept"))

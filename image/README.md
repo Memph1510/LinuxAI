@@ -13,6 +13,7 @@ There is no desktop. The first screen is the AI.
 | `linuxai-reach` (user service, Rust) | Reaches you when the AI is undecided or a follow-up is due. Set `LINUXAI_NOTIFY_CMD` in `~/.config/linuxai/env` to any command that sends a message from stdin (an SMS gateway, a push service), e.g. `LINUXAI_NOTIFY_CMD=curl -s -d @- https://ntfy.sh/<your-topic>`. |
 | `linuxai-browser` (user service, Rust + Chromium) | One browser you and the AI use at the same time (headless until there's a screen). See docs/BROWSER.md. |
 | `linuxai-core image` + ImageMagick, backend adapters in `/usr/share/linuxai/image-backends` | Pictures: precise edits locally; generation via a local model, a paid service or the CPU once configured (docs/IMAGES.md). |
+| Voice: `linuxai-core voice` + whisper.cpp + espeak-ng | Talk to it (`/voice on` in the session). Run `linuxai-voice-setup` once (online) to download the speech model. |
 | `linuxai-mind` (user service) | The AI working behind the scenes. It handles anything the rules hand it ("a service failed, figure it out"). It starts once an API key is set. |
 | Linux kernel + drivers, `scx-scheds`/`scx-tools`, `power-profiles-daemon` | The hardware layer and the kernel controls the core uses |
 

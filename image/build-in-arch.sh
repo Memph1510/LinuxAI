@@ -46,7 +46,7 @@ sed -i -e "s/^iso_name=.*/iso_name=\"linuxai\"/" \
        -e "s/^iso_publisher=.*/iso_publisher=\"LinuxAI\"/" \
        -e "s/^iso_application=.*/iso_application=\"LinuxAI live\"/" \
        -e "s/^iso_version=.*/iso_version=\"$VERSION\"/" "$PROFILE/profiledef.sh"
-sed -i '/^file_permissions=(/a\  ["/etc/gshadow"]="0:0:400"\n  ["/etc/sudoers.d/10-linuxai"]="0:0:440"\n  ["/home/linuxai"]="1000:1000:750"\n  ["/home/linuxai/.bash_profile"]="1000:1000:644"\n  ["/usr/local/bin/linuxai-core"]="0:0:755"\n  ["/usr/local/bin/cortex"]="0:0:755"\n  ["/usr/local/bin/linuxai-session"]="0:0:755"' "$PROFILE/profiledef.sh"
+sed -i '/^file_permissions=(/a\  ["/etc/gshadow"]="0:0:400"\n  ["/etc/sudoers.d/10-linuxai"]="0:0:440"\n  ["/home/linuxai"]="1000:1000:750"\n  ["/home/linuxai/.bash_profile"]="1000:1000:644"\n  ["/usr/local/bin/linuxai-core"]="0:0:755"\n  ["/usr/local/bin/cortex"]="0:0:755"\n  ["/usr/local/bin/linuxai-session"]="0:0:755"\n  ["/usr/local/bin/linuxai-voice-setup"]="0:0:755"' "$PROFILE/profiledef.sh"
 
 # Also show boot and login on the serial port (handy for VMs and automated tests).
 grep -rl 'archisobasedir' "$PROFILE/efiboot" "$PROFILE/syslinux" "$PROFILE/grub" 2>/dev/null \
