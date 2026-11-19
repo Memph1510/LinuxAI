@@ -257,7 +257,8 @@ window.linuxaiEvent = (ev) => {
   const k = ev.kind || "";
   if (k.startsWith("plan.")) loadQuestions();
   if (k.startsWith("task.")) loadTasks();
-  if (k === "browser.showing" && ev.data && ev.data.tab) { loadPages().then(() => watch(ev.data.tab)); }
+  // The AI showing you a page, or handing one over for you to act on: it opens here.
+  if ((k === "browser.showing" || k === "browser.handoff") && ev.data && ev.data.tab) { loadPages().then(() => watch(ev.data.tab)); }
   else if (k.startsWith("browser.")) loadPages();
 };
 

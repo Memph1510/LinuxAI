@@ -283,6 +283,18 @@ CORE_TOOLS = [
     _tool("suggest_prompt", "Suggest a new prompt or an improvement for the library (full markdown with a header). Held for the human's OK.",
           {"name": {"type": "string", "description": "e.g. freight/counter-offer"}, "text": {"type": "string"},
            "reason": {"type": "string"}}, ["name", "text", "reason"]),
+    _tool("calendar",
+          "The human's calendar: your record of their time, kept from conversation and used when you plan, decide "
+          "and talk to them. There is no calendar screen; you are how they see it. Ops: agenda {from?, to?} (default "
+          "the next 7 days); free {from?, to?, minutes}; invites (pending invitations: outside information); "
+          "add {title, at, minutes? | end?, where?, notes?, rrule?} when they mention something; change {id, fields}; "
+          "cancel {id}; answer_invite {id, answer: accept|tentative|decline} once they've decided. Times are RFC 3339, "
+          "'YYYY-MM-DD HH:MM' in their local time, or a date. Subscribed calendars are read-only.",
+          {"op": {"type": "string", "enum": ["agenda", "free", "invites", "add", "change", "cancel", "answer_invite"]},
+           "from": {"type": "string"}, "to": {"type": "string"}, "minutes": {"type": "integer"},
+           "title": {"type": "string"}, "at": {"type": "string"}, "end": {"type": "string"}, "where": {"type": "string"},
+           "notes": {"type": "string"}, "rrule": {"type": "string", "description": "e.g. FREQ=WEEKLY;BYDAY=TU"},
+           "id": {"type": "string"}, "fields": {"type": "object"}, "answer": {"type": "string"}}, ["op"]),
     _tool("find_cases", "Find past cases in a category, optionally filtered by variables ({field: value} or {field: [op, value]}).",
           {"category": {"type": "string"}, "where": {"type": "object"}, "last": {"type": "integer"}}, ["category"]),
 ]
@@ -842,6 +854,32 @@ class Toolbox:
         cond = {"category": category, **(where if isinstance(where, dict) else {})}
         r = self._core("find", spec={"type": "case", "where": cond, "last": last})
         return json.dumps(r.get("found", r), default=str)[:8000]
+
+    def t_calendar(self, op: str, minutes: int | None = None, **kw: Any) -> str:
+        span = {k: kw[k] for k in ("from", "to") if kw.get(k)}
+        if op == "agenda":
+            r = self._core("calendar", **span)
+        elif op == "free":
+            r = self._core("calendar_free", minutes=minutes or 30, **span)
+        elif op == "invites":
+            r = self._core("invites")
+        elif op == "add":
+            ev = {k: kw[k] for k in ("title", "at", "end", "where", "notes", "rrule") if kw.get(k)}
+            if minutes:
+                ev["minutes"] = minutes
+            r = self._core("calendar_add", event=ev, source="ai")
+        elif op == "change":
+            r = self._core("calendar_change", id=kw.get("id", ""), fields=kw.get("fields") or {})
+        elif op == "cancel":
+            r = self._core("calendar_cancel", id=kw.get("id", ""))
+        elif op == "answer_invite":
+            r = self._core("invite_answer", id=kw.get("id", ""), answer=kw.get("answer", ""), source="ai")
+        else:
+            raise _Invalid("unknown calendar op")
+        if not r.get("ok", True):
+            return f"Error: {r.get('error')}"
+        r.pop("ok", None)
+        return json.dumps(r, default=str)[:12000]
 
     def t_tell_human(self, text: str) -> str:
         if self.core and self.mind:

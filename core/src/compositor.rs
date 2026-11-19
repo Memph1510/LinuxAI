@@ -81,6 +81,8 @@ fn addr(v: &Value) -> Option<String> {
 pub struct Organ {
     pub hypr: Hypr,
     pub core: Option<Client>,
+    /// The Workspace window already moved into the main spot (moved once only).
+    pub promoted: std::sync::Mutex<Option<String>>,
 }
 
 fn err(e: impl std::fmt::Display) -> Value {
@@ -215,15 +217,33 @@ impl Organ {
         }
     }
 
-    /// The Workspace is the main screen: it belongs in the layout, never floating over it (Chromium's app window
-    /// can open floating, bigger than the screen).
+    /// Keep the screen the way LinuxAI means it: the Workspace is the main window (in the layout, never floating
+    /// over it, and in the main spot), and the AI's page windows stay out of sight, because their pages show inside
+    /// the Workspace (they keep drawing on the hidden workspace, so the live picture keeps coming).
     pub fn tidy(&self) {
         let Ok(list) = self.hypr.json("clients") else { return };
-        for c in list.as_array().cloned().unwrap_or_default() {
-            if c["title"] == "LinuxAI Workspace" && c["floating"] == true {
-                if let Some(a) = addr(&c["address"]) {
-                    let _ = self.hypr.dispatch(&format!("hl.dsp.window.float({{ window = \"address:{a}\", action = \"toggle\" }})"));
-                }
+        let list = list.as_array().cloned().unwrap_or_default();
+        let is_ws = |c: &Value| c["title"] == "LinuxAI Workspace";
+        let is_browser = |c: &Value| c["class"].as_str().map(|k| { let k = k.to_lowercase(); k.contains("chromium") || k.contains("chrome") }).unwrap_or(false);
+        let hidden = |c: &Value| c["workspace"]["name"].as_str().map(|n| n.starts_with("special:")).unwrap_or(false);
+        for c in &list {
+            let Some(a) = addr(&c["address"]) else { continue };
+            if is_ws(c) && c["floating"] == true {
+                let _ = self.hypr.dispatch(&format!("hl.dsp.window.float({{ window = \"address:{a}\", action = \"toggle\" }})"));
+            } else if !is_ws(c) && is_browser(c) && !hidden(c) {
+                let _ = self.hypr.dispatch(&format!("hl.dsp.window.move({{ window = \"address:{a}\", workspace = \"special:pages\", follow = false }})"));
+            }
+        }
+        // The main spot (master layout: the leftmost tiled window). Swap the Workspace in once, so it never fights you.
+        if let Some(w) = list.iter().find(|c| is_ws(c)) {
+            let (Some(a), Some(x)) = (addr(&w["address"]), w["at"][0].as_i64()) else { return };
+            let behind = list.iter().any(|c| !is_ws(c) && c["floating"] != true && !is_browser(c) && !hidden(c)
+                && c["workspace"]["id"] == w["workspace"]["id"] && c["at"][0].as_i64().map(|cx| cx < x).unwrap_or(false));
+            let mut done = self.promoted.lock().unwrap();
+            if behind && done.as_deref() != Some(a.as_str()) {
+                let _ = self.hypr.dispatch(&format!("hl.dsp.focus({{ window = \"address:{a}\" }})"));
+                let _ = self.hypr.dispatch("hl.dsp.layout(\"swapwithmaster\")");
+                *done = Some(a);
             }
         }
     }
@@ -313,7 +333,7 @@ fn serve(organ: Arc<Organ>, stream: UnixStream) {
 /// `linuxai-core compositor [--socket PATH] [--core SOCKET]`, started by the Hyprland session.
 pub fn run(socket: PathBuf, core: Option<Client>) -> std::io::Result<()> {
     let hypr = Hypr::from_env().ok_or_else(|| std::io::Error::other("not inside a Hyprland session (HYPRLAND_INSTANCE_SIGNATURE unset)"))?;
-    let organ = Arc::new(Organ { hypr, core });
+    let organ = Arc::new(Organ { hypr, core, promoted: Default::default() });
     organ.watch_events();
     organ.follow_power();
     let _ = std::fs::remove_file(&socket);
@@ -364,7 +384,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lx-hypr-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let asked = fake_hyprland(&dir);
-        let o = Organ { hypr: Hypr { dir: dir.clone() }, core: None };
+        let o = Organ { hypr: Hypr { dir: dir.clone() }, core: None, promoted: Default::default() };
 
         let w = o.handle(&json!({"op": "windows"}));
         assert_eq!(w["windows"][0]["app"], "foot", "most recently used first: {w}");
@@ -383,6 +403,10 @@ mod tests {
         // The Workspace never floats: tidy puts it back in the layout (the stand-in lists it as floating).
         o.tidy();
         assert!(asked.lock().unwrap().iter().any(|g| g == r#"dispatch hl.dsp.window.float({ window = "address:0x5c3", action = "toggle" })"#));
+        // ... and the AI's page windows (chromium) go out of sight; the session window stays.
+        let got = asked.lock().unwrap().clone();
+        assert!(got.iter().any(|g| g == r#"dispatch hl.dsp.window.move({ window = "address:0x5a1", workspace = "special:pages", follow = false })"#), "{got:?}");
+        assert!(!got.iter().any(|g| g.contains("0x5b2") && g.contains("special:pages")));
         // Nothing but a real window address reaches a dispatch.
         assert_eq!(o.handle(&json!({"op": "close", "window": "0x1; exec rm -rf ~"}))["ok"], false);
         assert_eq!(o.handle(&json!({"op": "workspace", "window": "0x5b2", "to": 500}))["ok"], false);

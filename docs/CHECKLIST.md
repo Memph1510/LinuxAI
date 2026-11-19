@@ -129,6 +129,7 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
 - [x] Magnifier over any app: a lens beside the area, twice as large; open questions say where to answer.
 - [x] **The Workspace (the book)**: the main screen in the shared browser's first window, connected to the OS by a
       private channel; what needs you, the work, steps, activity, and web pages live inside it (click, scroll, type).
+- [x] Workspace layout: the main window (70%); the AI's page windows out of sight, their pages inside the Workspace.
 - [ ] Workspace: the reasoning view and comments from the mock-up; the AI's pointer inside the page picture.
 
 ### To decide later: ideas mined from similar projects ([RESEARCH_SIMILAR_PROJECTS.md](RESEARCH_SIMILAR_PROJECTS.md))
@@ -142,6 +143,30 @@ Not decided yet. Each is an option to discuss, not planned work.
 - Hold-to-talk hotkey; wake word
 - Local vision model for private or offline screen reading
 - Measure how often it asks you, and make it go down
+
+### To decide later: from the Storytold / ArtCraft repositories ([RESEARCH_STORYTOLD.md](RESEARCH_STORYTOLD.md))
+
+- Staged copy then verified export as a rule for every organ that edits files
+- An MCP surface for the verb registry, so outside agents can use LinuxAI under the same checks
+- Evidence records after acting: what was checked, what wasn't, how sure
+- Summary-first, paged tool results instead of clipping
+- One OS-wide "which model does each tool" table, editable in the Workspace
+- Local background removal and object selection in pure Rust on the CPU (BEN2, SAM on rten)
+- Ship selected Craft apps (PDF, spreadsheet, photo) as organs
+
+### To decide later: creative applications ([CREATIVE_TOOLS.md](CREATIVE_TOOLS.md))
+
+- Ship Blender in the image, or install it on first use
+- Whether live bridges may change the human's open scene while they work in it
+- Unity and Unreal accounts and licences: a setup task the AI walks you through, or yours alone
+
+### Calendar ([CALENDAR.md](CALENDAR.md))
+
+- [x] Events, repeats, free time, conflicts; invitations from email wait for you; subscribed calendars read-only
+- [x] Part of the AI, not an app: kept from conversation, in the AI's context every turn; reminders by text
+- [ ] Reply to the organizer by email when you answer an invitation
+- [ ] Two-way sync with calendar servers (CalDAV)
+- [ ] Exceptions to repeating events (EXDATE, moved occurrences)
 
 ### Open: should the OS's own prompts live in the prompt library?
 
