@@ -112,9 +112,9 @@ impl Cdp {
         let mut cmd = Command::new(bin);
         cmd.arg("--remote-debugging-pipe")
             .arg(format!("--user-data-dir={}", profile.display()))
-            .args(["--no-first-run", "--no-default-browser-check", "--disable-features=Translate", "--window-size=1280,900"]);
+            .args(["--no-first-run", "--no-default-browser-check", "--disable-features=Translate"]);
         if headless {
-            cmd.arg("--headless");
+            cmd.args(["--headless", "--window-size=1280,800"]);
         } else {
             cmd.arg("--ozone-platform-hint=auto"); // native Wayland under Hyprland, X11 elsewhere
         }

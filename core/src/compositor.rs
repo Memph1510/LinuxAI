@@ -215,12 +215,34 @@ impl Organ {
         }
     }
 
+    /// The Workspace is the main screen: it belongs in the layout, never floating over it (Chromium's app window
+    /// can open floating, bigger than the screen).
+    pub fn tidy(&self) {
+        let Ok(list) = self.hypr.json("clients") else { return };
+        for c in list.as_array().cloned().unwrap_or_default() {
+            if c["title"] == "LinuxAI Workspace" && c["floating"] == true {
+                if let Some(a) = addr(&c["address"]) {
+                    let _ = self.hypr.dispatch(&format!("hl.dsp.window.float({{ window = \"address:{a}\", action = \"toggle\" }})"));
+                }
+            }
+        }
+    }
+
     pub fn watch_events(self: &Arc<Self>) {
+        // The Workspace may open before or after this organ starts: check now and for the first minutes.
+        let me = self.clone();
+        std::thread::spawn(move || for _ in 0..60 {
+            me.tidy();
+            std::thread::sleep(Duration::from_secs(3));
+        });
         let me = self.clone();
         std::thread::spawn(move || loop {
             if let Ok(s) = UnixStream::connect(me.hypr.dir.join(".socket2.sock")) {
                 let mut last_focus = String::new();
                 for line in BufReader::new(s).lines().map_while(Result::ok) {
+                    if line.starts_with("openwindow>>") || line.starts_with("windowtitle") {
+                        me.tidy();
+                    }
                     if let Some((kind, data)) = Self::translate(&line) {
                         if kind == "screen.focus" {
                             let key = data.to_string();
@@ -324,7 +346,8 @@ mod tests {
                 let out = match req.as_str() {
                     "j/clients" => json!([
                         {"address": "0x5a1", "class": "chromium", "title": "Compare SUVs", "workspace": {"id": 1}, "at": [0, 0], "size": [1280, 900], "floating": false, "fullscreen": 0, "pid": 10, "focusHistoryID": 1},
-                        {"address": "0x5b2", "class": "foot", "title": "LinuxAI", "workspace": {"id": 1}, "at": [1280, 0], "size": [640, 900], "floating": false, "fullscreen": 0, "pid": 11, "focusHistoryID": 0}]).to_string(),
+                        {"address": "0x5b2", "class": "foot", "title": "LinuxAI", "workspace": {"id": 1}, "at": [1280, 0], "size": [640, 900], "floating": false, "fullscreen": 0, "pid": 11, "focusHistoryID": 0},
+                        {"address": "0x5c3", "class": "Chromium", "title": "LinuxAI Workspace", "workspace": {"id": 1}, "at": [0, -100], "size": [1280, 900], "floating": true, "fullscreen": 0, "pid": 12, "focusHistoryID": 2}]).to_string(),
                     "j/activewindow" => json!({"address": "0x5a1", "class": "chromium", "title": "Compare SUVs", "workspace": {"id": 1}, "at": [0, 40], "size": [1280, 860]}).to_string(),
                     "j/cursorpos" => json!({"x": 300, "y": 240}).to_string(),
                     r if r.starts_with("dispatch hl.dsp.") || r.starts_with("eval hl.") => "ok".into(),
@@ -357,6 +380,9 @@ mod tests {
         assert!(got.contains(&r#"dispatch hl.dsp.window.move({ window = "address:0x5b2", workspace = "3", follow = false })"#.to_string()));
         assert!(got.iter().any(|g| g.starts_with("eval hl.config({ animations = { enabled = false }")), "{got:?}");
 
+        // The Workspace never floats: tidy puts it back in the layout (the stand-in lists it as floating).
+        o.tidy();
+        assert!(asked.lock().unwrap().iter().any(|g| g == r#"dispatch hl.dsp.window.float({ window = "address:0x5c3", action = "toggle" })"#));
         // Nothing but a real window address reaches a dispatch.
         assert_eq!(o.handle(&json!({"op": "close", "window": "0x1; exec rm -rf ~"}))["ok"], false);
         assert_eq!(o.handle(&json!({"op": "workspace", "window": "0x5b2", "to": 500}))["ok"], false);
