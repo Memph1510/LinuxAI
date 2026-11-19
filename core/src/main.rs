@@ -15,6 +15,7 @@
 //!   linuxai-core calendar import FILE.ics | calendar watch           subscribed calendars and invitations in
 
 mod browser;
+mod blender;
 mod calendar;
 mod client;
 mod compositor;
@@ -304,6 +305,20 @@ fn main() {
             println!("{}", images::handle(&req, &client, &cfg));
             Ok(())
         }
+        Some("blender") => {
+            let client = client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket));
+            let cfg = blender::BlenderConfig::from_env();
+            let req: Value = match args.get(2).map(String::as_str) {
+                Some("caps") => json!({"op": "caps"}),
+                Some("do") => serde_json::from_str(args.get(3).map(String::as_str).unwrap_or("")).unwrap_or(json!({})),
+                _ => {
+                    eprintln!("usage: linuxai-core blender caps | blender do '<json>'");
+                    std::process::exit(2);
+                }
+            };
+            println!("{}", blender::handle(&req, &client, &cfg));
+            Ok(())
+        }
         Some("voice") => {
             let r = match args.get(2).map(String::as_str) {
                 Some("caps") => voice::caps(),
@@ -381,7 +396,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice|compositor|calendar  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice|compositor|calendar|blender  (see source header)");
             std::process::exit(2);
         }
     };

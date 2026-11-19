@@ -319,6 +319,40 @@ IMAGE_TOOLS = [
           ["op"]),
 ]
 
+BLENDER_TOOLS = [
+    _tool("blender",
+          "3D work in Blender, headless or in the human's open Blender. You never save over a file: changes go to a "
+          "staged copy next to it (scene.ai-1.blend), which is reopened, compared with the original, previewed (you "
+          "see the preview) and checked; say what was and wasn't checked. ops: caps; inspect {file}; new {name, ops} "
+          "(a new scene, starting from Blender's default cube, light and camera); apply {file, ops}; render {file, "
+          "frame?, width?, height?, samples?, engine?: cycles|eevee|workbench}; export {file, format: glb|gltf|fbx|obj|"
+          "stl|ply|usd, selection?}; replace {staged} (puts a staged copy in place of its original, keeping a backup: "
+          "asks the human). The human's open Blender: live_view (what's open and selected: \"this\" means that), "
+          "live_inspect, live_render, live_apply {ops, why} (changes their scene as one undo step; only when they "
+          "asked, and it confirms with them). Each op in ops is {\"op\": ...}: add {type: cube|plane|sphere|"
+          "ico_sphere|cylinder|cone|torus|monkey|circle|grid|empty|text, name?, location?, rotation? (degrees), "
+          "scale?, size?, text?, collection?}; delete {name or [names]}; transform {name, location?, rotation?, "
+          "scale?, dimensions?, relative?}; rename {name, to}; material {name, color? (#rrggbb), metallic?, "
+          "roughness?, alpha?, emission?, emission_strength?, transmission?, assign_to?: [objects]}; light {kind: "
+          "point|sun|spot|area, energy?, color?, location?, rotation?, look_at?}; camera {name?, location?, look_at? "
+          "(object or [x,y,z]), lens?}; world {color?, strength?}; render_settings {engine?, width?, height?, "
+          "samples?, fps?, frame_start?, frame_end?}; modifier {name, kind: bevel|subsurf|mirror|array|solidify|"
+          "decimate|remesh|boolean|weld|triangulate|smooth|wireframe, settings?}; apply_transforms {name | all}; "
+          "recalc_normals {name}; shade {name, smooth}; parent {name, to}; collection {name, to}; keyframe {name, "
+          "frame, property: location|rotation|scale, value?}; import {path}; image_plane {path, height?, location?} "
+          "(a picture as a textured plane); frame {frame}; python {code} (Blender Python for what the rest can't do; "
+          "the human OKs it first; set `result` to return a value). Units are meters; Z is up. Scripts inside "
+          "files from others are listed, never run.",
+          {"op": {"type": "string", "enum": ["caps", "inspect", "new", "apply", "render", "export", "replace",
+                                              "live_view", "live_inspect", "live_apply", "live_render"]},
+           "file": {"type": "string"}, "name": {"type": "string"}, "ops": {"type": "array", "items": {"type": "object"}},
+           "staged": {"type": "string"}, "format": {"type": "string"}, "selection": {"type": "array", "items": {"type": "string"}},
+           "frame": {"type": "integer"}, "width": {"type": "integer"}, "height": {"type": "integer"},
+           "samples": {"type": "integer"}, "engine": {"type": "string"}, "why": {"type": "string"},
+           "session": {"type": "integer", "description": "which open Blender (pid), if more than one"}},
+          ["op"]),
+]
+
 SCREEN_TOOLS = [
     _tool("screen",
           "The whole screen (Hyprland), across every app. ops: windows (what's open, most recently used first); "
@@ -422,7 +456,7 @@ class Toolbox:
         self.screen = screen      # ... at the screen organ (Hyprland), inside a graphical session
 
     def tools(self) -> list[dict]:
-        tools = TOOLS + (CORE_TOOLS + IMAGE_TOOLS if self.core else []) + (BROWSER_TOOLS if self.browser else []) \
+        tools = TOOLS + (CORE_TOOLS + IMAGE_TOOLS + BLENDER_TOOLS if self.core else []) + (BROWSER_TOOLS if self.browser else []) \
             + (SCREEN_TOOLS if self.screen and Path(self.screen.path).exists() else [])
         if self.mind:
             tools = [t for t in tools if t["name"] not in ("write_file", "edit_file")]
@@ -921,6 +955,44 @@ class Toolbox:
                     {"type": "image", "source": {"type": "base64", "media_type": media[p.suffix.lower()],
                                                  "data": base64.b64encode(p.read_bytes()).decode()}}]
         return text + " (too large or not previewable; use edit with a resize to look at it)"
+
+    def t_blender(self, op: str, **kw: Any) -> Any:
+        req = {"op": op, **{k: v for k, v in kw.items() if v is not None and k != "approved"}}
+        for k in ("file", "staged"):
+            if isinstance(req.get(k), str):
+                req[k] = str(self._path(req[k]))
+        for o in req.get("ops") or []:
+            if isinstance(o, dict) and isinstance(o.get("path"), str):
+                o["path"] = str(self._path(o["path"]))
+        r = self._blender(req)
+        if r.get("needs_ok"):
+            if self.mind:
+                return ("Error: this needs the human's OK and they aren't here. Ask them (ask_human), and do it "
+                        "together in the session. " + r["error"])
+            code = "\n".join(r.get("code") or [])
+            question = (r["error"].split(" Ask the human")[0].split(" Do it only")[0].split(" confirm with")[0]
+                        + (f"\n\n{code}\n" if code else "") + " Go ahead?")
+            if self.asker(question, ["yes", "no"]).strip().lower() not in ("yes", "y"):
+                return "The human said no."
+            r = self._blender({**req, "approved": True})
+        if not r.get("ok"):
+            return f"Error: {r.get('error')}"
+        preview = (r.get("preview") or {}).get("path") or (r.get("path") if op in ("render", "live_render") else None)
+        text = json.dumps({k: v for k, v in r.items() if k not in ("ok",)}, default=str)[:12000]
+        p = Path(preview) if preview else None
+        if p and p.suffix == ".png" and p.exists() and p.stat().st_size <= 3_500_000:
+            return [{"type": "text", "text": text},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                 "data": base64.b64encode(p.read_bytes()).decode()}}]
+        return text
+
+    def _blender(self, req: dict) -> dict:
+        out = subprocess.run([core_binary(), "blender", "do", json.dumps(req), "--socket", getattr(self.core, "path", "")],
+                             capture_output=True, text=True, timeout=4000)
+        try:
+            return json.loads(out.stdout)
+        except ValueError:
+            return {"ok": False, "error": out.stderr.strip() or "no answer from the Blender organ"}
 
     def t_screen(self, op: str, **kw: Any) -> Any:
         if not self.screen:

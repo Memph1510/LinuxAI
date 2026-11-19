@@ -766,3 +766,55 @@ def test_the_ai_keeps_the_calendar_from_conversation_and_sees_it_every_turn(env,
     assert not err and "Error" not in out, out
     cal = Agent(cfg, mem, tb, client=FakeClient([]))._calendar_context()
     assert "Lunch" not in cal and "Dentist" in cal, cal
+
+
+FAKE_BLENDER = r'''#!/usr/bin/env python3
+import json, sys, base64
+a = sys.argv
+job_path, result_path = a[a.index("--") + 1], a[a.index("--") + 2]
+j = json.load(open(job_path))
+png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+if j["op"] == "apply":
+    open(j["save_as"], "wb").write(b"BLENDER")
+    open(j["preview"]["output"], "wb").write(png)
+    r = {"ok": True, "done": [{"op": o["op"]} for o in j["ops"]], "before": {"objects": []},
+         "preview": {"path": j["preview"]["output"], "check": {"verdict": "ok"}}}
+elif j["op"] == "inspect":
+    r = {"ok": True, "scene": {"objects": [{"name": "Ball", "type": "MESH"}], "scripts_in_file": []}}
+else:
+    r = {"ok": False, "error": "not in the fake"}
+json.dump(r, open(result_path, "w"))
+'''
+
+
+def test_blender_tool_shows_previews_and_asks_before_python(env, live_core, monkeypatch):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    fake = tmp / "blender"
+    fake.write_text(FAKE_BLENDER)
+    fake.chmod(0o755)
+    (tmp / "engine.py").write_text("# the fake doesn't read it")
+    monkeypatch.setenv("LINUXAI_BLENDER", str(fake))
+    monkeypatch.setenv("LINUXAI_BLENDER_ENGINE", str(tmp / "engine.py"))
+    monkeypatch.setenv("LINUXAI_BLENDER_DIR", str(tmp / "b"))
+    assert "blender" in {t["name"] for t in tb.tools()}
+    out, err = tb.execute("blender", {"op": "new", "name": "desk", "ops": [{"op": "add", "type": "cube"}]})
+    assert not err and isinstance(out, list), out
+    assert out[1]["type"] == "image", "the AI sees the preview"
+    assert '"saved"' in out[0]["text"] and "desk.blend" in out[0]["text"]
+    # Python inside Blender: the human is asked, with the code in front of them.
+    asked = []
+    tb.asker = lambda q, o: asked.append(q) or "no"
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}]})
+    assert out == "The human said no." and "print(42)" in asked[0]
+    tb.asker = lambda q, o: "yes"
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}], "approved": True})
+    assert isinstance(out, list), out
+    # Behind the scenes nobody is there to say yes: it doesn't happen.
+    tb.mind = True
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}]})
+    assert "aren't here" in out
+    # The model can't approve for the human.
+    tb.mind, tb.asker = False, (lambda q, o: asked.append(q) or "no")
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "x"}], "approved": True})
+    assert out == "The human said no."

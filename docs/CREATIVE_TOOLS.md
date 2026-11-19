@@ -1,6 +1,6 @@
 # Blender, Unity and Unreal
 
-How LinuxAI should work with the big creative applications. This is a plan; nothing here is built yet.
+How LinuxAI works with the big creative applications. **Blender is built** ([BLENDER.md](BLENDER.md)); Unity and Unreal are still plans.
 
 ## The shape: one "app organ" pattern for all of them
 
@@ -32,7 +32,7 @@ copies), an organ process per app that owns the headless runs and the live bridg
 inspect scenes, a preview returned as an image, and playbooks per category (`3d/modeling`, `3d/render`,
 `game/build`).
 
-## Blender: first, and fully
+## Blender: first, and fully (built: see [BLENDER.md](BLENDER.md))
 
 Blender is the best place to start: free, open source, in Arch's `extra` repository (`pacman -S blender`), and
 almost every action is available from Python (`bpy`).

@@ -64,6 +64,11 @@ CHECKS = [
      "sudo -u linuxai sh -c 'cd /tmp && magick -size 400x300 xc:orange t.png && LINUXAI_IMAGES=/tmp/pics linuxai-core image do "
      "\"{\\\"op\\\":\\\"edit\\\",\\\"input\\\":\\\"/tmp/t.png\\\",\\\"ops\\\":[{\\\"resize\\\":\\\"50%\\\"}]}\"' | grep -o '\"width\":200'",
      r'"width":200'),
+    ("3D: Blender builds a scene on a staged copy, checks and previews it (Blender organ)",
+     "sudo -u linuxai sh -c 'cd /tmp && LINUXAI_BLENDER_DIR=/tmp/b linuxai-core blender do "
+     "\"{\\\"op\\\":\\\"new\\\",\\\"name\\\":\\\"boot\\\",\\\"ops\\\":[{\\\"op\\\":\\\"add\\\",\\\"type\\\":\\\"sphere\\\",\\\"name\\\":\\\"Ball\\\",\\\"location\\\":[0,0,2]},"
+     "{\\\"op\\\":\\\"camera\\\",\\\"name\\\":\\\"Camera\\\",\\\"look_at\\\":\\\"Ball\\\"}]}\"' | grep -oE '\"verdict\":\"[a-z]+\"|reopens'",
+     r'(?s)reopens.*"verdict":"ok"|"verdict":"ok".*reopens'),
     ("voice: speech-to-text and speaking are installed",
      "linuxai-core voice caps", r'"speech_to_text":"whisper\.cpp.*"text_to_speech":"espeak-ng"'),
     ("screen: Hyprland runs, or the text session took over and said why",
@@ -102,6 +107,12 @@ CHECKS = [
      "print('main' if all(ws['at'][0]<=x['at'][0] and ws['size'][0]>=x['size'][0] for x in others) else 'not-main', ws['at'], ws['size'])\n"
      "print('pages-hidden' if not any('chrom' in str(x['app']).lower() for x in others) else 'pages-visible', [x['title'][:20] for x in others])\"",
      r"(?s)^main.*^pages-hidden|no-hyprland"),
+    ("screen: the AI sees what's open in Blender (live bridge in the human's Blender)",
+     "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sig=$(ls /run/user/1000/hypr | head -1);"
+     " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl dispatch \"hl.dsp.exec_cmd('blender --factory-startup')\" >/dev/null;"
+     " for i in $(seq 90); do ls /run/user/1000/linuxai-blender-*.sock >/dev/null 2>&1 && break; sleep 2; done;"
+     " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core blender do '{\"op\":\"live_view\"}';"
+     " pkill -x blender", r'"ok":true.*"selected"|"selected".*"ok":true|no-hyprland'),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
