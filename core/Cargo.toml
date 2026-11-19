@@ -1,0 +1,23 @@
+[package]
+name = "linuxai-core"
+version = "0.1.0"
+edition = "2021"
+description = "LinuxAI core: action-language engine, memory, Linux host organ, rules and local API"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+mail-parser = "0.11.9"
+scraper = "0.29.0"
+unicode-normalization = "0.1.26"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+ego-tree = "0.11.1"
+sha2 = "0.11.1"
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

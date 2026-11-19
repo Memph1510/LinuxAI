@@ -1,0 +1,18 @@
+#!/bin/bash
+# The LinuxAI screen: Hyprland with the LinuxAI shell when the machine can draw it, otherwise the text session.
+# Set LINUXAI_SCREEN=text in ~/.config/linuxai/env to always use the text session.
+[ -f "$HOME/.config/linuxai/env" ] && set -a && . "$HOME/.config/linuxai/env" && set +a
+state="$HOME/.local/state/linuxai"; mkdir -p "$state"
+log="$state/screen.log"
+if [ "${LINUXAI_SCREEN:-graphical}" != "text" ] && command -v Hyprland >/dev/null; then
+    start=$(date +%s)
+    echo "starting Hyprland $(date)" > "$log"
+    Hyprland --config /etc/linuxai/hypr/hyprland.lua >> "$log" 2>&1
+    code=$?
+    # A session that ended within 15 seconds never really started (no usable graphics, typically in a VM).
+    if [ $(( $(date +%s) - start )) -ge 15 ]; then exit 0; fi
+    reason=$(grep -iE "error|fail|cannot|no (gpu|backend)|egl" "$log" | tail -n 3)
+    echo "text: Hyprland could not start here (exit $code). ${reason:-See $log}" | tee -a "$log"
+    sleep 2
+fi
+exec /usr/local/bin/linuxai-session

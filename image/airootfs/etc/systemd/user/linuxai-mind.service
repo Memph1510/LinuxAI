@@ -1,0 +1,11 @@
+[Unit]
+Description=LinuxAI mind (the AI working behind the scenes)
+ConditionPathExists=%h/.config/linuxai/env
+
+[Service]
+ExecStart=/usr/local/bin/cortex mind
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

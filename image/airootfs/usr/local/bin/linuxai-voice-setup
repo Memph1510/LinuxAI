@@ -1,0 +1,14 @@
+#!/bin/sh
+# Downloads the speech-to-text model (whisper.cpp "base.en", about 140 MB) so you can talk to LinuxAI.
+# Usage: linuxai-voice-setup [model]   e.g. small.en for better accuracy (about 470 MB), tiny.en for slow machines
+set -e
+model="${1:-base.en}"
+dir="$HOME/.local/share/linuxai/models"
+mkdir -p "$dir"
+out="$dir/ggml-$model.bin"
+if [ -s "$out" ]; then echo "already have $out"; exit 0; fi
+echo "downloading the $model speech model to $out ..."
+curl -fL --progress-bar -o "$out.part" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model.bin"
+mv "$out.part" "$out"
+[ "$model" = "base.en" ] || echo "set LINUXAI_WHISPER_MODEL=$out in ~/.config/linuxai/env to use it"
+echo "done: /voice on in the session, then Enter to talk"

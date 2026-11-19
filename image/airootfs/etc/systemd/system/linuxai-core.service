@@ -1,0 +1,17 @@
+[Unit]
+Description=LinuxAI core (the system's mind-body interface)
+Documentation=https://github.com/memph1510/linuxai
+After=local-fs.target dbus.service
+Wants=dbus.service
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/linuxai-core daemon --group linuxai --playbooks /home/linuxai/playbooks --prompts /home/linuxai/prompts
+Restart=always
+RestartSec=2
+RuntimeDirectory=linuxai
+RuntimeDirectoryMode=0755
+StateDirectory=linuxai
+
+[Install]
+WantedBy=multi-user.target

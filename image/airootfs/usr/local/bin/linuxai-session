@@ -1,0 +1,11 @@
+#!/bin/bash
+# The LinuxAI login session: there is no desktop; the first screen is the AI.
+clear
+cat /etc/linuxai/banner
+while true; do
+    /usr/local/bin/cortex session
+    echo
+    echo "The LinuxAI session ended. Press Enter to start it again, or type 'shell' for a plain shell."
+    read -r reply || exit 0
+    [ "$reply" = "shell" ] && exec bash -l
+done

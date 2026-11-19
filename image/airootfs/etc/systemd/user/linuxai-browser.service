@@ -1,0 +1,11 @@
+[Unit]
+Description=LinuxAI shared browser (one Chromium you and the AI use at the same time)
+
+[Service]
+EnvironmentFile=-%h/.config/linuxai/env
+ExecStart=/usr/local/bin/linuxai-core browser
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
