@@ -74,7 +74,9 @@ CHECKS = [
      r"(?s)windows [1-9].*focus True.*effects True|no-hyprland"),
     ("screen: the always-on layer (Quickshell) loaded without errors",
      "f=/home/linuxai/.local/state/linuxai/quickshell.log; pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; };"
-     " if grep -qiE 'error|is not a type|unavailable|cannot assign' $f; then grep -iE 'error|is not a type|unavailable|cannot assign' $f | head -3; else echo clean; fi",
+     # Graphics-driver and desktop-portal notices in a VM aren't LinuxAI's problems; anything else is.
+     " grep -vE 'MESA|ZINK|qt.qpa.services|portal|^\\s*$' $f | grep -iE 'error|warn|is not a type|unavailable|cannot|undefined|failed' | head -12 > /tmp/qs.err;"
+     " if [ -s /tmp/qs.err ]; then cat /tmp/qs.err; else echo clean; fi",
      r"^(clean|no-hyprland)"),
     ("the core answers you, not only root (bar, reach, organs)",
      "sudo -u linuxai linuxai-core ctl '{\"op\":\"ping\"}' | grep -c '\"ok\": true'", r"^[1-9]"),
@@ -210,8 +212,9 @@ def main() -> int:
         if "yes" in con.run("pgrep -x Hyprland >/dev/null && echo yes", 30):
             # The always-on layer, seen on the real screen: a question card, the voice indicator, the AI's pointer.
             con.run("""linuxai-core ctl '{"op":"submit","source":"human","plan":{"plan":"boot-question","why":"boot test","steps":[{"ask":"Book the test drive Saturday 10am?","opts":["Book it","Not now"],"why":"It is a $38,000 decision","lean":"Book it","as":"a"}]}}' >/dev/null;"""
-                    """ linuxai-core ctl '{"op":"event","kind":"voice.heard","data":{"text":"is this one a good deal"}}' >/dev/null;"""
+                    """ linuxai-core ctl '{"op":"event","kind":"voice.listening","data":{}}' >/dev/null;"""
                     """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
+            time.sleep(2)
             monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
             if (tmp / "overlay.ppm").exists():
                 img = read_ppm(tmp / "overlay.ppm")

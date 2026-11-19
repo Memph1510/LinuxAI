@@ -102,43 +102,43 @@ ShellRoot {
     }
 
     // ---- the AI's questions ------------------------------------------------------------------------------
+    // Explicit sizes throughout: a layer window takes its size from these, so nothing may depend on the window.
     PanelWindow {
         visible: root.questions.length > 0
         anchors { top: true; right: true }
         margins { top: 38; right: 12 }
         exclusionMode: ExclusionMode.Ignore
         implicitWidth: 380
-        implicitHeight: cards.implicitHeight
+        implicitHeight: Math.max(1, cards.height)
         color: "transparent"
 
-        ColumnLayout {
+        Column {
             id: cards
-            width: parent.width
+            width: 380
             spacing: 8
             Repeater {
                 model: root.questions.slice(0, 3)
                 delegate: Rectangle {
                     id: qcard
                     required property var modelData
-                    Layout.fillWidth: true
-                    implicitHeight: card.implicitHeight + 24
+                    width: 380
+                    height: inner.height + 24
                     radius: 10; color: root.panel; border.color: root.you; border.width: 1
-                    ColumnLayout {
-                        id: card
-                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
-                        spacing: 6
-                        Text { text: "LinuxAI needs you"; color: root.you; font.pixelSize: 11; font.bold: true }
-                        Text { Layout.fillWidth: true; text: modelData.wait.question; color: root.fg; font.pixelSize: 14; wrapMode: Text.Wrap }
-                        Text { Layout.fillWidth: true; visible: !!modelData.wait.why; text: "Why I'm unsure: " + (modelData.wait.why || ""); color: root.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
-                        Text { Layout.fillWidth: true; visible: !!modelData.wait.lean; text: "I'd lean: " + (modelData.wait.lean || ""); color: root.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
+                    Column {
+                        id: inner
+                        x: 12; y: 12; width: 356; spacing: 6
+                        Text { width: parent.width; text: "LinuxAI needs you"; color: root.you; font.pixelSize: 11; font.bold: true }
+                        Text { width: parent.width; text: qcard.modelData.wait.question; color: root.fg; font.pixelSize: 14; wrapMode: Text.Wrap }
+                        Text { width: parent.width; visible: !!qcard.modelData.wait.why; text: "Why I'm unsure: " + (qcard.modelData.wait.why || ""); color: root.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
+                        Text { width: parent.width; visible: !!qcard.modelData.wait.lean; text: "I'd lean: " + (qcard.modelData.wait.lean || ""); color: root.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
                         Flow {
-                            Layout.fillWidth: true; spacing: 6
+                            width: parent.width; spacing: 6
                             Repeater {
-                                model: modelData.wait.opts || ["yes", "no"]
+                                model: qcard.modelData.wait.opts || ["yes", "no"]
                                 delegate: Rectangle {
                                     required property var modelData
                                     required property int index
-                                    radius: 6; implicitHeight: 28; implicitWidth: lbl.implicitWidth + 20
+                                    radius: 6; height: 28; width: lbl.implicitWidth + 20
                                     color: index === 0 ? root.you : "transparent"; border.color: root.you
                                     Text { id: lbl; anchors.centerIn: parent; text: modelData; color: index === 0 ? "#2a1c02" : root.fg; font.pixelSize: 12 }
                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.reply(qcard.modelData.plan_id, modelData) }
@@ -157,57 +157,54 @@ ShellRoot {
         anchors { bottom: true }
         margins { bottom: 24 }
         exclusionMode: ExclusionMode.Ignore
-        implicitWidth: Math.min(640, pill.implicitWidth + 32)
+        implicitWidth: 600
         implicitHeight: 44
         color: "transparent"
         mask: Region {}
 
         Rectangle {
-            anchors.fill: parent; radius: 22
+            width: 600; height: 44; radius: 22
             color: root.panel
             border.color: root.voiceState === "speaking" ? root.ai : root.you; border.width: 2
-            RowLayout {
-                id: pill
-                anchors.centerIn: parent; spacing: 10
-                Rectangle {
-                    width: 10; height: 10; radius: 5
-                    color: root.voiceState === "speaking" ? root.ai : root.you
-                    SequentialAnimation on opacity {
-                        running: root.voiceState === "listening" || root.voiceState === "speaking"; loops: Animation.Infinite
-                        NumberAnimation { to: 0.25; duration: 500 } NumberAnimation { to: 1; duration: 500 }
-                    }
+            Rectangle {
+                id: dot
+                x: 18; y: 17; width: 10; height: 10; radius: 5
+                color: root.voiceState === "speaking" ? root.ai : root.you
+                SequentialAnimation on opacity {
+                    running: root.voiceState === "listening" || root.voiceState === "speaking"; loops: Animation.Infinite
+                    NumberAnimation { to: 0.25; duration: 500 } NumberAnimation { to: 1; duration: 500 }
                 }
-                Text {
-                    Layout.maximumWidth: 560; elide: Text.ElideRight
-                    color: root.fg; font.pixelSize: 13
-                    text: root.voiceState === "listening" ? "Listening… press Enter when you're done"
-                        : root.voiceState === "heard" ? "You: " + root.voiceText
-                        : "LinuxAI: " + root.voiceText
-                }
+            }
+            Text {
+                x: 40; width: 540; height: 44; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                color: root.fg; font.pixelSize: 13
+                text: root.voiceState === "listening" ? "Listening… press Enter when you're done"
+                    : root.voiceState === "heard" ? "You: " + root.voiceText
+                    : "LinuxAI: " + root.voiceText
             }
         }
     }
 
     // ---- the AI's pointer, over any app ------------------------------------------------------------------
+    // A small window placed exactly over the area (plus room for the note below it); clicks pass through.
     PanelWindow {
         visible: root.mark !== null
-        anchors { top: true; bottom: true; left: true; right: true }
+        anchors { top: true; left: true }
+        margins { top: root.mark ? Math.max(0, root.mark.y - 6) : 0; left: root.mark ? Math.max(0, root.mark.x - 6) : 0 }
         exclusionMode: ExclusionMode.Ignore
-        WlrLayershell.layer: WlrLayer.Overlay
+        implicitWidth: root.mark ? Math.max(root.mark.w + 12, noteBox.width) : 1
+        implicitHeight: root.mark ? root.mark.h + 12 + (root.mark.note ? noteBox.height + 8 : 0) : 1
         color: "transparent"
-        mask: Region {}   // clicks go straight through to the app underneath
+        mask: Region {}
 
         Rectangle {
-            visible: root.mark !== null
-            x: root.mark ? root.mark.x - 6 : 0; y: root.mark ? root.mark.y - 6 : 0
             width: root.mark ? root.mark.w + 12 : 0; height: root.mark ? root.mark.h + 12 : 0
             radius: 8; color: "transparent"; border.color: root.you; border.width: 3
-            Behavior on x { NumberAnimation { duration: 250 } }
-            Behavior on y { NumberAnimation { duration: 250 } }
         }
         Rectangle {
+            id: noteBox
             visible: root.mark !== null && !!root.mark.note
-            x: root.mark ? root.mark.x : 0; y: root.mark ? root.mark.y + root.mark.h + 12 : 0
+            y: root.mark ? root.mark.h + 20 : 0
             width: note.implicitWidth + 20; height: note.implicitHeight + 14; radius: 8; color: "#1c1c1e"
             Text { id: note; anchors.centerIn: parent; text: root.mark ? root.mark.note : ""; color: "white"; font.pixelSize: 13 }
         }
