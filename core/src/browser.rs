@@ -77,9 +77,23 @@ pub fn find_browser() -> Option<String> {
         }
     }
     ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome"].iter().find_map(|n| {
-        std::env::var("PATH").ok()?.split(':').map(|d| PathBuf::from(d).join(n)).find(|p| p.is_file())
+        std::env::var("PATH").ok()?.split(':').map(|d| PathBuf::from(d).join(n)).find(|p| p.is_file() && !is_snap(p))
             .map(|p| p.to_string_lossy().to_string())
     })
+}
+
+/// A Snap-packaged browser (Ubuntu's `chromium` is one) runs in a sandbox that doesn't pass the private pipe
+/// through, so it would never answer. Skip it for a normally installed one.
+pub fn is_snap(p: &std::path::Path) -> bool {
+    let real = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if real.starts_with("/snap") {
+        return true;
+    }
+    // Ubuntu's transitional packages install a small shell script that starts the Snap.
+    let mut head = vec![0u8; 4096];
+    let n = std::fs::File::open(&real).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+    head.truncate(n);
+    head.starts_with(b"#!") && String::from_utf8_lossy(&head).contains("snap")
 }
 
 pub fn has_screen() -> bool {
@@ -782,6 +796,22 @@ mod tests {
         let r = organ.handle(&json!({"op": "tabs"}));
         assert_eq!(r["ok"], true, "{r}");
         organ.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod snap_tests {
+    #[test]
+    fn snap_wrappers_are_skipped() {
+        let dir = std::env::temp_dir().join(format!("lx-snap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wrapper = dir.join("chromium");
+        std::fs::write(&wrapper, "#!/bin/sh\nexec /snap/bin/chromium \"$@\"\n").unwrap();
+        assert!(super::is_snap(&wrapper));
+        let real = dir.join("chrome");
+        std::fs::write(&real, b"\x7fELF\x02\x01\x01").unwrap();
+        assert!(!super::is_snap(&real));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

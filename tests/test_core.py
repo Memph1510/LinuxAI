@@ -565,9 +565,19 @@ def test_the_ai_uses_the_prompt_library(env, live_core, tmp_path):
 
 
 # ---- the shared browser ----------------------------------------------------------------------------------
+def _is_snap(p: str) -> bool:
+    """Snap-packaged browsers (Ubuntu's chromium) don't pass the organ's private pipe through."""
+    real = os.path.realpath(p)
+    if real.startswith("/snap"):
+        return True
+    head = Path(real).read_bytes()[:4096]
+    return head.startswith(b"#!") and b"snap" in head
+
+
 def _chromium() -> str | None:
-    for p in (os.environ.get("LINUXAI_BROWSER"), shutil.which("chromium"), "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome"):
-        if p and Path(p).exists():
+    names = ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome")
+    for p in (os.environ.get("LINUXAI_BROWSER"), *(shutil.which(n) for n in names), "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome"):
+        if p and Path(p).exists() and not _is_snap(p):
             return p
     return None
 
