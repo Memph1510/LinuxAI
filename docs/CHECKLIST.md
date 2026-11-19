@@ -126,8 +126,10 @@ it**. Then the rebuilt ISO is boot-tested in QEMU.
       it can't draw.
 - [x] Quickshell: the AI's questions as cards you tap, the voice indicator, its pointer over any app; the AI's
       `screen` tool (windows, what you're in, screenshots, pointing, arranging).
-- [ ] Magnifier over any app (a zoomed copy of the area, like the browser's).
-- [ ] Pages inside the Workspace screen (the book).
+- [x] Magnifier over any app: a lens beside the area, twice as large; open questions say where to answer.
+- [x] **The Workspace (the book)**: the main screen in the shared browser's first window, connected to the OS by a
+      private channel; what needs you, the work, steps, activity, and web pages live inside it (click, scroll, type).
+- [ ] Workspace: the reasoning view and comments from the mock-up; the AI's pointer inside the page picture.
 
 ### To decide later: ideas mined from similar projects ([RESEARCH_SIMILAR_PROJECTS.md](RESEARCH_SIMILAR_PROJECTS.md))
 

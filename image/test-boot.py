@@ -75,11 +75,17 @@ CHECKS = [
     ("screen: the always-on layer (Quickshell) loaded without errors",
      "f=/home/linuxai/.local/state/linuxai/quickshell.log; pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; };"
      # Graphics-driver and desktop-portal notices in a VM aren't LinuxAI's problems; anything else is.
-     " grep -vE 'MESA|ZINK|qt.qpa.services|portal|^\\s*$' $f | grep -iE 'error|warn|is not a type|unavailable|cannot|undefined|failed' | head -12 > /tmp/qs.err;"
+     " grep -vE 'MESA|ZINK|qt.qpa.services|portal|dmabuf|render device|fall back to SHM|^\\s*$' $f | grep -iE 'error|warn|is not a type|unavailable|cannot|undefined|failed' | head -12 > /tmp/qs.err;"
      " if [ -s /tmp/qs.err ]; then cat /tmp/qs.err; else echo clean; fi",
      r"^(clean|no-hyprland)"),
     ("the core answers you, not only root (bar, reach, organs)",
      "sudo -u linuxai linuxai-core ctl '{\"op\":\"ping\"}' | grep -c '\"ok\": true'", r"^[1-9]"),
+    ("screen: the Workspace is open and connected to the OS",
+     "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; for i in $(seq 30); do"
+     " r=$(sudo -u linuxai python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/user/1000/linuxai-browser.sock');"
+     "s.sendall(b'{\\\"op\\\":\\\"workspace_status\\\"}\\\\n');print(s.makefile().readline())\" 2>/dev/null);"
+     " echo \"$r\" | grep -q '\"connected\":true' && break; sleep 2; done; echo \"$r\"",
+     r'"connected":true.*"title":"LinuxAI Workspace"|"title":"LinuxAI Workspace".*"connected":true|no-hyprland'),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
@@ -210,22 +216,27 @@ def main() -> int:
         shots = Path(args.shots)
         shots.mkdir(parents=True, exist_ok=True)
         if "yes" in con.run("pgrep -x Hyprland >/dev/null && echo yes", 30):
+            # A picture before the overlay events, so only what they add is counted (the Workspace has amber too).
+            monitor(mon, f"screendump {tmp / 'before.ppm'}")
+            before = read_ppm(tmp / "before.ppm") if (tmp / "before.ppm").exists() else None
             # The always-on layer, seen on the real screen: a question card, the voice indicator, the AI's pointer.
             con.run("""linuxai-core ctl '{"op":"submit","source":"human","plan":{"plan":"boot-question","why":"boot test","steps":[{"ask":"Book the test drive Saturday 10am?","opts":["Book it","Not now"],"why":"It is a $38,000 decision","lean":"Book it","as":"a"}]}}' >/dev/null;"""
                     """ linuxai-core ctl '{"op":"event","kind":"voice.listening","data":{}}' >/dev/null;"""
-                    """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
+                    """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","magnify":true,"seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
             time.sleep(2)
             monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
             if (tmp / "overlay.ppm").exists():
                 img = read_ppm(tmp / "overlay.ppm")
                 w, h, _ = img
                 ppm_to_png(tmp / "overlay.ppm", shots / "linuxai-overlay.png")
-                found = {"question card (top right)": amber_in(img, w - 400, 30, w, 330),
-                         "voice indicator (bottom)": amber_in(img, w // 2 - 330, h - 80, w // 2 + 330, h),
-                         "the AI's pointer (around 120,300 360x60)": amber_in(img, 110, 290, 490, 370)}
+                boxes = {"question card (top right)": (w - 400, 30, w, 330),
+                         "voice indicator (bottom)": (w // 2 - 330, h - 80, w // 2 + 330, h),
+                         "the AI's pointer (around 120,300 360x60)": (110, 290, 490, 370),
+                         "the magnifier (beside it)": (500, 210, 870, 450)}
+                found = {k: amber_in(img, *b) - (amber_in(before, *b) if before else 0) for k, b in boxes.items()}
                 ok = all(n > 150 for n in found.values())
                 failed += not ok
-                print(f"  {'✓' if ok else '✗'} screen: the question card, voice indicator and the AI's pointer are drawn"
+                print(f"  {'✓' if ok else '✗'} screen: the question card, voice indicator, the AI's pointer and its magnifier are drawn"
                       + ("" if ok else f"\n      amber pixels found: {found}"), flush=True)
                 print(f"  screenshot with the overlay: {shots / 'linuxai-overlay.png'}")
         monitor(mon, f"screendump {tmp / 'tty1.ppm'}")

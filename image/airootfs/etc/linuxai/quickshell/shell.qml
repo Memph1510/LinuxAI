@@ -133,10 +133,16 @@ ShellRoot {
                         Text { width: parent.width; text: qcard.modelData.wait.question; color: root.fg; font.pixelSize: 14; wrapMode: Text.Wrap }
                         Text { width: parent.width; visible: !!qcard.modelData.wait.why; text: "Why I'm unsure: " + (qcard.modelData.wait.why || ""); color: root.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
                         Text { width: parent.width; visible: !!qcard.modelData.wait.lean; text: "I'd lean: " + (qcard.modelData.wait.lean || ""); color: root.dim; font.pixelSize: 12; wrapMode: Text.Wrap }
+                        // A question with no ready answers: say where to answer it.
+                        Text {
+                            width: parent.width; wrapMode: Text.Wrap; color: root.dim; font.pixelSize: 12
+                            visible: !(qcard.modelData.wait.opts && qcard.modelData.wait.opts.length)
+                            text: "Answer in the LinuxAI window, or reply to the text you were sent."
+                        }
                         Flow {
                             width: parent.width; spacing: 6
                             Repeater {
-                                model: qcard.modelData.wait.opts || ["yes", "no"]
+                                model: (qcard.modelData.wait.opts && qcard.modelData.wait.opts.length) ? qcard.modelData.wait.opts : []
                                 delegate: Rectangle {
                                     required property var modelData
                                     required property int index
@@ -190,10 +196,44 @@ ShellRoot {
     // ---- the AI's pointer, over any app ------------------------------------------------------------------
     // A full-screen, fully transparent window that never takes a click; the outline and note are drawn in it.
     PanelWindow {
+        id: pointerWin
         anchors { top: true; bottom: true; left: true; right: true }
         exclusionMode: ExclusionMode.Ignore
         color: "transparent"
         mask: Region {}
+
+        // The magnifying glass: a still picture of the screen taken when the AI points, shown twice as large,
+        // centred on the area, beside it (right if there's room, else left).
+        Rectangle {
+            id: lens
+            readonly property real zoom: 2
+            readonly property real cx: root.mark ? root.mark.x + root.mark.w / 2 : 0
+            readonly property real cy: root.mark ? root.mark.y + root.mark.h / 2 : 0
+            visible: root.mark !== null && !!root.mark.magnify
+            width: 360; height: 220; radius: 12; clip: true
+            color: root.panel
+            x: root.mark ? (root.mark.x + root.mark.w + 24 + width < pointerWin.width ? root.mark.x + root.mark.w + 24 : Math.max(8, root.mark.x - width - 24)) : 0
+            y: root.mark ? Math.min(pointerWin.height - height - 8, Math.max(8, cy - height / 2)) : 0
+            ScreencopyView {
+                id: grab
+                captureSource: pointerWin.screen
+                live: false
+                width: pointerWin.width * lens.zoom
+                height: pointerWin.height * lens.zoom
+                x: lens.width / 2 - lens.cx * lens.zoom
+                y: lens.height / 2 - lens.cy * lens.zoom
+            }
+            // The frame and label go on top of the picture.
+            Rectangle { anchors.fill: parent; radius: 12; color: "transparent"; border.color: root.you; border.width: 3 }
+            Rectangle {
+                x: 10; y: 10; width: tag.implicitWidth + 14; height: 20; radius: 5; color: root.you
+                Text { id: tag; anchors.centerIn: parent; text: "Magnified ×2"; color: "#2a1c02"; font.pixelSize: 11; font.bold: true }
+            }
+        }
+        Connections {
+            target: root
+            function onMarkChanged() { if (root.mark && root.mark.magnify) grab.captureFrame() }
+        }
 
         Rectangle {
             visible: root.mark !== null

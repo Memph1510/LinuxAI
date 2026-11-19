@@ -28,6 +28,7 @@ mod reach;
 mod tasks;
 mod verbs;
 mod voice;
+mod workspace;
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
