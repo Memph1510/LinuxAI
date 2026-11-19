@@ -39,7 +39,8 @@ fn default_socket() -> PathBuf {
     if let Ok(p) = std::env::var("LINUXAI_CORE_SOCKET") {
         return p.into();
     }
-    if is_root() {
+    // The system core (on the OS) listens here; anyone in the linuxai group may use it.
+    if is_root() || std::path::Path::new("/run/linuxai/core.sock").exists() {
         "/run/linuxai/core.sock".into()
     } else {
         let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
