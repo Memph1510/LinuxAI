@@ -59,6 +59,8 @@ pub struct Cdp {
     alive: AtomicBool,
     #[allow(dead_code)]
     child: Mutex<Child>,
+    /// Who else wants Chromium's events (the Workspace bridge: page calls and screencast frames).
+    listeners: Mutex<Vec<mpsc::Sender<Value>>>,
 }
 
 fn pipe() -> std::io::Result<(RawFd, RawFd)> {
@@ -102,7 +104,7 @@ pub fn has_screen() -> bool {
 }
 
 impl Cdp {
-    pub fn launch(bin: &str, profile: &PathBuf, headless: bool) -> std::io::Result<Arc<Cdp>> {
+    pub fn launch(bin: &str, profile: &PathBuf, headless: bool, app: Option<&str>) -> std::io::Result<Arc<Cdp>> {
         std::fs::create_dir_all(profile)?;
         // Chromium reads commands on fd 3 and writes replies on fd 4.
         let (their_in, our_out) = pipe()?;
@@ -122,7 +124,12 @@ impl Cdp {
         // Chromium's own messages go to a log in the profile, so a browser that won't start can say why.
         let log = profile.join("chromium.log");
         let err_out = File::create(&log).map(Stdio::from).unwrap_or_else(|_| Stdio::null());
-        cmd.arg("about:blank").stdin(Stdio::null()).stdout(Stdio::null()).stderr(err_out);
+        // On screen, the first window is the Workspace as an app window (no tabs or address bar).
+        match app {
+            Some(url) => { cmd.arg(format!("--app={url}")); }
+            None => { cmd.arg("about:blank"); }
+        }
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(err_out);
         unsafe {
             cmd.pre_exec(move || {
                 // Move both ends out of the way first, in case either already sits on 3 or 4.
@@ -147,6 +154,7 @@ impl Cdp {
             tabs: Mutex::new(HashMap::new()),
             alive: AtomicBool::new(true),
             child: Mutex::new(child),
+            listeners: Mutex::new(Vec::new()),
         });
         let reader = cdp.clone();
         let input = unsafe { File::from_raw_fd(our_in) };
@@ -189,6 +197,10 @@ impl Cdp {
             }
             return;
         }
+        if matches!(v["method"].as_str(), Some("Runtime.bindingCalled" | "Page.screencastFrame")) {
+            self.listeners.lock().unwrap().retain(|l| l.send(v.clone()).is_ok());
+            return;
+        }
         let p = &v["params"];
         let info = &p["targetInfo"];
         match v["method"].as_str().unwrap_or("") {
@@ -212,6 +224,16 @@ impl Cdp {
             }
             _ => {}
         }
+    }
+
+    pub fn listen(&self) -> mpsc::Receiver<Value> {
+        let (tx, rx) = mpsc::channel();
+        self.listeners.lock().unwrap().push(tx);
+        rx
+    }
+
+    pub fn url_of(&self, tab: &str) -> Option<String> {
+        self.tabs.lock().unwrap().get(tab).map(|t| t.url.clone())
     }
 
     pub fn alive(&self) -> bool {
@@ -245,7 +267,7 @@ impl Cdp {
         Ok(reply["result"].clone())
     }
 
-    fn session(&self, tab: &str) -> std::io::Result<String> {
+    pub(crate) fn session(&self, tab: &str) -> std::io::Result<String> {
         if let Some(s) = self.tabs.lock().unwrap().get(tab).and_then(|t| t.session.clone()) {
             return Ok(s);
         }
@@ -260,7 +282,7 @@ impl Cdp {
         Ok(s)
     }
 
-    fn eval(&self, tab: &str, expr: &str) -> std::io::Result<Value> {
+    pub(crate) fn eval(&self, tab: &str, expr: &str) -> std::io::Result<Value> {
         let s = self.session(tab)?;
         let r = self.call("Runtime.evaluate", json!({"expression": expr, "returnByValue": true, "awaitPromise": true}), Some(&s))?;
         if let Some(e) = r.get("exceptionDetails") {
@@ -271,7 +293,7 @@ impl Cdp {
     }
 
     /// Wait until the page has loaded (or give up quietly after PAGE_TIMEOUT: a slow page is still readable).
-    fn settle(&self, tab: &str) {
+    pub(crate) fn settle(&self, tab: &str) {
         std::thread::sleep(Duration::from_millis(250));
         let start = Instant::now();
         while start.elapsed() < PAGE_TIMEOUT {
@@ -285,18 +307,18 @@ impl Cdp {
 
     pub fn tabs(&self) -> Vec<Value> {
         let mut list: Vec<Value> = self.tabs.lock().unwrap().iter()
-            .filter(|(_, t)| !t.url.starts_with("devtools://"))
+            .filter(|(_, t)| !t.url.starts_with("devtools://") && t.owner != "workspace")
             .map(|(id, t)| json!({"tab": id, "url": t.url, "title": t.title, "owner": t.owner}))
             .collect();
         list.sort_by(|a, b| a["tab"].as_str().cmp(&b["tab"].as_str()));
         list
     }
 
-    fn owner(&self, tab: &str) -> Option<&'static str> {
+    pub(crate) fn owner(&self, tab: &str) -> Option<&'static str> {
         self.tabs.lock().unwrap().get(tab).map(|t| t.owner)
     }
 
-    fn set_owner(&self, tab: &str, owner: &'static str) {
+    pub(crate) fn set_owner(&self, tab: &str, owner: &'static str) {
         if let Some(t) = self.tabs.lock().unwrap().get_mut(tab) {
             t.owner = owner;
         }
@@ -447,10 +469,13 @@ fn find_js(req: &Value) -> Option<String> {
 
 pub struct Organ {
     bin: String,
+    /// On screen: the Workspace page, opened as the first (app) window.
+    pub(crate) app: Option<String>,
     profile: PathBuf,
     headless: bool,
     cdp: Mutex<Option<Arc<Cdp>>>,
-    core: Option<Client>,
+    pub(crate) core: Option<Client>,
+    pub(crate) workspace: Mutex<Option<Arc<crate::workspace::Workspace>>>,
 }
 
 fn err(e: impl std::fmt::Display) -> Value {
@@ -459,7 +484,7 @@ fn err(e: impl std::fmt::Display) -> Value {
 
 impl Organ {
     pub fn new(bin: String, profile: PathBuf, headless: bool, core: Option<Client>) -> Organ {
-        Organ { bin, profile, headless, cdp: Mutex::new(None), core }
+        Organ { bin, app: None, profile, headless, cdp: Mutex::new(None), core, workspace: Mutex::new(None) }
     }
 
     /// The running browser, started (or restarted, if it died or the human closed it) as needed.
@@ -468,7 +493,7 @@ impl Organ {
         if let Some(c) = slot.as_ref().filter(|c| c.alive()) {
             return Ok(c.clone());
         }
-        let c = Cdp::launch(&self.bin, &self.profile, self.headless)?;
+        let c = Cdp::launch(&self.bin, &self.profile, self.headless, self.app.as_deref())?;
         // Let the first tab report in, so it's there (and yours) from the start.
         let start = Instant::now();
         while c.tabs.lock().unwrap().is_empty() && start.elapsed() < Duration::from_secs(5) {
@@ -522,6 +547,28 @@ impl Organ {
         };
         let tab = req["tab"].as_str().unwrap_or("").to_string();
         let max = req["max"].as_u64().unwrap_or(20000) as usize;
+        if op == "workspace_status" {
+            // Is the Workspace open, and is its page connected to the OS (not showing example data)?
+            let w = self.workspace.lock().unwrap().clone();
+            return match w {
+                Some(w) if b.owner(&w.tab).is_some() => {
+                    let v = b.eval(&w.tab, "({title: document.title, connected: typeof window.linuxai === 'function'})").unwrap_or(json!({}));
+                    json!({"ok": true, "open": true, "title": v["title"], "connected": v["connected"]})
+                }
+                _ => json!({"ok": true, "open": false}),
+            };
+        }
+        if op == "workspace" {
+            // Open (or bring back) the Workspace: the main screen, a page with a private channel to the OS.
+            let url = req["url"].as_str().map(String::from).unwrap_or_else(crate::workspace::default_url);
+            return match crate::workspace::Workspace::open(self, &b, &url) {
+                Ok(tab) => json!({"ok": true, "tab": tab}),
+                Err(e) => err(e),
+            };
+        }
+        if b.owner(&tab) == Some("workspace") && op != "read" && op != "shot" {
+            return err("that's the Workspace screen itself");
+        }
         if !matches!(op, "tabs" | "open" | "show") && b.owner(&tab).is_none() {
             return err(format!("no tab {tab:?}; see tabs"));
         }
@@ -667,7 +714,7 @@ impl Organ {
     }
 }
 
-fn press(b: &Cdp, s: &str, key: &str) -> std::io::Result<()> {
+pub(crate) fn press(b: &Cdp, s: &str, key: &str) -> std::io::Result<()> {
     let (code, text, vk) = match key {
         "Enter" => ("Enter", "\r", 13),
         "Tab" => ("Tab", "", 9),
@@ -719,8 +766,17 @@ pub fn default_profile() -> PathBuf {
 pub fn run(socket: PathBuf, profile: PathBuf, headless: bool, core: Option<Client>) -> std::io::Result<()> {
     let bin = find_browser().ok_or_else(|| std::io::Error::other("no Chromium found (install chromium or set LINUXAI_BROWSER)"))?;
     let headless = headless || !has_screen();
-    let organ = Arc::new(Organ::new(bin.clone(), profile, headless, core));
+    let mut organ = Organ::new(bin.clone(), profile, headless, core);
+    let show_workspace = !headless && std::path::Path::new(&crate::workspace::default_path()).exists();
+    if show_workspace {
+        organ.app = Some(crate::workspace::default_url());
+    }
+    let organ = Arc::new(organ);
     organ.browser()?;
+    if show_workspace {
+        let r = organ.handle(&json!({"op": "workspace"}));
+        eprintln!("linuxai browser: workspace: {r}");
+    }
     if let Some(dir) = socket.parent() {
         std::fs::create_dir_all(dir)?;
     }

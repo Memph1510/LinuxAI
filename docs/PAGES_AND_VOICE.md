@@ -77,6 +77,6 @@ the machine.
 | **point**: highlight what the AI is talking about on any page, with a note and an optional magnifying glass; never blocks the page | Done |
 | **show**: pull a page up in front of you while talking about it; the AI keeps driving it | Done |
 | Voice: push to talk, local speech to text, speaking, cutting it off, spoken turns that show rather than describe | Done (`linuxai-core voice`, `/voice on`); real microphone untried until the laptop |
-| Pages inside the Workspace (the book) | With the Workspace screen |
+| Pages inside the Workspace (the book) | Done: the Workspace shows the page live; you click, scroll and type in it |
 | Natural voice (Piper) on the OS image; wake word | Next |
 | Live page on the phone, talk from the phone | With the Android app |

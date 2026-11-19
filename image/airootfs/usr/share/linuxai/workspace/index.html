@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LinuxAI Workspace</title>
+<style>
+/* The Workspace: the book. Left: what needs you, and the work. Middle: the page being worked on, live (you can
+   click, scroll and type in it). Right: the selected task's steps, and what's happening. One visual world: the
+   OS's own screen, dark only. Teal is the AI, amber is you. Offline: system fonts only. */
+:root {
+  color-scheme: dark;
+  --bg: #0b1016; --panel: #111821; --panel-2: #16202b; --line: #233140; --line-soft: #1b2733;
+  --fg: #dfe7ee; --fg-dim: #8ea0b1; --fg-faint: #5d6f80;
+  --ai: #46c2c9; --ai-soft: rgba(70,194,201,.14); --you: #e8b04a; --you-soft: rgba(232,176,74,.14);
+  --ok: #6fbf8e; --bad: #e06c6c;
+  --sans: "DejaVu Sans", "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "DejaVu Sans Mono", ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--ai); outline-offset: 2px; }
+
+.app { height: 100%; display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; gap: 10px; padding: 10px; }
+.col { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.panel { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px; min-height: 0; display: flex; flex-direction: column; }
+.panel-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 10px 12px 6px; }
+.label { font: 600 10.5px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-faint); }
+.scroll { overflow: auto; min-height: 0; padding: 0 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.empty { color: var(--fg-faint); font-size: 13px; padding: 4px 6px 8px; }
+
+/* Needs you */
+.q { border: 1px solid var(--you); border-radius: 9px; padding: 10px; display: grid; gap: 6px; background: var(--you-soft); }
+.q-t { font-weight: 600; }
+.q-why { font-size: 12.5px; color: var(--fg-dim); }
+.q-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--panel-2); border-radius: 7px; padding: 5px 11px; }
+.btn.you { background: var(--you); border-color: var(--you); color: #2a1c02; font-weight: 600; }
+.btn.line-you { border-color: var(--you); background: transparent; }
+.q input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; }
+
+/* Tasks */
+.task { text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 8px 9px; display: grid; gap: 3px; }
+.task:hover { background: var(--panel-2); }
+.task.on { background: var(--panel-2); border-color: var(--line); }
+.task-t { font-weight: 500; line-height: 1.3; }
+.meta { display: flex; gap: 8px; align-items: center; font: 11.5px var(--mono); color: var(--fg-dim); flex-wrap: wrap; }
+.pill { font: 600 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: 3px 6px; border-radius: 4px; border: 1px solid currentColor; }
+.s-done { color: var(--ok); } .s-running, .s-pending, .s-needs_plan { color: var(--ai); } .s-waiting { color: var(--you); } .s-failed, .s-cancelled { color: var(--bad); }
+
+/* The page */
+.page-panel { flex: 1; }
+.strip { display: flex; gap: 6px; padding: 0 10px 8px; overflow-x: auto; }
+.chip { flex: none; max-width: 240px; display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: transparent; font-size: 12.5px; }
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip b { font: 600 9.5px var(--mono); letter-spacing: .06em; }
+.chip.ai b { color: var(--ai); } .chip.human b { color: var(--you); }
+.chip.on { background: var(--panel-2); border-color: var(--fg-faint); }
+.open { display: flex; gap: 6px; padding: 0 10px 8px; }
+.open input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font-family: var(--mono); font-size: 12.5px; }
+.view { position: relative; flex: 1; min-height: 0; margin: 0 10px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; display: grid; place-items: center; }
+.view img { max-width: 100%; max-height: 100%; display: block; cursor: default; user-select: none; -webkit-user-drag: none; }
+.view .none { color: #5b6876; text-align: center; padding: 20px; font-size: 14px; }
+.view:focus-within, .view:focus { outline: 2px solid var(--ai); }
+
+/* Steps and activity */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.steps ul { list-style: none; margin: 4px 0 0 14px; padding: 0; display: grid; gap: 4px; border-left: 1px solid var(--line); padding-left: 10px; }
+.step { display: grid; gap: 2px; padding: 6px 8px; border-radius: 7px; background: var(--panel-2); }
+.step.human { border-left: 3px solid var(--you); }
+.step-t { font-size: 13px; font-weight: 500; }
+.ev { font-size: 12.5px; color: var(--fg-dim); display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 6px; }
+.ev time { font: 11px var(--mono); color: var(--fg-faint); padding-top: 2px; }
+.ev.you { color: var(--you); }
+.demo { font: 11px var(--mono); color: var(--fg-faint); }
+
+@media (max-width: 1100px) {
+  .app { grid-template-columns: 1fr; height: auto; }
+  .page-panel { min-height: 70vh; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="col">
+    <section class="panel" aria-label="Needs you">
+      <div class="panel-h"><span class="label">Needs you</span><span class="label" id="needCount"></span></div>
+      <div class="scroll" id="needs"></div>
+    </section>
+    <section class="panel" style="flex:1" aria-label="Work">
+      <div class="panel-h"><span class="label">Work</span><span class="demo" id="mode"></span></div>
+      <div class="scroll" id="tasks"></div>
+    </section>
+  </div>
+
+  <section class="panel page-panel" aria-label="The page being worked on">
+    <div class="panel-h"><span class="label" id="pageTitle">Pages</span><span class="label" id="pageWho"></span></div>
+    <div class="strip" id="strip"></div>
+    <form class="open" id="openForm"><input id="openUrl" type="url" placeholder="Open a page: https://…" aria-label="Open a page"><button class="btn">Open</button></form>
+    <div class="view" id="view" tabindex="0" aria-label="The page, live. Click, scroll and type here."><div class="none" id="none">The pages the AI is working on, and yours, appear here.<br>You can click, scroll and type in them.</div><img id="frame" alt="" hidden></div>
+  </section>
+
+  <div class="col">
+    <section class="panel" style="flex:1.2" aria-label="Steps">
+      <div class="panel-h"><span class="label" id="stepsTitle">Steps</span></div>
+      <div class="scroll" id="steps"><div class="empty">Pick a piece of work to see its steps.</div></div>
+    </section>
+    <section class="panel" style="flex:1" aria-label="Activity">
+      <div class="panel-h"><span class="label">What's happening</span></div>
+      <div class="scroll" id="activity"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+// ---- the channel to the OS (given only to this page by the browser organ), or example data without it ----
+const live = typeof window.linuxai === "function";
+let seq = 0;
+const pending = {};
+window.linuxaiReply = (id, r) => { const f = pending[id]; if (f) { delete pending[id]; f(r); } };
+function ask(op, extra = {}) {
+  if (!live) return Promise.resolve(DEMO[op === "core" ? extra.request.op : op] || { ok: false });
+  return new Promise((res) => {
+    const id = ++seq;
+    pending[id] = res;
+    window.linuxai(JSON.stringify({ id, op, ...extra }));
+    setTimeout(() => { if (pending[id]) { delete pending[id]; res({ ok: false, error: "no answer" }); } }, 15000);
+  });
+}
+const core = (request) => ask("core", { request });
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hhmm = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+const statusWord = { done: "done", running: "running", pending: "next", needs_plan: "planning", waiting: "needs you", failed: "failed", cancelled: "cancelled" };
+
+let state = { questions: [], tasks: [], selected: null, pages: [], watching: null, meta: null, events: [] };
+
+// ---- what needs you ----
+async function loadQuestions() {
+  const r = await core({ op: "waiting" });
+  state.questions = (r.plans || []).filter((p) => p.wait && p.wait.question);
+  const n = state.questions.length;
+  $("needCount").textContent = n ? `${n} waiting` : "";
+  $("needs").innerHTML = n ? state.questions.map((q, i) => {
+    const w = q.wait, opts = w.opts && w.opts.length ? w.opts : null;
+    return `<div class="q"><div class="q-t">${esc(w.question)}</div>
+      ${w.why ? `<div class="q-why">Why I'm unsure: ${esc(w.why)}</div>` : ""}${w.lean ? `<div class="q-why">I'd lean: ${esc(w.lean)}</div>` : ""}
+      <div class="q-row">${opts ? opts.map((o, j) => `<button class="btn ${j === 0 ? "you" : "line-you"}" data-answer="${i}" data-text="${esc(o)}">${esc(o)}</button>`).join("")
+        : `<input data-free="${i}" placeholder="Your answer" aria-label="Your answer"><button class="btn you" data-send="${i}">Send</button>`}</div></div>`;
+  }).join("") : `<div class="empty">Nothing needs you right now.</div>`;
+}
+async function answer(i, text) {
+  const q = state.questions[i];
+  if (!q || !text.trim()) return;
+  await core({ op: "answer", plan_id: q.plan_id, text });
+  addActivity({ kind: "you.answered", ts: Date.now() / 1000, data: { text } });
+  loadQuestions();
+}
+
+// ---- the work ----
+async function loadTasks() {
+  const r = await core({ op: "tasks", limit: 30 });
+  state.tasks = r.tasks || [];
+  $("tasks").innerHTML = state.tasks.length ? state.tasks.map((t) => `
+    <button class="task ${t.id === state.selected ? "on" : ""}" data-task="${esc(t.id)}">
+      <span class="task-t">${esc(t.title)}</span>
+      <span class="meta"><span class="pill s-${esc(t.status)}">${esc(statusWord[t.status] || t.status)}</span><span>${esc(t.category || "")}</span></span>
+    </button>`).join("") : `<div class="empty">No work yet. Tell LinuxAI what you want.</div>`;
+  if (state.selected) loadSteps(state.selected);
+}
+async function loadSteps(id) {
+  const r = await core({ op: "task", task: id });
+  if (!r.ok) return;
+  const human = ["action", "evaluation", "critique", "decision"];
+  const node = (t) => `<li><div class="step ${human.includes(t.kind) ? "human" : ""}">
+      <span class="step-t">${esc(t.title)}</span>
+      <span class="meta"><span class="pill s-${esc(t.status)}">${esc(statusWord[t.status] || t.status)}</span><span>${esc(t.kind)}${human.includes(t.kind) ? " · yours" : ""}</span></span>
+      ${t.result ? `<span class="q-why">${esc(typeof t.result === "string" ? t.result : JSON.stringify(t.result))}</span>` : ""}
+      ${t.error ? `<span class="q-why" style="color:var(--bad)">${esc(t.error)}</span>` : ""}
+    </div>${t.children && t.children.length ? `<ul>${t.children.map(node).join("")}</ul>` : ""}</li>`;
+  $("stepsTitle").textContent = r.tree.title;
+  $("steps").innerHTML = `<ul class="steps">${node(r.tree)}</ul>`;
+}
+
+// ---- the page, live inside the Workspace ----
+async function loadPages() {
+  const r = await ask("pages");
+  state.pages = r.pages || [];
+  $("strip").innerHTML = state.pages.map((p) => `
+    <button class="chip ${p.owner} ${p.tab === state.watching ? "on" : ""}" data-page="${esc(p.tab)}" title="${esc(p.url)}">
+      <b>${p.owner === "ai" ? "AI" : "YOU"}</b><span>${esc(p.title || p.url)}</span></button>`).join("");
+  if (state.watching && !state.pages.some((p) => p.tab === state.watching)) unwatch();
+}
+async function watch(tab) {
+  const v = $("view");
+  const r = await ask("watch", { tab, width: Math.round(v.clientWidth), height: Math.round(v.clientHeight) });
+  if (!r.ok) return;
+  state.watching = tab;
+  const p = state.pages.find((x) => x.tab === tab);
+  $("pageTitle").textContent = p ? (p.title || p.url) : "Page";
+  $("pageWho").textContent = p ? (p.owner === "ai" ? "the AI's page" : "your page") : "";
+  loadPages();
+  v.focus();
+}
+function unwatch() { state.watching = null; $("frame").hidden = true; $("none").hidden = false; $("pageTitle").textContent = "Pages"; $("pageWho").textContent = ""; }
+window.linuxaiFrame = (tab, data, meta) => {
+  if (tab !== state.watching) return;
+  state.meta = meta;
+  const img = $("frame");
+  img.src = "data:image/jpeg;base64," + data;
+  img.hidden = false;
+  $("none").hidden = true;
+};
+// Where on the page a point on the picture is (the picture may be scaled to fit).
+function pagePoint(e) {
+  const img = $("frame"), r = img.getBoundingClientRect(), m = state.meta || { width: img.naturalWidth, height: img.naturalHeight };
+  return { x: (e.clientX - r.left) * (m.width / r.width), y: (e.clientY - r.top) * (m.height / r.height) };
+}
+$("frame").addEventListener("click", (e) => { if (state.watching) ask("input", { kind: "click", ...pagePoint(e) }); $("view").focus(); });
+$("frame").addEventListener("wheel", (e) => { if (state.watching) { e.preventDefault(); ask("input", { kind: "scroll", ...pagePoint(e), dx: e.deltaX, dy: e.deltaY }); } }, { passive: false });
+$("view").addEventListener("keydown", (e) => {
+  if (!state.watching || e.ctrlKey || e.metaKey || e.altKey) return;
+  const keys = ["Enter", "Tab", "Escape", "Backspace", "ArrowDown", "ArrowUp", "PageDown", "PageUp"];
+  if (keys.includes(e.key)) { e.preventDefault(); ask("input", { kind: "key", key: e.key }); }
+  else if (e.key.length === 1) { e.preventDefault(); ask("input", { kind: "text", text: e.key }); }
+});
+
+// ---- what's happening ----
+const words = {
+  "plan.waiting": (d) => `Asked you: ${d.wait && d.wait.question || ""}`, "plan.finished": (d) => `Finished: ${d.plan || ""}`,
+  "plan.failed": (d) => `Failed: ${d.plan || ""} (${d.error || ""})`, "task.created": (d) => `New work: ${d.title || ""}`,
+  "task.done": (d) => `Done: ${d.title || ""}`, "task.failed": (d) => `Blocked: ${d.title || ""}`, "ai.tell": (d) => d.text || "",
+  "browser.handoff": (d) => `Handed you a page: ${d.note || d.title || ""}`, "browser.showing": (d) => `Showing you: ${d.note || d.url || ""}`,
+  "voice.heard": (d) => `You said: ${d.text || ""}`, "power.unplugged": () => "Unplugged: saving power", "power.plugged": () => "Plugged in",
+  "service.failed": (d) => `A service failed: ${d.unit || ""}`, "you.answered": (d) => `You answered: ${d.text || ""}`,
+};
+function addActivity(ev) {
+  const f = words[ev.kind];
+  if (!f) return;
+  state.events.unshift({ ts: ev.ts, text: f(ev.data || {}), you: ev.kind.startsWith("you.") || ev.kind === "voice.heard" });
+  state.events = state.events.slice(0, 40);
+  $("activity").innerHTML = state.events.map((e) => `<div class="ev ${e.you ? "you" : ""}"><time>${hhmm(e.ts)}</time><span>${esc(e.text)}</span></div>`).join("");
+}
+window.linuxaiEvent = (ev) => {
+  addActivity(ev);
+  const k = ev.kind || "";
+  if (k.startsWith("plan.")) loadQuestions();
+  if (k.startsWith("task.")) loadTasks();
+  if (k === "browser.showing" && ev.data && ev.data.tab) { loadPages().then(() => watch(ev.data.tab)); }
+  else if (k.startsWith("browser.")) loadPages();
+};
+
+// ---- clicks ----
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-answer]");
+  if (a) return answer(+a.dataset.answer, a.dataset.text);
+  const s = e.target.closest("[data-send]");
+  if (s) return answer(+s.dataset.send, document.querySelector(`[data-free="${s.dataset.send}"]`).value);
+  const t = e.target.closest("[data-task]");
+  if (t) { state.selected = t.dataset.task; loadTasks(); return; }
+  const p = e.target.closest("[data-page]");
+  if (p) return watch(p.dataset.page);
+});
+document.addEventListener("keydown", (e) => {
+  const f = e.target.closest && e.target.closest("[data-free]");
+  if (f && e.key === "Enter") answer(+f.dataset.free, f.value);
+});
+$("openForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  let url = $("openUrl").value.trim();
+  if (!url) return;
+  if (!/^https?:\/\//.test(url)) url = "https://" + url;
+  const r = await ask("open", { url });
+  if (r.ok) { $("openUrl").value = ""; await loadPages(); watch(r.tab); }
+});
+
+// ---- example data, when the page is opened on its own ----
+const DEMO = {
+  waiting: { ok: true, plans: [
+    { plan_id: "p1", wait: { question: "Book the test drive Saturday 10am?", opts: ["Book it", "Not now"], why: "It's a $38,000 decision and you haven't driven it yet.", lean: "Book it" } },
+    { plan_id: "p2", wait: { question: "Which dealer should I ask for the out-the-door price?", why: "You know them better than I do." } }] },
+  tasks: { ok: true, tasks: [
+    { id: "t1", title: "Choosing a family SUV that tows the camper", status: "waiting", category: "personal/car" },
+    { id: "t2", title: "Negotiating a Dallas → Atlanta load", status: "running", category: "freight/negotiate" },
+    { id: "t3", title: "Verizon bill is higher than usual", status: "done", category: "bills" }] },
+  task: { ok: true, tree: { title: "Choosing a family SUV that tows the camper", kind: "work", status: "waiting", children: [
+    { title: "Find SUVs under $40k that tow 3,800 lb", kind: "work", status: "done", result: "2 fit: Ridgeway LX, Summit Trail" },
+    { title: "Compare towing, mileage and price", kind: "work", status: "done", result: "Only the Summit Trail tows the camper with margin" },
+    { title: "Decide on a test drive", kind: "decision", status: "waiting" },
+    { title: "Book the test drive", kind: "work", status: "pending" }] } },
+  pages: { ok: true, pages: [{ tab: "a", owner: "ai", title: "Compare SUVs", url: "https://drivelist.example/compare" }, { tab: "b", owner: "human", title: "Lone Star Motors", url: "https://lonestarmotors.example" }] },
+};
+
+(async function start() {
+  $("mode").textContent = live ? "" : "example data (not connected)";
+  await Promise.all([loadQuestions(), loadTasks(), loadPages()]);
+  if (!live) {
+    state.selected = "t1"; loadTasks();
+    [["Showing you: the two SUVs", 1795060200], ["You said: is this one a good deal", 1795060150], ["New work: Choosing a family SUV", 1795059000]]
+      .forEach(([text, ts]) => state.events.push({ text, ts }));
+    $("activity").innerHTML = state.events.map((e) => `<div class="ev"><time>${hhmm(e.ts)}</time><span>${esc(e.text)}</span></div>`).join("");
+  }
+  setInterval(loadPages, 15000);
+  setInterval(loadQuestions, 30000);
+})();
+</script>
+</body>
+</html>
