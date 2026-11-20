@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -483,8 +482,11 @@ def test_an_injection_email_becomes_claims_and_cannot_make_the_ai_act(env, live_
     offer_id = next(f for f in r["facts"] if f.startswith("obj:load_offer/"))
     # The raw email is kept for the human; the AI's tools can't read it.
     raw_file = next(cfg.mail_dir.glob("*.eml"))
-    with pytest.raises(Exception):
+    from linuxai.tools import _Invalid
+    with pytest.raises(_Invalid, match="raw email"):
         tb._path(str(raw_file))
+    out, err = tb.execute("read_file", {"path": str(raw_file)})
+    assert "raw email" in out and "SYSTEM OVERRIDE" not in out
     assert "Refused" in tb.t_run_command(f"cat {cfg.mail_dir}/*.eml", "x")
     # A plan that "forgets" it rests on the email is labeled anyway, must cite the claims, and waits for the human.
     plan = {"plan": "accept-hollis", "assess": {"confidence": 0.95, "consequences": ["load accepted"], "outcomes": ["fine"]},
@@ -900,3 +902,35 @@ def test_craft_tool_shows_pictures_marks_outside_and_asks_before_replacing(env, 
     tb.mind = True
     out, _ = tb.execute("craft", {"op": "replace", "staged": "a.ai-1.png"})
     assert "aren't here" in out
+
+
+def test_token_efficiency_stable_prefix_small_pictures_and_a_ledger(env, tmp_path):
+    import base64
+    import subprocess
+    from linuxai.tools import IMAGE_MAX_SIDE, _imagemagick, fit_images
+    cfg, mem, tb, tmp = env
+    # Pictures are sized once, before they are first sent.
+    big = tmp_path / "big.png"
+    if not _imagemagick("convert") or subprocess.run(_imagemagick("convert") + ["-size", "3000x2000", "xc:skyblue", str(big)]).returncode != 0:
+        pytest.skip("no ImageMagick")
+    block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(big.read_bytes()).decode()}}
+    small = fit_images([{"type": "text", "text": "x"}, block])[1]
+    raw = base64.b64decode(small["source"]["data"])
+    dims = subprocess.run(_imagemagick("identify") + ["-format", "%w %h", "-"], input=raw, capture_output=True).stdout.decode().split()
+    assert max(int(d) for d in dims) == IMAGE_MAX_SIDE
+    tiny = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+    assert fit_images([tiny])[0] is tiny, "small or unreadable pictures pass through untouched"
+    # Two requests in a session carry byte-identical tools and system, with a 1-hour marker on the system.
+    client = FakeClient([_msg([NS(type="text", text="one")], "end_turn"), _msg([NS(type="text", text="two")], "end_turn")])
+    agent = Agent(cfg, mem, tb, client=client)
+    agent.turn("hello")
+    agent.turn("again")
+    a, b = client.requests[0], client.requests[1]
+    assert json.dumps(a["tools"], sort_keys=True) == json.dumps(b["tools"], sort_keys=True)
+    assert a["system"] == b["system"] and a["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert a["cache_control"] == {"type": "ephemeral"}
+    # History is only ever appended to: the first request's messages are a prefix of the second's.
+    assert json.dumps(b["messages"][:len(a["messages"])], default=str) == json.dumps(a["messages"], default=str)
+    # Every request is in the ledger.
+    lines = [json.loads(line) for line in (cfg.home / "usage.jsonl").read_text().splitlines()]
+    assert len(lines) == 2 and lines[0]["role"] == "session" and {"input", "cache_read", "cache_write", "output"} <= set(lines[0])

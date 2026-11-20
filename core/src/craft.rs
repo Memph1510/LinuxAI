@@ -259,7 +259,8 @@ impl Session {
         }
         let mut args = vec!["mcp".to_string()];
         match spec["roots"].as_str().unwrap_or("automation") {
-            "automation" => args.extend(["--automation-read-root", "{in}", "--automation-read-root", "{out}", "--automation-write-root", "{out}"].map(String::from)),
+            // One read root (some apps take the flag only once): the session folder, holding in/ (copies) and out/.
+            "automation" => args.extend(["--automation-read-root", "{work}", "--automation-write-root", "{out}"].map(String::from)),
             "material" => args.extend(["--read-root", "{in}", "--write-root", "{out}"].map(String::from)),
             "pdf" => args.extend(["--automation-read-root", "{in}", "--automation-write-root", "{out}", "--root", "{work}"].map(String::from)),
             _ => {} // no folder limits of its own: the sandbox is the limit
@@ -615,9 +616,9 @@ for line in sys.stdin:
     elif m["method"] == "tools/call":
         args = m["params"]["arguments"]
         if m["params"]["name"] == "doc_inspect":
-            r = {"content": [{"type": "text", "text": json.dumps({"inputs": sorted(os.listdir(rd[0])), "write_root": wr})}]}
+            r = {"content": [{"type": "text", "text": json.dumps({"inputs": sorted(os.listdir(os.path.join(rd[0], "in"))), "write_root": wr})}]}
         else:
-            src = open(os.path.join(rd[0], args["from"])).read()
+            src = open(os.path.join(rd[0], "in", args["from"])).read()
             open(os.path.join(wr, args["to"]), "w").write(src.upper())
             r = {"content": [{"type": "text", "text": "exported " + args["to"]}]}
     print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)

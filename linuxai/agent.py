@@ -3,6 +3,7 @@ and writes down what it learned so the next time is faster."""
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -164,7 +165,35 @@ class Agent:
         if toolbox.mind:
             self.system += MIND_SECTION
         self.messages: list[dict] = []
-        self.usage = {"input": 0, "output": 0, "cache_read": 0}
+        self.usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        # The start of every request (tools, then system) stays byte-identical for the whole session, so it is
+        # read from the cache: the tool set is fixed here, and the system prompt carries its own 1-hour cache
+        # marker (events and replies often come more than 5 minutes apart). The conversation behind it is cached
+        # automatically (5 minutes). A tool that becomes unavailable mid-session just answers that it is.
+        self.tools = toolbox.tools() + (toolbox.server_tools() if config.web else [])
+        self.system_blocks = [{"type": "text", "text": self.system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+        self.ledger = config.home / "usage.jsonl"
+        self.role = "mind" if toolbox.mind else "session"
+
+    def _account(self, response: Any) -> None:
+        """Count every request's tokens, and keep a ledger (usage.jsonl) so changes can be measured, not guessed."""
+        u = response.usage
+        read = getattr(u, "cache_read_input_tokens", 0) or 0
+        write = getattr(u, "cache_creation_input_tokens", 0) or 0
+        fresh = u.input_tokens or 0
+        self.usage["input"] += fresh + read + write
+        self.usage["cache_read"] += read
+        self.usage["cache_write"] += write
+        self.usage["output"] += u.output_tokens or 0
+        try:
+            self.ledger.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.ledger, "a") as f:
+                f.write(json.dumps({"ts": round(time.time(), 1), "role": self.role, "model": getattr(response, "model", self.config.model),
+                                    "effort": self.config.effort, "input": fresh, "cache_read": read, "cache_write": write,
+                                    "output": u.output_tokens or 0, "turn_messages": len(self.messages),
+                                    "stop": getattr(response, "stop_reason", None)}) + "\n")
+        except OSError:
+            pass  # the ledger is for measuring; never let it stop the AI
 
     def last_text(self) -> str:
         """The AI's last answer in words (to speak it)."""
@@ -250,8 +279,8 @@ class Agent:
         kwargs: dict[str, Any] = dict(
             model=self.config.model,
             max_tokens=64000,
-            system=self.system,
-            tools=self.toolbox.tools() + (self.toolbox.server_tools() if self.config.web else []),
+            system=self.system_blocks,
+            tools=self.tools,
             messages=self.messages,
             thinking={"type": "adaptive", "display": "summarized"},
             output_config={"effort": self.config.effort},
@@ -307,16 +336,13 @@ class Agent:
             ui.out(ui.red(f"  API error {e.status_code}: {e.message}"))
         except RuntimeError as e:
             ui.out(ui.red(f"  {e}"))
-        ui.out(ui.dim(f"  [tokens in {self.usage['input']:,} (cached {self.usage['cache_read']:,}) "
-                      f"· out {self.usage['output']:,}]"))
+        ui.out(ui.dim(f"  [tokens in {self.usage['input']:,} (from cache {self.usage['cache_read']:,}, "
+                      f"written to cache {self.usage['cache_write']:,}) · out {self.usage['output']:,}]"))
 
     def _loop(self) -> None:
         while True:
             response = self._call()
-            u = response.usage
-            self.usage["input"] += (u.input_tokens or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0)
-            self.usage["cache_read"] += getattr(u, "cache_read_input_tokens", 0) or 0
-            self.usage["output"] += u.output_tokens or 0
+            self._account(response)
 
             if any(b.type in ("web_search_tool_result", "web_fetch_tool_result") for b in response.content):
                 self.toolbox.outside_seen = True  # web pages are outside information
