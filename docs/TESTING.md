@@ -2,8 +2,8 @@
 
 | Kind | What it covers | How to run | Where |
 |---|---|---|---|
-| **Unit and integration (core)** | Every organ and the plan engine, against a real in-memory core: calendar, mail, tasks, habits, browser (real Chromium), Blender (real Blender when installed), craft (a stand-in app with a real GPG signature), memory failures, and more. 93 tests. | `cd core && cargo test --release` | CI, every push |
-| **Unit and integration (AI layer)** | The AI's tools and loop against a live core, with a scripted model: trust and outside information, paging, the model table, prompt-cache stability, picture sizing, the usage ledger, the mind's thinking ladder. 52 tests. | `pytest -q` | CI, every push |
+| **Unit and integration (core)** | Every organ and the plan engine, against a real in-memory core: calendar, mail, tasks, habits, browser (real Chromium), Blender (real Blender when installed), craft (a stand-in app with a real GPG signature), memory failures, negotiations decided ahead, and more. 95 tests. | `cd core && cargo test --release` | CI, every push |
+| **Unit and integration (AI layer)** | The AI's tools and loop against a live core, with a scripted model: trust and outside information, paging, the model table, prompt-cache stability, picture sizing, the usage ledger, the mind's thinking ladder, open exchanges in context. 53 tests. | `pytest -q` | CI, every push |
 | **End-to-end (the OS)** | Builds the image and boots it in QEMU, then runs 31 checks plus screenshots: services, plans, power, mail, calendar, browser, pictures, Blender, Craft sandbox, the screen, the Workspace, the always-on layer. | `./image/build.sh && python3 image/test-boot.py out/linuxai-*.iso` | Before every merge |
 | **End-to-end (Craft apps)** | All 15 apps: verified install (pinned hash and GPG signature), sandboxed start, a tool call, close. | `scratchpad`-style script in an Arch container with bubblewrap (see the craft PR) | When the manifest or the craft organ changes |
 | **Soak / regression** | Days of activity compressed into minutes: event storms, macro tasks with a simulated human, AI plans, `kill -9` every few minutes, pruning. Checks memory, threads, file handles, database size, response times and invariants. | `python3 tests/soak.py --minutes 20` | Before releases |
@@ -22,8 +22,8 @@ machine, `cortex` asks for the key on first run and keeps it on that machine.
 
 ## Last full run (November 2026)
 
-- **Core:** 93 passed.
-- **AI layer:** 52 passed.
+- **Core:** 95 passed.
+- **AI layer:** 53 passed.
 - **Boot test:** 31 of 31 passed (on the craft merge).
 - **Craft end-to-end:** 15 of 15 apps. WordCraft failed on the first run and was fixed: some apps take only one
   read folder.
@@ -31,6 +31,6 @@ machine, `cortex` asks for the key on first run and keeps it on that machine.
   clean. `chrono` and `chrono-tz` are marked unmaintained, with no replacement yet.
 - **Lints:** no correctness findings. One test that accepted any exception was tightened.
 - **Sanity:** `linuxai-core check` silently checked an empty plan when it couldn't read its input. Fixed.
-- **Thinking benchmark:** the ladder does the same work for 24% of the cost on one day (25 requests instead of 77), and 23% over three days.
+- **Thinking benchmark:** the ladder does the same work for 23% of the cost on one day (27 requests instead of 87), and 22% over three days. Negotiation replies the AI planned for take no model requests.
 - **Soak:** 20 minutes, 11 of 11 checks, p99 under 19 ms, memory flat at 15 MB.
 - **Acceptance and token profile:** waiting for the API key.

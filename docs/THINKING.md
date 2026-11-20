@@ -15,6 +15,7 @@ Each situation goes to the cheapest level that can handle it:
 | 1. **Habits** | A situation the AI has already solved, and whose solution worked, is replayed by the core. Example: "the `cups` service failed" means restart it. | none | core: habits |
 | 2. **Briefs** | The core gathers what the AI would have looked up (the playbook, similar past cases, the facts) into one message. The AI decides in one step, at medium effort, and can still investigate when the brief isn't enough. | 1 to 2 requests | `linuxai/mind.py` |
 | 3. **Batches** | What can wait (routine email, reflecting on finished work) is handled together, at most 10 minutes later, in one conversation, at low effort. | 1 request per batch | `linuxai/mind.py` |
+| 2½. **Expectations** | A reply the AI already planned for (the broker's answer to its counter) is matched by the plan waiting for it and handled by the branch decided in advance. | none | core: `wait` with `where`, `track` |
 | 4. **Deliberation** | New, unclear or high-stakes work: everything you asked for, and anything the checks flag (first time, low confidence, outside information). High effort and the full toolset. | as needed | as before |
 
 ### Habits, precisely
@@ -30,6 +31,34 @@ Each situation goes to the cheapest level that can handle it:
   habit, you, or a duplicate event never cause a second conversation.
 - **Yours to manage.** `{"op":"habits"}` lists them. Only you can forget one (`habit_forget`, `source: human`).
 - **Visible.** `habit.learned`, `habit.used` and `habit.retired` are events in the journal.
+
+### Expectations: an exchange is decided ahead, not reread
+
+Your example: a broker offers a load at $3,000; we counter at $3,500; they write back "$3,200". The old way, the
+reply woke the AI as a new email: it read the claims, the broker's profile, then the earlier messages to work out
+what this was about, and only then decided. Every reply in a back-and-forth paid for rereading the whole exchange.
+
+Now, when the AI counters, it writes the follow-up as the same plan:
+
+1. **The state is kept**, small, in one place: `track` writes the exchange (who, what, where it stands, what we're
+   waiting for). It's in the AI's context as `<open_threads>`, so it never has to reconstruct it.
+2. **The reply is expected**: the plan waits for `message.received` **where** the email claims that load
+   reference. Other mail, even from the same broker about another load, doesn't match.
+3. **The answers are foreseen**: "they accept $3,500" (close it), "they meet in the middle" (put it to you with
+   the state and the AI's lean), "anything else" (`think`, with the state in the note).
+4. **The values travel with the email**: the email event carries the claims inline (`rate_cents: 320000`), so
+   the branch is chosen by the core, with no model and no lookup.
+5. **Nobody is woken twice**: the event is marked `expected_by` that plan, and the mind leaves it to the plan.
+
+A reply the plan didn't foresee ("$2,800") does reach the AI, once, with the state already written in the
+note, so one short decision is enough.
+
+**Safety is unchanged.** What a broker writes is still outside information: a plan that waits for a message is
+treated as resting on outside information from the start, so anything it would do to the outside world needs
+your OK, the same as before. Checked by the test `a_plan_that_waits_for_someones_reply_rests_on_outside_information`.
+
+Outgoing email doesn't exist yet, so "counter at $3,500" and "take $3,200" reach you as messages and questions
+with the AI's lean. Once LinuxAI can send email, the same plans can send the counter, with your OK.
 
 ### How it talks to itself
 
@@ -57,22 +86,28 @@ Each situation goes to the cheapest level that can handle it:
 
 `--real` runs the same day against the real model, which replaces all three assumptions.
 
-The day: 9 situations (cups fails three times, nginx twice, memory pressure four times), 9 emails (2 urgent load
-offers, a newsletter, a phishing attempt, 5 routine) and 3 tasks you asked for, over 10 hours.
+The day: 9 situations (cups fails three times, nginx twice, memory pressure four times), 11 emails (two
+negotiations with a broker, each an offer and a reply; a newsletter, a phishing attempt, 5 routine) and 3 tasks you
+asked for, over 10 hours. In one negotiation the broker answers $3,200 (foreseen); in the other, $2,800 (not).
 
-| Strategy | Requests | Handled by habit | Output incl. thinking | Est. cost (Opus 5.5) |
-|---|---:|---:|---:|---:|
-| Before (old prompts and cache) | 77 | 0 | 71,700 | $2.88 |
-| Old prompts, new cache | 77 | 0 | 71,700 | $2.03 |
-| **The ladder** | **25** | 6 of 9 | **12,100** | **$0.69** (24%) |
+| Strategy | Requests | Handled by habit | Replies already expected | Output incl. thinking | Est. cost (Opus 5.5) |
+|---|---:|---:|---:|---:|---:|
+| Before (old prompts and cache) | 87 | 0 | 0 of 2 | 81,000 | $3.27 |
+| Old prompts, new cache | 87 | 0 | 0 of 2 | 81,000 | $2.09 |
+| **The ladder** | **27** | 6 of 9 | 2 of 2 | **14,000** | **$0.76** (23%) |
 
-Three days (27 situations, 27 emails, 9 tasks): **$2.00 instead of $8.64 (23%)**, with 63 requests instead of 231.
-Habits handled 24 of the 27 situations. In every run the work done was identical: nothing left unhandled, and
-every service failure restarted.
+Three days (27 situations, 33 emails, 9 tasks): **$2.13 instead of $9.83 (22%)**, with 69 requests instead of 261.
+Habits handled 24 of the 27 situations; all 6 negotiation replies were expected. In every run the work done was
+identical: nothing left unhandled, every service failure restarted, and every reply brought to you with where the
+exchange stands.
+
+The negotiations alone (`--only negotiation`): **6 requests instead of 18**. A foreseen reply takes no model
+request at all (before: 5, rereading the exchange); an unforeseen one takes 2, with the state handed over.
 
 ```sh
 python3 tests/thinking_bench.py            # one day
 python3 tests/thinking_bench.py --days 3   # habits pay off more as situations repeat
+python3 tests/thinking_bench.py --only negotiation   # the broker exchange alone
 python3 tests/thinking_bench.py --real     # the real model (needs ANTHROPIC_API_KEY; costs real money)
 ```
 
@@ -83,7 +118,9 @@ The unit test `test_the_mind_spends_thinking_by_level` checks the ladder's decis
 - spam never reaches the model;
 - effort follows the stakes.
 
-The core test `a_solved_situation_becomes_a_habit_replayed_without_the_model_until_it_fails` checks the habit
+The core test `a_reply_in_a_negotiation_is_already_understood` runs your example through real email ingestion:
+unrelated mail isn't taken as the answer, the $3,200 reply is matched and put to you with the state, and the
+exchange's history is kept. The core test `a_solved_situation_becomes_a_habit_replayed_without_the_model_until_it_fails` checks the habit
 lifecycle.
 
 ## Settings

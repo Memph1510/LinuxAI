@@ -43,6 +43,13 @@ pub const VERBS: &[VerbSpec] = &[
         explain: "tell you: {text}", doc: "Send the human a message (shown in the session, later by text)." },
     VerbSpec { name: "remember", organ: "core", args: &[("text", true), ("kind", false)], effect: Effect::Internal,
         target: "", explain: "remember: {text}", doc: "Store a note in the AI's own memory." },
+    VerbSpec { name: "track", organ: "core",
+        args: &[("thread", true), ("with", false), ("about", false), ("state", false), ("waiting_for", false), ("status", false)],
+        effect: Effect::Internal, target: "thread", explain: "note where {thread} stands: {state}",
+        doc: "Keep the state of an ongoing exchange (a negotiation, a back-and-forth) in one place, so the next reply is \
+              understood without rereading anything. thread: a stable key (\"load:L-88213\"); with: who; about: what; \
+              state: where it stands now (\"we countered $3,500; their offer $3,000\"); waiting_for: what we expect next; \
+              status: open (default) or closed. Fields not given are kept." },
     VerbSpec { name: "store", organ: "core", args: &[("type", true), ("fields", true), ("handle", false)],
         effect: Effect::Internal, target: "type", explain: "store a {type} in memory",
         doc: "Create a memory object of a type (bill, person, preference, ...) with fields." },

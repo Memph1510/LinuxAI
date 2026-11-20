@@ -172,7 +172,13 @@ impl Core {
     }
 
     /// An event from outside (senses, organs, the human).
-    pub fn emit(self: &Arc<Self>, kind: &str, data: Value) {
+    pub fn emit(self: &Arc<Self>, kind: &str, mut data: Value) {
+        // Already expected: a plan is waiting for exactly this (the broker's reply to our counter). The event says
+        // so, in the journal and to the AI, so nobody works out from scratch what the reply is about.
+        let expected = self.expected_by(kind, &json!({"kind": kind, "data": data}));
+        if !expected.is_empty() && data.is_object() {
+            data["expected_by"] = json!(expected);
+        }
         self.bus.emit(&self.mem, kind, data);
         self.settle();
     }
@@ -193,6 +199,22 @@ impl Core {
         }
         list.push(t);
         true
+    }
+
+    fn plan_awaits(&self, st: &Value, kind: &str, ev: &Value) -> bool {
+        let vars = st["vars"].as_object().cloned().unwrap_or_default();
+        self.with_ctx(|ctx| engine::awaits(&vars, &st["wait"], kind, ev, ctx))
+    }
+
+    /// The waiting plans that would take this event, with what each expected.
+    fn expected_by(&self, kind: &str, ev: &Value) -> Vec<Value> {
+        if kind.starts_with("plan.") || kind.starts_with("action.") {
+            return vec![];
+        }
+        self.mem.plans_with_status("waiting:event").into_iter()
+            .filter(|st| self.plan_awaits(st, kind, ev))
+            .map(|st| json!({"plan_id": st["id"], "plan": st["name"], "about": st["wait"]["about"], "thread": st["wait"]["thread"]}))
+            .collect()
     }
 
     fn react(self: &Arc<Self>, kind: &str, ev: &Value) {
@@ -235,7 +257,7 @@ impl Core {
             });
         }
         for st in self.mem.plans_with_status("waiting:event") {
-            if !engine::event_matches(st["wait"]["kind"].as_str().unwrap_or(""), kind) {
+            if !self.plan_awaits(&st, kind, ev) {
                 continue;
             }
             let (id, kind, ev) = (st["id"].as_str().unwrap_or("").to_string(), kind.to_string(), ev.clone());
@@ -414,6 +436,20 @@ impl Core {
             "object_put" | "find" => self.object_op(op, req),
             "models" => crate::models::table(&self.mem),
             "habits" | "habit_forget" => self.habit_op(op, req),
+            // Exchanges in progress, with where each stands and the plans waiting on their next reply.
+            "threads" => {
+                let all = req["all"].as_bool().unwrap_or(false);
+                let waiting = self.mem.plans_with_status("waiting:event");
+                let list: Vec<Value> = self.mem.objects_of("thread", 50).into_iter()
+                    .filter(|t| all || t["status"] != "closed")
+                    .map(|mut t| {
+                        let key = t["thread"].clone();
+                        t["waiting_plans"] = json!(waiting.iter().filter(|p| p["wait"]["thread"] == key)
+                            .map(|p| json!({"plan_id": p["id"], "about": p["wait"]["about"]})).collect::<Vec<_>>());
+                        t
+                    }).collect();
+                json!({"ok": true, "threads": list})
+            }
             // Which model does which job is the human's choice; the AI reads the table and can suggest.
             "models_set" => {
                 if req["source"] != "human" {

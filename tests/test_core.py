@@ -998,6 +998,10 @@ def test_the_mind_spends_thinking_by_level(env):
     # Spam and newsletters never reach the model.
     mind.on_event(mail("newsletter", 4))
     mind.on_event(mail("phishing_or_spam", 5))
+    # A reply a plan is already waiting for (the broker's answer to our counter) is handled by that plan.
+    expected = mail("load_offer", 7)
+    expected["data"]["expected_by"] = [{"plan_id": "p-nego", "about": "Dana's answer to our $3,500 counter"}]
+    mind.on_event(expected)
     mind.flush()
     assert len(turns) == 3
     # Work the human asked for gets high effort; the effort setting is restored afterwards.
@@ -1008,3 +1012,20 @@ def test_the_mind_spends_thinking_by_level(env):
     old = Mind(FakeAgent(), FakeCore(), strategy="full", clock=lambda: 0)
     old.on_event(mail("other", 6))
     assert len(turns) == 1 and "read_facts" in turns[0][2]
+
+
+def test_open_exchanges_are_in_the_ais_context(env, live_core):
+    """A negotiation's state is kept in one place and shown to the AI, so a reply is understood without rereading."""
+    from linuxai.agent import Agent
+    cfg, mem, tb, _ = env
+    tb.core = live_core
+    plan = {"plan": "negotiate HL-3100", "steps": [
+        {"do": "track", "thread": "load:HL-3100", "with": "dana@hollis-logistics.com", "about": "Dallas to Atlanta",
+         "state": "they offered $3,000; we countered $3,500", "waiting_for": "their answer"},
+        {"wait": "message.received", "where": ["exists", ["pick", "$event.data.claims", "reference", "HL-3100"]],
+         "thread": "load:HL-3100", "about": "Dana's answer to $3,500", "max": "2d"}]}
+    r = live_core.request("submit", plan=plan, source="human")
+    assert r["result"]["status"] == "waiting:event", r
+    ctx = Agent(cfg, mem, tb, client=FakeClient([]))._context("hello")
+    assert "<open_threads>" in ctx and "we countered $3,500" in ctx and "handles the reply" in ctx, ctx
+    assert "Dana's answer to $3,500" in ctx, "the waiting plan says what it expects"

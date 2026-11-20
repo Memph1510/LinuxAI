@@ -71,7 +71,7 @@ If you ask what it did, you get:
 | time | ISO dates/times, or relative forms the engine resolves at check time: `"today"`, `"+3d"`, `"-6mo"`, `"next fri 9:00"` |
 | references | `"@verizon"` (handle), `"#denver-trip"` (tag/project), `"budget:bills"`, `"obj:bill/01JDQ8K3..."` |
 | variables | `"$name"`, `"$name.field"` |
-| expressions | prefix lists: `[">", "$a", 10]`, `["*", "$usual", 1.2]`, `["avg", "amount", <list>]` |
+| expressions | prefix lists: `[">", "$a", 10]`, `["*", "$usual", 1.2]`, `["avg", "amount", <list>]`, `["get", obj, "field"]`, `["pick", list, "field", value]` (first item whose field equals value) |
 
 ## 2. Step kinds
 
@@ -85,9 +85,36 @@ If you ask what it did, you get:
 | `try` / `else` | Handle a failing step |
 | `ask` | Ask you something. The plan **pauses durably**, through days and reboots, until you answer by text or on screen. |
 | `tell` | Send you a message and continue |
-| `wait` | Wait for an event (`{"wait": "payment.settled", "about": "$bill", "max": "3d"}`) or a time |
+| `wait` | Wait for an event (`{"wait": "payment.settled", "about": "$bill", "max": "3d"}`) or a time. `where` takes only the event that matches, checked with the plan's variables and `$event` (a reply from this broker about this load); `about` says in words what's expected; `thread` links it to an exchange kept with `track`. A plan that waits for a message rests on outside information from the start. |
 | `think` | Hand back to the AI model with the current state: "something unexpected happened, decide what to do next". This is how a plan asks the AI for judgment only when it's needed. |
 | `call` | Run a saved plan or solution by name, with arguments |
+
+### Exchanges, decided ahead
+
+When the AI sends or prepares something that expects an answer (a counter-offer, a question to a broker), it
+writes the follow-up at the same time: keep the state with `track`, wait for exactly that reply, and decide now
+what each foreseeable answer means. The reply is then handled when it arrives, with no rereading and no model:
+
+```json
+{"plan": "negotiate HL-3100", "steps": [
+  {"do": "track", "thread": "load:HL-3100", "with": "dana@hollis-logistics.com",
+   "state": "they offered $3,000; we countered $3,500", "waiting_for": "their answer to $3,500"},
+  {"wait": "message.received", "where": ["exists", ["pick", "$event.data.claims", "reference", "HL-3100"]],
+   "thread": "load:HL-3100", "about": "Dana's answer to our $3,500 counter", "max": "2d"},
+  {"let": "usd", "calc": ["/", ["get", ["pick", "$event.data.claims", "reference", "HL-3100"], "rate_cents"], 100]},
+  {"if": [">=", "$usd", 3500], "then": [{"do": "track", "thread": "load:HL-3100", "state": "agreed at $3,500", "status": "closed"}],
+   "else": [{"if": [">=", "$usd", 3100],
+     "then": [{"ask": "Hollis came back at ${$usd} (they offered $3,000, we asked $3,500). Take it?",
+               "opts": ["take", "counter", "pass"], "lean": "take"}],
+     "else": [{"think": "Hollis answered at ${$usd}, below what I planned for. They offered $3,000; we countered $3,500."}]}]}]}
+```
+
+- An email's event carries the values it claims inline (`$event.data.claims`), so a plan can branch on "$3,200"
+  without reading anything.
+- The event is marked `expected_by` the waiting plan, so the AI isn't woken for it. A reply the plan didn't
+  foresee goes to `think`, and the note carries the state.
+- `{"op": "threads"}` lists open exchanges with where each stands and which plan handles the next reply; the AI
+  sees them in its context.
 
 ## 3. Verbs
 

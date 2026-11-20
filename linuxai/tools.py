@@ -519,11 +519,16 @@ Steps (one keyword each):
       submit separate plans for anything that doesn't depend on the answer.
   {"tell": "<message>"}
   {"wait": "<event kind>", "max": "1h"} | {"wait": "10m"}   ($timed_out tells which happened)
+  {"wait": "message.received", "where": <expr using $event and plan vars>, "about": "<what you expect>",
+   "thread": "<track key>", "max": "2d"}      only the event that matches (e.g. this broker's reply about this load)
   {"think": "<note>"}                           hand back to you for judgment
   {"call": "<saved plan name>", "with": {...}}
 Expressions: "$var.path" reads a variable ($state = live machine state, $event = triggering event);
 "{$var}" inside text interpolates; prefix lists compute: ["=", a, b] [">", a, b] ["and", ...] ["+", a, b]
-["*", a, b] ["avg", "field", list] ["sum", list] ["count", list] ["pct", a, b] ["has", a, b] ["exists", a].
+["*", a, b] ["avg", "field", list] ["sum", list] ["count", list] ["pct", a, b] ["has", a, b] ["exists", a]
+["get", obj, "field"] ["first", list] ["pick", list, "field", value] (first item whose field equals value).
+An email event carries its claims inline: $event.data.claims, e.g. [{"type": "load_offer", "reference": "HL-3100",
+"rate_cents": 320000, ...}], plus from, subject, category; use ["pick", "$event.data.claims", "reference", "HL-3100"].
 {"find": {"type": T, "from": "@handle", "where": {field: value | [op, value]}, "pick": "newest", "last": N}}
 queries memory objects.
 Rules: {"rule": "<name>", "when": "<event kind or prefix.*>", "where": <expr>?, "steps": [...]}.

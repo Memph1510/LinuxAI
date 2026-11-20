@@ -133,6 +133,7 @@ class Model:
         self.effort_of = effort_of
         self.beta = NS(messages=NS(stream=self._stream))
         self.n = 0
+        self.history: dict[str, list] = {}  # load reference -> ids of every claim in that exchange so far
 
     def _stream(self, **kw):
         msgs = kw["messages"]
@@ -154,6 +155,37 @@ class Model:
     def said(text):
         return NS(type="text", text=text)
 
+    @staticmethod
+    def _nego(prompt: str):
+        """(reference, amount text, is a reply) for an email in a negotiation, from its subject."""
+        if "Load HL-" not in prompt:
+            return None
+        subj = prompt.split("Load HL-")[1].split('"')[0]
+        ref, amount = "HL-" + subj.split(":")[0], subj.split(": ")[1]
+        return ref, amount, "Re: Load HL-" in prompt
+
+    @staticmethod
+    def nego_plan(ref: str) -> dict:
+        """What the AI writes when it counters (following its instructions on exchanges): decided ahead."""
+        pick = ["pick", "$event.data.claims", "reference", ref]
+        th = f"load:{ref}"
+        return {"plan": f"negotiate {ref}", "category": "freight/negotiate", "steps": [
+            {"do": "track", "thread": th, "with": "dana@hollis-logistics.example", "about": f"{ref}, Dallas to Atlanta",
+             "state": "they offered $3,000; we countered $3,500", "waiting_for": "their answer to $3,500"},
+            {"wait": "message.received", "where": ["exists", pick], "max": "2d", "thread": th,
+             "about": f"Dana's answer to our $3,500 counter on {ref}"},
+            {"let": "usd", "calc": ["/", ["get", pick, "rate_cents"], 100]},
+            {"if": [">=", "$usd", 3500], "then": [
+                {"do": "track", "thread": th, "state": "agreed at $3,500", "status": "closed"},
+                {"tell": f"Hollis agreed to $3,500 on {ref}."}],
+             "else": [{"if": [">=", "$usd", 3100], "then": [
+                 {"do": "track", "thread": th, "state": "they came back at ${$usd}; waiting on you"},
+                 {"ask": f"Hollis came back at ${{$usd}} on {ref} (they offered $3,000, we asked $3,500). Take it?",
+                  "opts": ["take", "counter", "pass"], "lean": "take", "why": "between their offer and ours", "as": "choice"},
+                 {"if": ["=", "$choice", "take"], "then": [{"do": "track", "thread": th, "state": "agreed at ${$usd}", "status": "closed"}]}],
+               "else": [{"think": f"[{th}] Hollis answered {ref} at ${{$usd}}, below what I planned for. State: they "
+                                  f"offered $3,000; we countered $3,500."}]}]}]}
+
     def respond(self, prompt: str, step: int, msgs) -> list:
         brief = "Brief (gathered for you" in prompt or "Everything you'd look up is here" in prompt
         if "needs your judgment" in prompt:
@@ -163,7 +195,12 @@ class Model:
             if step < len(lookups):
                 return [self.call(lookups[step][0], **lookups[step][1])]
             if step == len(lookups):
-                if "service" in note:
+                if "[load:" in note:  # a reply the negotiation plan didn't plan for, handed back with its state
+                    th = note.split("[")[1].split("]")[0]
+                    amount = note.split(" at ")[1].split(",")[0]
+                    steps = [{"do": "track", "thread": th, "state": f"they dropped to {amount}; I suggested passing", "status": "closed"},
+                             {"tell": f"Hollis dropped to {amount} on {th[5:]}, under their first offer. I'd pass."}]
+                elif "service" in note:
                     steps = [{"do": "restart", "unit": "{$event.data.unit}"}]
                 elif "Memory pressure" in note:
                     steps = [{"tell": "Memory was tight ({$event.data.available_mb} MB); I'm watching it."}]
@@ -195,12 +232,28 @@ class Model:
             facts = prompt.split("claims extracted from it: ")[1].split(".")[0].split(", ")
             contact = prompt.split("read_playbook ")[1].split(")")[0]
             seq = [("read_facts", {"ids": [f for f in facts if f != "none"]}), ("read_playbook", {"category": contact})]
+            nego = self._nego(prompt)
+            if nego and nego[2]:  # a reply: work out where the exchange stood by rereading it
+                earlier = [f for f in self.history.get(nego[0], []) if f not in facts]
+                seq.append(("read_facts", {"ids": earlier}))
+                if step < len(seq):
+                    return [self.call(seq[step][0], **seq[step][1])]
+                if step == len(seq):
+                    return [self.call("tell_human", text=f"Hollis came back at {nego[1]} on {nego[0]} (they offered $3,000, "
+                                                         f"we asked $3,500). " + ("I'd take it." if nego[1] >= "$3,1" else "I'd pass."))]
+                return [self.said("Done.")]
+            if nego and step == len(seq):
+                return [self.call("tell_human", text=f"Hollis offered $3,000 on {nego[0]}; I'd counter at $3,500.")]
             if step < len(seq):
                 return [self.call(seq[step][0], **seq[step][1])]
             if step == len(seq) and "load_offer" in prompt:
                 return [self.call("tell_human", text="A load offer came in; details are in the Workspace.")]
             return [self.said("Nothing else needs doing.")]
         if "Email (outside information" in prompt:  # a brief with one or several emails
+            nego = self._nego(prompt)
+            if nego and not nego[2] and step == 0:  # the counter, with what each answer will mean decided now
+                return [self.call("submit_plan", plan=self.nego_plan(nego[0])),
+                        self.call("tell_human", text=f"Hollis offered $3,000 on {nego[0]}; I'd counter at $3,500.")]
             if step == 0 and "load_offer" in prompt:
                 return [self.call("tell_human", text="A load offer came in; details are in the Workspace.")]
             return [self.said("Nothing else needs doing.")]
@@ -226,7 +279,7 @@ class _Stream:
 
 # ---- a day of events --------------------------------------------------------------------------------------
 
-def workload(days: int) -> list[tuple[float, str, dict]]:
+def workload(days: int, only: str | None = None) -> list[tuple[float, str, dict]]:
     """(seconds into the run, what, details). Situations repeat, as they do on a real machine."""
     day = []
     h = 3600.0
@@ -234,18 +287,26 @@ def workload(days: int) -> list[tuple[float, str, dict]]:
             (6.9 * h, "service.failed", {"unit": "cups"}), (1.4 * h, "service.failed", {"unit": "nginx"}),
             (8.3 * h, "service.failed", {"unit": "nginx"})]
     day += [(t * h, "memory.pressure", {"available_mb": 140}) for t in (2.1, 4.4, 5.0, 9.2)]
-    mails = [("load_offer", 1.1), ("invoice_or_bill", 1.15), ("other", 1.2), ("personal", 4.0), ("travel", 4.05),
-             ("load_offer", 7.5), ("newsletter", 2.0), ("phishing_or_spam", 5.5), ("other", 9.5)]
+    mails = [("invoice_or_bill", 1.15), ("other", 1.2), ("personal", 4.0), ("travel", 4.05),
+             ("newsletter", 2.0), ("phishing_or_spam", 5.5), ("other", 9.5)]
     day += [(t * h, "mail", {"category": c}) for c, t in mails]
+    # Two negotiations with a broker: they offer $3,000 and we counter $3,500. One answers $3,200 (foreseen);
+    # the other drops to $2,800 (not foreseen).
+    day += [(1.1 * h, "mail", {"category": "load_offer", "nego": 1, "rate": 300000}),
+            (3.5 * h, "mail", {"category": "load_offer", "nego": 1, "rate": 320000, "reply": True}),
+            (7.5 * h, "mail", {"category": "load_offer", "nego": 2, "rate": 300000}),
+            (9.0 * h, "mail", {"category": "load_offer", "nego": 2, "rate": 280000, "reply": True})]
     day += [(t * h, "task", {"title": title}) for title, t in (("Weekly fuel report", 3.0), ("Renew the truck's registration", 6.0),
                                                                 ("Find a dentist near home", 8.0))]
     out = []
     for d in range(days):
-        out += [(t + d * 24 * h, k, v) for t, k, v in day]
+        out += [(t + d * 24 * h, k, {**v, "day": d}) for t, k, v in day]
+    if only == "negotiation":
+        out = [x for x in out if "nego" in x[2]]
     return sorted(out, key=lambda x: x[0])
 
 
-def run(strategy: str, days: int, real: bool) -> dict:
+def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     tmp = Path(tempfile.mkdtemp(prefix=f"linuxai-bench-{strategy}-"))
     os.environ["LINUXAI_HOME"] = str(tmp / "home")
     sock = tmp / "core.sock"
@@ -284,7 +345,8 @@ def run(strategy: str, days: int, real: bool) -> dict:
         agent.system_blocks = agent.system
     mind = Mind(agent, core, strategy="full" if strategy.startswith("full") else "ladder", clock=clock)
     seen = core.request("events", since=0, limit=1)["last"]
-    stats = {"situations": 0, "to_model": 0, "habit_used": 0, "conversations": 0}
+    stats = {"situations": 0, "to_model": 0, "habit_used": 0, "conversations": 0, "replies": 0, "replies_expected": 0,
+             "replies_told": 0}
     orig_reset = agent.reset
 
     def counting_reset():
@@ -305,17 +367,39 @@ def run(strategy: str, days: int, real: bool) -> dict:
                     stats["habit_used"] += 1
                 if k == "plan.waiting" and (d.get("wait") or {}).get("approval"):
                     core.request("answer", plan_id=d["plan_id"], text="always", source="human")  # the human: yes, always
+                said = (d.get("text") or "") if k == "ai.tell" else ((d.get("wait") or {}).get("question") or "") if k == "plan.waiting" else ""
+                if "Hollis came back at $" in said or "Hollis dropped to $" in said:
+                    stats["replies_told"] += 1  # the human heard the answer, with where the exchange stands
+                if k == "plan.waiting" and "Take it?" in said:
+                    core.request("answer", plan_id=d["plan_id"], text="take", source="human")
+                if k == "message.received" and d.get("expected_by"):
+                    stats["replies_expected"] += 1
                 with contextlib.redirect_stdout(io.StringIO()):
                     mind.on_event(ev)
 
     n_fact = 0
-    for t, what, d in workload(days):
+    for t, what, d in workload(days, only):
         sim["t"] = t
         with contextlib.redirect_stdout(io.StringIO()):
             mind.tick()
         if what in ("service.failed", "memory.pressure"):
             stats["situations"] += 1
             core.request("event", kind=what, data=d)
+        elif what == "mail" and "nego" in d:
+            n_fact += 1
+            ref = f"HL-{d['day']}-{d['nego']}"
+            amount = f"${d['rate'] // 100:,}"
+            claim = {"type": "load_offer", "reference": ref, "rate_cents": d["rate"], "origin": "Dallas, TX", "destination": "Atlanta, GA"}
+            fact = core.request("object_put", type="load_offer", fields={**{k: v for k, v in claim.items() if k != "type"},
+                                                                         "trust": "outside", "from": "dana@hollis-logistics.example"})
+            if model:
+                model.history.setdefault(ref, []).append(fact.get("id"))
+            stats["replies"] += 1 if d.get("reply") else 0
+            core.request("event", kind="message.received", data={
+                "from": "dana@hollis-logistics.example", "authenticated": True,
+                "subject": f"{'Re: ' if d.get('reply') else ''}Load {ref}: {amount}", "category": "load_offer",
+                "message": f"obj:message/m{n_fact}", "facts": [fact.get("id")], "claims": [{**claim, "id": fact.get("id")}],
+                "contact": "contacts/hollis-logistics/dana"})
         elif what == "mail":
             n_fact += 1
             fact = core.request("object_put", type="claim", fields={"trust": "outside", "text": f"claim {n_fact}: rate $1,6{n_fact}0",
@@ -327,10 +411,18 @@ def run(strategy: str, days: int, real: bool) -> dict:
         elif what == "task":
             core.request("task_create", spec={"title": d["title"], "category": "general"}, source="human")
         pump()
+        time.sleep(0.02)
+        pump()
     sim["t"] += 3600
     with contextlib.redirect_stdout(io.StringIO()):
         mind.flush()
-    pump()
+    # Plans run on the core's own threads: keep reading until nothing new has happened for a moment.
+    quiet = 0
+    while quiet < 5:
+        before = seen
+        pump()
+        quiet = quiet + 1 if seen == before else 0
+        time.sleep(0.1)
     waiting = [w for w in core.request("waiting")["plans"] if w["status"] == "needs_thought"]
     journal = core.request("journal", limit=5000)["journal"]
     restarts = sum(1 for j in journal if "restart" in json.dumps(j))
@@ -344,6 +436,7 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=1)
     ap.add_argument("--real", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--only", choices=["negotiation"], help="run one scenario alone")
     args = ap.parse_args()
     if not CORE_BIN.exists():
         print("build the core first: cd core && cargo build --release")
@@ -351,11 +444,11 @@ def main() -> int:
     if args.real and not os.environ.get("ANTHROPIC_API_KEY"):
         print("--real needs ANTHROPIC_API_KEY")
         return 2
-    results = [run(s, args.days, args.real) for s in ("full-old", "full", "ladder")]
+    results = [run(s, args.days, args.real, args.only) for s in ("full-old", "full", "ladder")]
     if args.json:
         print(json.dumps(results, indent=1))
         return 0
-    w = workload(args.days)
+    w = workload(args.days, args.only)
     print(f"A simulated {args.days}-day run: {len(w)} things happened "
           f"({sum(1 for x in w if x[1] in ('service.failed', 'memory.pressure'))} situations, "
           f"{sum(1 for x in w if x[1] == 'mail')} emails, {sum(1 for x in w if x[1] == 'task')} tasks you asked for)\n")
@@ -370,6 +463,9 @@ def main() -> int:
     print(f"{'left unhandled (must be 0)':<34}" + "".join(f"{r['left_unhandled']:>33}" for r in results))
     print(f"{'service restarts done':<34}" + "".join(f"{r['restarts']:>33}" for r in results)
           + f"   (failures in the workload: {sum(1 for x in w if x[1] == 'service.failed')})")
+    print(f"{'negotiation replies already expected':<34}" + "".join(f"{r['replies_expected']:>33}" for r in results)
+          + f"   (replies: {results[0]['replies']})")
+    print(f"{'replies brought to you, with state':<34}" + "".join(f"{r['replies_told']:>33}" for r in results))
     base = results[0]["cost"] or 1
     print(f"\nThe ladder: {results[2]['cost'] / base:.0%} of the cost, {results[2]['requests']} requests instead of "
           f"{results[0]['requests']}, for the same work.")

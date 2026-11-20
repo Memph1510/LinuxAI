@@ -528,6 +528,20 @@ pub fn ingest(raw: &[u8], api: &dyn Api, cfg: &MailConfig) -> Result<Value, Stri
         api.call("object_put", json!({"type": typ, "fields": fields}))["id"].as_str().unwrap_or("").to_string()
     };
     let (mut derived, mut corrected, mut issues) = (Vec::new(), Vec::new(), Vec::new());
+    // The values themselves, small, in the event: a plan waiting on this reply can branch on "$3,200" without
+    // reading anything (still outside information: claims, with their checks).
+    let mut claims: Vec<Value> = Vec::new();
+    let claim = |id: &str, typ: &str, fields: &Map<String, Value>, checks: Option<&Vec<String>>| -> Value {
+        let mut c: Map<String, Value> = fields.iter()
+            .filter(|(_, v)| v.is_number() || v.is_boolean() || v.as_str().map(|s| s.len() <= 120).unwrap_or(false))
+            .map(|(k, v)| (k.clone(), v.clone())).collect();
+        c.insert("id".into(), json!(id));
+        c.insert("type".into(), json!(typ));
+        if let Some(ch) = checks.filter(|c| !c.is_empty()) {
+            c.insert("checks".into(), json!(ch));
+        }
+        Value::Object(c)
+    };
     let money_items = facts["money"].as_array().cloned().unwrap_or_default();
     let contradictions: Vec<String> = facts["self_contradictions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
     for load in facts["loads"].as_array().cloned().unwrap_or_default() {
@@ -536,7 +550,8 @@ pub fn ingest(raw: &[u8], api: &dyn Api, cfg: &MailConfig) -> Result<Value, Stri
         issues.extend(checks.iter().cloned());
         let mut fields = load.as_object().cloned().unwrap_or_default();
         fields.insert("checks".into(), json!(checks));
-        let id = put("load_offer", fields);
+        let id = put("load_offer", fields.clone());
+        claims.push(claim(&id, "load_offer", &fields, Some(&checks)));
         if let Some(old) = supersede(api, &id, &load, &source) {
             corrected.push(old);
         }
@@ -544,7 +559,10 @@ pub fn ingest(raw: &[u8], api: &dyn Api, cfg: &MailConfig) -> Result<Value, Stri
     }
     for m in &money_items {
         let typ = match m["direction"].as_str() { Some("we_owe") => "bill", Some("paid") => "payment", _ => "money" };
-        derived.push(put(typ, m.as_object().cloned().unwrap_or_default()));
+        let fields = m.as_object().cloned().unwrap_or_default();
+        let id = put(typ, fields.clone());
+        claims.push(claim(&id, typ, &fields, None));
+        derived.push(id);
     }
     for s in facts["schedule"].as_array().cloned().unwrap_or_default() {
         derived.push(put("appointment", s.as_object().cloned().unwrap_or_default()));
@@ -555,10 +573,10 @@ pub fn ingest(raw: &[u8], api: &dyn Api, cfg: &MailConfig) -> Result<Value, Stri
             "corrections": n("corrections") + corrected.len() as i64, "last_seen": source["date"]}}));
     }
     api.call("event", json!({"kind": "message.received", "data": {
-        "message": mid, "facts": derived, "category": facts["category"], "from": from, "authenticated": source["authenticated"],
+        "message": mid, "facts": derived, "claims": claims, "category": facts["category"], "from": from, "authenticated": source["authenticated"],
         "subject": info["subject"], "trust": "outside", "contact": person["contact"], "corrected": corrected, "issues": issues,
         "invites": invites}}));
-    Ok(json!({"message": mid, "facts": derived, "category": facts["category"], "corrected": corrected, "contact": person["contact"],
+    Ok(json!({"message": mid, "facts": derived, "claims": claims, "category": facts["category"], "corrected": corrected, "contact": person["contact"],
               "extract_error": extract_error, "invites": invites}))
 }
 
@@ -768,6 +786,63 @@ mod tests {
         cfg.extract_cmd = "exit 3".into();
         let r = ingest(&raw2, &core, &cfg).unwrap();
         assert!(r["extract_error"].is_string() && r["facts"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reply_in_a_negotiation_is_already_understood() {
+        // They offered $3,000, we countered $3,500. The plan already knows what it's waiting for and what each answer
+        // means; the reply is matched and handled without anyone rereading the thread.
+        let dir = std::env::temp_dir().join(format!("linuxai-nego-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let core: Arc<Core> = Arc::new(Core::new(Memory::in_memory(), Box::new(NoOrgans)));
+        let offer = |rate: i64, r: &str| json!({"category": "load_offer", "summary": "Hollis offer.",
+            "loads": [{"origin": "Dallas, TX", "destination": "Atlanta, GA", "reference": r, "rate_cents": rate}]});
+        let pick = json!(["pick", "$event.data.claims", "reference", "HL-3100"]);
+        let plan = json!({"plan": "negotiate HL-3100", "steps": [
+            {"do": "track", "thread": "load:HL-3100", "with": "dana@hollis-logistics.com", "about": "Dallas to Atlanta, HL-3100",
+             "state": "they offered $3,000; we countered $3,500", "waiting_for": "their answer to $3,500"},
+            {"wait": "message.received", "where": ["exists", pick], "max": "2d", "thread": "load:HL-3100",
+             "about": "Dana's answer to our $3,500 counter on HL-3100"},
+            {"let": "rate", "calc": ["get", pick, "rate_cents"]},
+            {"if": [">=", "$rate", 350000], "then": [
+                {"do": "track", "thread": "load:HL-3100", "state": "agreed at $3,500", "status": "closed"},
+                {"tell": "Hollis agreed to $3,500 on HL-3100."}],
+             "else": [{"if": [">=", "$rate", 320000], "then": [
+                {"do": "track", "thread": "load:HL-3100", "state": "they came back at {$rate} cents; waiting on you"},
+                {"ask": "Hollis came back at {$rate} cents on HL-3100 (we asked $3,500, they first offered $3,000). Take it?",
+                 "options": ["take", "counter", "pass"], "lean": "take"}],
+              "else": [{"think": "Hollis answered HL-3100 below what we expected ({$rate} cents)."}]}]}]});
+        let r = core.submit(&plan, "human");
+        assert_eq!(r["result"]["status"], "waiting:event", "{r}");
+        let th = core.call("threads", json!({}))["threads"][0].clone();
+        assert_eq!(th["state"], "they offered $3,000; we countered $3,500");
+        assert_eq!(th["waiting_plans"].as_array().unwrap().len(), 1, "{th}");
+
+        // Unrelated mail, even from the same broker about another load, isn't taken as the answer.
+        let cfg = |name: &str, f: Value| MailConfig { mail_dir: dir.join("mail"), authserv_id: Some("mx.linuxai.local".into()),
+            extract_cmd: fake_extractor(&dir, name, f) };
+        let raw = email(&["mx.linuxai.local; dmarc=pass"], None, Some("Another load."), "", None);
+        let other = ingest(&raw, &core, &cfg("other", offer(210000, "HL-4000"))).unwrap();
+        assert_eq!(other["claims"][0]["rate_cents"], 210000, "the values come with the event: {other}");
+        let evs = || core.call("events", json!({"since": 0, "limit": 10000}))["events"].as_array().unwrap().clone();
+        let last_mail = |e: &[Value]| e.iter().rev().find(|e| e["kind"] == "message.received").unwrap().clone();
+        assert!(last_mail(&evs())["data"]["expected_by"].is_null());
+        assert_eq!(core.call("plan", json!({"plan_id": r["result"]["plan_id"]}))["plan"]["status"], "waiting:event");
+
+        // Their answer: $3,200. Expected, matched, and branched on its value with no model involved.
+        let raw = email(&["mx.linuxai.local; dmarc=pass"], None, Some("Best I can do is $3,200."), "", None);
+        ingest(&raw, &core, &cfg("answer", offer(320000, "HL-3100"))).unwrap();
+        let m = last_mail(&evs());
+        assert_eq!(m["data"]["expected_by"][0]["about"], "Dana's answer to our $3,500 counter on HL-3100", "{m}");
+        assert_eq!(m["data"]["expected_by"][0]["thread"], "load:HL-3100");
+        let p = core.call("plan", json!({"plan_id": r["result"]["plan_id"]}))["plan"].clone();
+        assert_eq!(p["status"], "waiting:answer", "{p}");
+        assert!(p["wait"]["question"].as_str().unwrap().contains("320000 cents"), "{p}");
+        let th = core.call("threads", json!({}))["threads"][0].clone();
+        assert_eq!(th["state"], "they came back at 320000 cents; waiting on you");
+        assert_eq!(th["history"][0]["state"], "they offered $3,000; we countered $3,500", "the earlier state is kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -83,7 +83,7 @@ pub struct Ctx<'a> {
 
 const OPS: &[&str] = &[
     "=", "!=", ">", "<", ">=", "<=", "and", "or", "not", "+", "-", "*", "/", "avg", "sum", "count", "min",
-    "max", "pct", "has", "exists", "first", "get",
+    "max", "pct", "has", "exists", "first", "get", "pick",
 ];
 
 pub fn truthy(v: &Value) -> bool {
@@ -245,6 +245,15 @@ fn apply_op(op: &str, a: &[Value]) -> Result<Value, String> {
         "exists" => { need(1)?; json!(!a[0].is_null()) }
         "first" => { need(1)?; match &a[0] { Value::Array(x) => x.first().cloned().unwrap_or(Value::Null), v => v.clone() } }
         "get" => { need(2)?; a[0].get(display(&a[1])).cloned().unwrap_or(Value::Null) }
+        // ["pick", list, field, value]: the first item whose field equals value (["pick", claims, "type", "load_offer"]);
+        // without a value, the first item that has the field.
+        "pick" => { need(2)?; let f = display(&a[1]); match &a[0] {
+            Value::Array(x) => x.iter().find(|i| match (i.get(&f), a.get(2)) {
+                (Some(h), Some(w)) => apply_op("=", &[h.clone(), w.clone()]).map(|r| truthy(&r)).unwrap_or(false),
+                (Some(h), None) => !h.is_null(),
+                _ => false,
+            }).cloned().unwrap_or(Value::Null),
+            _ => Value::Null } }
         _ => return Err(format!("unknown operator {op}")),
     })
 }
@@ -375,7 +384,9 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
     }
     // Standing permissions given for actions based on outside information are kept apart ("outside:" targets):
     // ordinary trust doesn't cover acting on what strangers sent, and vice versa.
-    let outside = plan["taint"] == "outside";
+    // A plan that waits for a message (a broker's reply) acts on what a stranger sends: it's outside from the start,
+    // so its effects need the same OK as any plan resting on outside information.
+    let outside = plan["taint"] == "outside" || waits_on_outside(&steps);
     let mandates: Vec<(String, String)> = mem.mandates().into_iter().filter_map(|(v, t)| match t.strip_prefix("outside:") {
         Some(rest) => outside.then(|| (v, rest.to_string())),
         None => (!outside).then_some((v, t)),
@@ -392,7 +403,7 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
     if ai && has_effects {
         assess(plan, threshold, novelty, &mut r);
     }
-    if outside && has_effects {
+    if plan["taint"] == "outside" && has_effects {
         // Show the human exactly which outside facts this rests on, as recorded when they arrived.
         let cited = plan["reasoning"]["facts"].as_array().cloned().unwrap_or_default();
         if cited.is_empty() {
@@ -410,6 +421,18 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
     r.needs_approval = ai && (uncovered || !r.review.is_empty());
     r.ok = r.errors.is_empty();
     r
+}
+
+/// Event kinds that carry what other people wrote.
+fn outside_event(kind: &str) -> bool {
+    kind == "*" || kind.starts_with("message.") || kind.starts_with("invite.")
+}
+
+fn waits_on_outside(steps: &[Value]) -> bool {
+    steps.iter().any(|s| {
+        s.get("wait").and_then(Value::as_str).map(|k| parse_duration(k).is_none() && outside_event(k)).unwrap_or(false)
+            || ["then", "else", "steps", "try"].iter().any(|k| s.get(*k).and_then(Value::as_array).map(|a| waits_on_outside(a)).unwrap_or(false))
+    })
 }
 
 fn strings(v: &Value) -> Vec<String> {
@@ -561,7 +584,10 @@ fn check_block(steps: &[Value], path: &str, defined: &mut Vec<String>, mandates:
                 r.explain.push(format!("{pad}ask you: {}{fb}", display(&m["ask"])));
             }
             "tell" => r.explain.push(format!("{pad}tell you: {}", display(&m["tell"]))),
-            "wait" => r.explain.push(format!("{pad}wait for {}", display(&m["wait"]))),
+            "wait" => r.explain.push(match m.get("where") {
+                Some(w) => format!("{pad}wait for {} where {}", display(&m["wait"]), short(w)),
+                None => format!("{pad}wait for {}", display(&m["wait"])),
+            }),
             "think" => r.explain.push(format!("{pad}stop and think: {}", display(&m["think"]))),
             "call" => r.explain.push(format!("{pad}run saved plan {}", display(&m["call"]))),
             _ => {}
@@ -814,8 +840,59 @@ pub fn resolve_thought(exec: &mut Exec, steps: Option<Vec<Value>>, report: Optio
 }
 
 /// Resume plans waiting for this event (or whose wait timed out).
+/// The id of an exchange's thread object.
+pub fn thread_id(key: &str) -> String {
+    let slug: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.:".contains(c) { c } else { '-' }).collect();
+    format!("obj:thread/{slug}")
+}
+
+/// Update (or start) an exchange's state. Given fields replace, the rest are kept; the last few states stay as history.
+pub fn track(ctx: &Ctx, a: &Map<String, Value>, plan: &str) -> String {
+    let key = str_arg(a, "thread");
+    let id = thread_id(&key);
+    let mut t = ctx.mem.object(&id).unwrap_or_else(|| json!({"thread": key, "status": "open", "history": [], "started": now()}));
+    if let Some(prev) = t.get("state").filter(|s| !s.is_null()).cloned() {
+        if a.get("state").map(|s| *s != prev).unwrap_or(false) {
+            let mut h = t["history"].as_array().cloned().unwrap_or_default();
+            h.push(json!({"state": prev, "at": t["updated"]}));
+            let n = h.len();
+            t["history"] = json!(h.into_iter().skip(n.saturating_sub(6)).collect::<Vec<_>>());
+        }
+    }
+    for k in ["with", "about", "state", "waiting_for", "status"] {
+        if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
+            t[k] = v.clone();
+        }
+    }
+    t["updated"] = json!(now());
+    t["by_plan"] = json!(plan);
+    if let Value::Object(m) = &mut t {
+        m.remove("id");
+        m.remove("type");
+    }
+    ctx.mem.put_object_with_id(&id, "thread", &t);
+    ctx.bus.emit(ctx.mem, "thread.updated", json!({"id": id, "thread": key, "state": t["state"], "status": t["status"]}));
+    id
+}
+
+/// Whether a plan waiting on an event takes this one: the kind matches and, if the wait has a `where`, it holds
+/// (evaluated with the plan's variables plus $event).
+pub fn awaits(vars: &Map<String, Value>, wait: &Value, kind: &str, event: &Value, ctx: &Ctx) -> bool {
+    if !event_matches(wait["kind"].as_str().unwrap_or(""), kind) {
+        return false;
+    }
+    match wait.get("where").filter(|w| !w.is_null()) {
+        None => true,
+        Some(cond) => {
+            let mut v = vars.clone();
+            v.insert("event".into(), event.clone());
+            eval(cond, &v, ctx).map(|x| truthy(&x)).unwrap_or(false)
+        }
+    }
+}
+
 pub fn on_event(exec: &mut Exec, kind: &str, event: &Value, ctx: &Ctx) {
-    if exec.status == "waiting:event" && event_matches(exec.wait["kind"].as_str().unwrap_or(""), kind) {
+    if exec.status == "waiting:event" && awaits(&exec.vars, &exec.wait, kind, event, ctx) {
         exec.vars.insert("event".into(), event.clone());
         exec.vars.insert("timed_out".into(), json!(false));
         exec.status = "running".into();
@@ -1038,6 +1115,17 @@ fn exec_step(exec: &mut Exec, step: &Value, ctx: &Ctx) -> Result<Flow, String> {
             let max = m.get("max").map(display).and_then(|s| parse_duration(&s));
             exec.status = "waiting:event".into();
             exec.wait = json!({"kind": what, "until": max.map(|s| now() + s)});
+            // Only the event this plan is actually waiting for (a reply from this broker about this load, say),
+            // checked with the plan's own variables plus $event. `about` says what's expected, in words.
+            if let Some(cond) = m.get("where") {
+                exec.wait["where"] = cond.clone();
+            }
+            if let Some(a) = m.get("about") {
+                exec.wait["about"] = json!(display(&eval(a, &vars, ctx)?));
+            }
+            if let Some(t) = m.get("thread") {
+                exec.wait["thread"] = json!(display(&eval(t, &vars, ctx)?));
+            }
         }
         return Ok(Flow::Pause);
     }
@@ -1086,6 +1174,10 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
             let id = ctx.mem.put_object("note", None, &json!({"text": str_arg(a, "text"),
                 "kind": a.get("kind").cloned().unwrap_or(json!("general")), "plan": exec.name}));
             return Ok(json!(id));
+        }
+        "track" => {
+            let a = args.as_object().unwrap();
+            return Ok(json!(track(ctx, a, &exec.name)));
         }
         "enable_rule" => {
             let name = str_arg(args.as_object().unwrap(), "name");

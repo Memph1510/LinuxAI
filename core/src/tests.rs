@@ -1064,3 +1064,17 @@ fn a_solved_situation_becomes_a_habit_replayed_without_the_model_until_it_fails(
     assert_eq!(c.handle(&json!({"op": "habit_forget", "habit": "memory.pressure"}))["ok"], false, "only the human forgets");
     assert_eq!(c.handle(&json!({"op": "habit_forget", "habit": "memory.pressure", "source": "human"}))["ok"], true);
 }
+
+#[test]
+fn a_plan_that_waits_for_someones_reply_rests_on_outside_information() {
+    let mem = Memory::in_memory();
+    let assess = json!({"confidence": 0.9, "consequences": ["a setting changes"], "outcomes": ["fine"]});
+    let plan = json!({"plan": "on reply", "assess": assess, "steps": [
+        {"wait": "message.received", "where": ["=", "$event.data.from", "dana@hollis-logistics.com"], "max": "2d"},
+        {"do": "set", "what": "power.profile", "to": "performance"}]});
+    let r = engine::check(&plan, &mem, "ai", 0.8);
+    assert!(r.outside && r.needs_approval, "whatever the reply says, acting on it needs the human's OK: {:?}", r.errors);
+    // Waiting on the machine's own events isn't outside.
+    let plan = json!({"plan": "on plug", "assess": assess, "steps": [{"wait": "power.plugged"}, {"do": "set", "what": "power.profile", "to": "performance"}]});
+    assert!(!engine::check(&plan, &mem, "ai", 0.8).outside);
+}
