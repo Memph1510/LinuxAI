@@ -122,6 +122,15 @@ CHECKS = [
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
     ("the core saved everything it was told (no failed writes all run)",
      "linuxai-core ctl '{\"op\":\"ping\"}' | grep -A3 '\"memory\"' | tr -d ' \\n'; echo", r'"memory":\{"healthy":true\}'),
+    ("screen: at the end of the run, the Workspace is still the main window",
+     "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sleep 6; sudo -u linuxai python3 -c \"import socket,json\n"
+     "s=socket.socket(socket.AF_UNIX);s.connect('/run/user/1000/linuxai-compositor.sock');s.sendall(b'{\\\"op\\\":\\\"windows\\\"}\\\\n')\n"
+     "w=[x for x in json.loads(s.makefile().readline())['windows'] if str(x['workspace'])!='-98' and x['workspace']==1]\n"
+     "ws=[x for x in w if x['title']=='LinuxAI Workspace'][0]\n"
+     "others=[x for x in w if x is not ws]\n"
+     "print('main' if all(ws['at'][0]<=x['at'][0] and ws['size'][0]>=x['size'][0] for x in others) else 'not-main', ws['at'], ws['size'])\n"
+     "print('pages-hidden' if not any('chrom' in str(x['app']).lower() for x in others) else 'pages-visible', [x['title'][:20] for x in others])\"",
+     r"(?s)^main.*^pages-hidden|no-hyprland"),
 ]
 
 
