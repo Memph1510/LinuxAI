@@ -5,9 +5,6 @@
 state="$HOME/.local/state/linuxai"; mkdir -p "$state"
 log="$state/screen.log"
 if [ "${LINUXAI_SCREEN:-graphical}" != "text" ] && command -v Hyprland >/dev/null; then
-    # Under pure CPU emulation (QEMU without KVM reports "qemu"), Mesa's software renderer crashes on emulated
-    # AVX; use its plain (non-JIT) renderer there. Real machines and KVM guests are left alone.
-    if [ "$(systemd-detect-virt 2>/dev/null)" = "qemu" ]; then export GALLIUM_DRIVER=softpipe; fi
     start=$(date +%s)
     echo "starting Hyprland $(date)" > "$log"
     Hyprland --config /etc/linuxai/hypr/hyprland.lua >> "$log" 2>&1

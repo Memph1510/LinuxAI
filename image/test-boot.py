@@ -226,7 +226,7 @@ def main() -> int:
     ser, mon = str(tmp / "serial.sock"), str(tmp / "mon.sock")
     accel = "kvm" if os.path.exists("/dev/kvm") else "tcg,thread=multi"
     qemu = subprocess.Popen([
-        "qemu-system-x86_64", "-accel", accel, "-cpu", "Haswell-noTSX", "-m", "3072", "-smp", str(min(os.cpu_count() or 2, 4)),
+        "qemu-system-x86_64", "-accel", accel, "-cpu", "SandyBridge", "-m", "3072", "-smp", str(min(os.cpu_count() or 2, 4)),
         "-cdrom", args.iso, "-boot", "d", "-display", "none", "-vga", "std",
         "-serial", f"unix:{ser},server,nowait", "-monitor", f"unix:{mon},server,nowait",
         "-nic", "user,model=virtio-net-pci"], stderr=subprocess.DEVNULL)
