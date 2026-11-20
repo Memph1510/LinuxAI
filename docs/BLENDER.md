@@ -76,8 +76,7 @@ New scenes, renders, previews and exports go to `~/blender/`. Each one is record
 ## Size
 
 Blender and what it needs add about 2.3 GB installed: Blender itself, Intel's GPU runtime, the denoiser,
-OpenVDB, USD and MaterialX. It's in the image for now. Installing it the first time it's needed is the
-alternative (see the checklist).
+OpenVDB, USD and MaterialX. It's built into the image (decided), which makes the ISO about 2.8 GB instead of 1.8 GB.
 
 ## Not yet
 

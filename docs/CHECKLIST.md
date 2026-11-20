@@ -156,12 +156,12 @@ Not decided yet. Each is an option to discuss, not planned work.
 
 ### To decide later: creative applications ([CREATIVE_TOOLS.md](CREATIVE_TOOLS.md))
 
-- Ship Blender in the image (now: +2.3 GB installed), or install it on first use
 - Whether live bridges may change the human's open scene while they work in it
 - Unity and Unreal accounts and licences: a setup task the AI walks you through, or yours alone
 
 ### Blender ([BLENDER.md](BLENDER.md))
 
+- [x] Built into the image (decided: keep it built in; +1 GB on the ISO, +2.3 GB installed)
 - [x] Headless jobs on staged copies: build, change, reopen and compare, preview and check, render, export
 - [x] Scripts inside files never run; Python the AI writes needs your OK
 - [x] Live bridge in your open Blender: see what's selected; change it only when asked, as one undo step
