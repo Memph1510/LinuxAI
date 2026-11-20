@@ -256,18 +256,24 @@ def main() -> int:
             con.run("""linuxai-core ctl '{"op":"submit","source":"human","plan":{"plan":"boot-question","why":"boot test","steps":[{"ask":"Book the test drive Saturday 10am?","opts":["Book it","Not now"],"why":"It is a $38,000 decision","lean":"Book it","as":"a"}]}}' >/dev/null;"""
                     """ linuxai-core ctl '{"op":"event","kind":"voice.listening","data":{}}' >/dev/null;"""
                     """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","magnify":true,"seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
-            time.sleep(2)
-            monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
-            if (tmp / "overlay.ppm").exists():
+            # Under emulation the layer can take a while to catch up: look every few seconds, for up to 90 s (the
+            # pointer stays 30 s from when it's drawn, the listening pill until voice.done).
+            ok, found, deadline = False, {}, time.time() + 90
+            while not ok and time.time() < deadline:
+                time.sleep(4)
+                monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
+                if not (tmp / "overlay.ppm").exists():
+                    continue
                 img = read_ppm(tmp / "overlay.ppm")
                 w, h, _ = img
-                ppm_to_png(tmp / "overlay.ppm", shots / "linuxai-overlay.png")
                 boxes = {"question card (top right)": (w - 400, 30, w, 330),
                          "voice indicator (bottom)": (w // 2 - 330, h - 80, w // 2 + 330, h),
                          "the AI's pointer (around 120,300 360x60)": (110, 290, 490, 370),
                          "the magnifier (beside it)": (500, 210, 870, 450)}
                 found = {k: amber_in(img, *b) - (amber_in(before, *b) if before else 0) for k, b in boxes.items()}
                 ok = all(n > 150 for n in found.values())
+            if (tmp / "overlay.ppm").exists():
+                ppm_to_png(tmp / "overlay.ppm", shots / "linuxai-overlay.png")
                 failed += not ok
                 print(f"  {'✓' if ok else '✗'} screen: the question card, voice indicator, the AI's pointer and its magnifier are drawn"
                       + ("" if ok else f"\n      amber pixels found: {found}"), flush=True)
