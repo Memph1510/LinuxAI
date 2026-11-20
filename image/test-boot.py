@@ -121,7 +121,7 @@ CHECKS = [
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
     ("the core saved everything it was told (no failed writes all run)",
-     "linuxai-core ctl '{\"op\":\"ping\"}' | grep -A3 '\"memory\"' | tr -d ' \\n'", r'"memory":\{"healthy":true\}'),
+     "linuxai-core ctl '{\"op\":\"ping\"}' | grep -A3 '\"memory\"' | tr -d ' \\n'; echo", r'"memory":\{"healthy":true\}'),
 ]
 
 
