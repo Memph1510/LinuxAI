@@ -40,6 +40,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// A cold Chromium on a busy or slow machine (several starting at once, a laptop just after boot) can take well
+/// over 30 s before it answers anything; its first answer gets longer.
+const START_TIMEOUT: Duration = Duration::from_secs(120);
 const PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug)]
@@ -159,7 +162,7 @@ impl Cdp {
         let reader = cdp.clone();
         let input = unsafe { File::from_raw_fd(our_in) };
         std::thread::spawn(move || reader.read_loop(input));
-        if let Err(e) = cdp.call("Target.setDiscoverTargets", json!({"discover": true}), None) {
+        if let Err(e) = cdp.call_within("Target.setDiscoverTargets", json!({"discover": true}), None, START_TIMEOUT) {
             let said = std::fs::read_to_string(&log).unwrap_or_default();
             // The line that says why (a crash dump after it says nothing useful).
             let lines: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -241,6 +244,10 @@ impl Cdp {
     }
 
     pub fn call(&self, method: &str, params: Value, session: Option<&str>) -> std::io::Result<Value> {
+        self.call_within(method, params, session, CALL_TIMEOUT)
+    }
+
+    fn call_within(&self, method: &str, params: Value, session: Option<&str>, timeout: Duration) -> std::io::Result<Value> {
         if !self.alive() {
             return Err(std::io::Error::other("the browser isn't running"));
         }
@@ -257,7 +264,7 @@ impl Cdp {
             bytes.push(0);
             out.write_all(&bytes)?;
         }
-        let reply = rx.recv_timeout(CALL_TIMEOUT).map_err(|_| {
+        let reply = rx.recv_timeout(timeout).map_err(|_| {
             self.pending.lock().unwrap().remove(&id);
             std::io::Error::other(format!("{method}: no reply from the browser"))
         })?;
