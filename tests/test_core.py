@@ -818,3 +818,26 @@ def test_blender_tool_shows_previews_and_asks_before_python(env, live_core, monk
     tb.mind, tb.asker = False, (lambda q, o: asked.append(q) or "no")
     out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "x"}], "approved": True})
     assert out == "The human said no."
+
+
+def test_long_results_come_in_pages_and_nothing_is_lost(env):
+    cfg, mem, tb, tmp = env
+    lines = [f"line {i}: " + "x" * 60 for i in range(1500)]
+    (tmp / "big.txt").write_text("\n".join(lines))
+    out, err = tb.execute("run_command", {"command": f"cat {tmp / 'big.txt'}"})
+    assert not err and out.startswith("[result r1:") and "page 1 of" in out and "lines)" in out
+    pages = int(out.split(" of ")[1].split(";")[0])
+    text = out.split("\n", 2)[2]
+    for n in range(2, pages + 1):
+        more, _ = tb.execute("more", {"result": "r1", "page": n})
+        text += more.split("\n", 1)[1]
+    assert text == tb._results["r1"][0] and text.count("\nline ") == 1500, "every line is there, exactly"
+    # JSON gets its shape up front.
+    from linuxai.tools import summarize
+    assert summarize(json.dumps({"events": [{"kind": "a"}] * 300, "ok": True})).startswith("(shape: {events: [300 items of {kind")
+    # The rest of an outside result is outside information too.
+    tb._results["r9"] = ("y" * 30000, True)
+    tb.outside_seen = False
+    tb.execute("more", {"result": "r9", "page": 2})
+    assert tb.outside_seen
+    assert "Error" in tb.execute("more", {"result": "r404", "page": 2})[0]
