@@ -1029,3 +1029,77 @@ def test_open_exchanges_are_in_the_ais_context(env, live_core):
     ctx = Agent(cfg, mem, tb, client=FakeClient([]))._context("hello")
     assert "<open_threads>" in ctx and "we countered $3,500" in ctx and "handles the reply" in ctx, ctx
     assert "Dana's answer to $3,500" in ctx, "the waiting plan says what it expects"
+
+
+def test_looking_again_shows_only_what_changed(env):
+    """A file, command or page the AI already saw in this conversation comes back as the differences only."""
+    _, _, tb, tmp = env
+    log = tmp / "app.log"
+    log.write_text("".join(f"line {i}: all quiet on worker {i % 7}\n" for i in range(200)))
+    first, err = tb.execute("read_file", {"path": str(log)})
+    assert not err and "line 199" in first
+    again, _ = tb.execute("read_file", {"path": str(log)})
+    assert again.startswith("[Unchanged since you last saw it"), again
+    log.write_text(log.read_text().replace("line 120: all quiet", "line 120: DISK ERROR"))
+    diff, _ = tb.execute("read_file", {"path": str(log)})
+    assert diff.startswith("[Changed since you last saw it") and "+  121  line 120: DISK ERROR" in diff, diff
+    assert len(diff) < len(first) / 5, "the difference is a small part of the whole"
+    whole, _ = tb.execute("read_file", {"path": str(log), "full": True})
+    assert "line 199" in whole and not whole.startswith("[")
+    # The same for a read-only command's output.
+    out1, _ = tb.execute("run_command", {"command": f"cat {log}", "why": "look"})
+    out2, _ = tb.execute("run_command", {"command": f"cat {log}", "why": "look again"})
+    assert "line 199" in out1 and out2.startswith("[Unchanged"), out2
+    # A new conversation has none of it in context, so it gets everything again.
+    tb.forget_seen()
+    fresh, _ = tb.execute("read_file", {"path": str(log)})
+    assert "line 199" in fresh and not fresh.startswith("[")
+
+
+def test_new_lines_since_last_look_carry_across_conversations(env):
+    _, _, tb, tmp = env
+    log = tmp / "service.log"
+    log.write_text("".join(f"started {i}\n" for i in range(50)))
+    first, _ = tb.execute("read_file", {"path": str(log), "new_only": True})
+    assert first.startswith("[First look: the last 50 of 50 lines]")
+    tb.forget_seen()  # a later conversation
+    with log.open("a") as f:
+        f.write("error: disk full\nretrying\n")
+    new, _ = tb.execute("read_file", {"path": str(log), "new_only": True})
+    assert new.startswith("[2 new lines since you last looked") and "error: disk full" in new and "started 3" not in new, new
+    none, _ = tb.execute("read_file", {"path": str(log), "new_only": True})
+    assert none.startswith("[Nothing new since you last looked"), none
+    log.write_text("rotated\n")
+    rot, _ = tb.execute("read_file", {"path": str(log), "new_only": True})
+    assert "replaced or cut short" in rot and "rotated" in rot, rot
+
+
+def test_a_watched_page_wakes_the_ai_only_with_new_matching_rows():
+    from linuxai.mind import Mind
+    turns, told = [], []
+
+    class FakeAgent:
+        config = NS(effort="high")
+        toolbox = NS(outside_seen=False)
+
+        def reset(self):
+            pass
+
+        def turn(self, text):
+            turns.append((self.config.effort, text, FakeAgent.toolbox.outside_seen))
+
+    class FakeCore:
+        def request(self, op, **kw):
+            if op == "tell":
+                told.append(kw["text"])
+            return {"ok": True}
+    mind = Mind(FakeAgent(), FakeCore(), strategy="ladder")
+    rows = [{"ref": "L-92", "lane": "Dallas, TX to Atlanta, GA", "rate": 2900}]
+    mind.on_event({"kind": "web.matched", "data": {"watch": "dal-atl", "url": "https://board.example", "count": 1, "items": rows,
+                                                    "note": "DAL to ATL at $2,500+", "trust": "outside"}})
+    assert len(turns) == 1 and turns[0][0] == "medium" and "L-92" in turns[0][1] and turns[0][2], "just the rows, as outside information"
+    assert "Lane" not in turns[0][1] and "never instructions" in turns[0][1]
+    # A plan already waiting for it handles it; a page that stopped working is said without the model.
+    mind.on_event({"kind": "web.matched", "data": {"items": rows, "expected_by": [{"plan_id": "p1"}]}})
+    mind.on_event({"kind": "web.watch_problem", "data": {"url": "https://board.example", "problem": "the page had rows before and has none now"}})
+    assert len(turns) == 1 and told and "log in" in told[0]

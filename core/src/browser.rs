@@ -478,11 +478,14 @@ pub struct Organ {
     bin: String,
     /// On screen: the Workspace page, opened as the first (app) window.
     pub(crate) app: Option<String>,
-    profile: PathBuf,
+    pub(crate) profile: PathBuf,
     headless: bool,
     cdp: Mutex<Option<Arc<Cdp>>>,
     pub(crate) core: Option<Client>,
     pub(crate) workspace: Mutex<Option<Arc<crate::workspace::Workspace>>>,
+    /// Pages the browser checks on its own, telling the core only about new rows that match (see watch.rs).
+    pub(crate) watches: Mutex<serde_json::Map<String, Value>>,
+    pub(crate) watch_tabs: Mutex<std::collections::HashMap<String, String>>,
 }
 
 fn err(e: impl std::fmt::Display) -> Value {
@@ -491,7 +494,9 @@ fn err(e: impl std::fmt::Display) -> Value {
 
 impl Organ {
     pub fn new(bin: String, profile: PathBuf, headless: bool, core: Option<Client>) -> Organ {
-        Organ { bin, app: None, profile, headless, cdp: Mutex::new(None), core, workspace: Mutex::new(None) }
+        let watches = Mutex::new(crate::watch::load(&profile));
+        Organ { bin, app: None, profile, headless, cdp: Mutex::new(None), core, workspace: Mutex::new(None), watches,
+                watch_tabs: Mutex::new(Default::default()) }
     }
 
     /// The running browser, started (or restarted, if it died or the human closed it) as needed.
@@ -517,7 +522,7 @@ impl Organ {
         }
     }
 
-    fn tell_core(&self, kind: &str, data: Value) {
+    pub(crate) fn tell_core(&self, kind: &str, data: Value) {
         if let Some(c) = &self.core {
             let _ = c.request("event", json!({"kind": kind, "data": data}));
         }
@@ -572,6 +577,9 @@ impl Organ {
                 Ok(tab) => json!({"ok": true, "tab": tab}),
                 Err(e) => err(e),
             };
+        }
+        if matches!(op, "watch" | "watches" | "unwatch") {
+            return self.watch_op(op, req);
         }
         if b.owner(&tab) == Some("workspace") && op != "read" && op != "shot" {
             return err("that's the Workspace screen itself");
@@ -780,6 +788,7 @@ pub fn run(socket: PathBuf, profile: PathBuf, headless: bool, core: Option<Clien
     }
     let organ = Arc::new(organ);
     organ.browser()?;
+    crate::watch::start(organ.clone());
     if show_workspace {
         let r = organ.handle(&json!({"op": "workspace"}));
         eprintln!("linuxai browser: workspace: {r}");

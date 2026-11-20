@@ -258,6 +258,19 @@ fn apply_op(op: &str, a: &[Value]) -> Result<Value, String> {
     })
 }
 
+/// Whether an object meets a `where`: {field: value | [op, value]} (the same form `find` uses).
+pub fn where_matches(o: &Value, w: &Map<String, Value>) -> bool {
+    w.iter().all(|(k, want)| {
+        let have = o.get(k).cloned().unwrap_or(Value::Null);
+        match want {
+            Value::Array(x) if x.len() == 2 && x[0].as_str().map(|s| OPS.contains(&s)).unwrap_or(false) => {
+                apply_op(x[0].as_str().unwrap(), &[have, x[1].clone()]).map(|r| truthy(&r)).unwrap_or(false)
+            }
+            _ => apply_op("=", &[have, want.clone()]).map(|r| truthy(&r)).unwrap_or(false),
+        }
+    })
+}
+
 /// `{"find": {"type": "bill", "from": "@verizon", "where": {"status": "unpaid"}, "pick": "newest", "last": 6}}`
 fn find(spec: &Value, vars: &Map<String, Value>, ctx: &Ctx) -> Result<Value, String> {
     // Evaluate the spec, except that a where-condition [op, value] keeps its operator and only the value
@@ -289,17 +302,7 @@ fn find(spec: &Value, vars: &Map<String, Value>, ctx: &Ctx) -> Result<Value, Str
         });
     }
     if let Some(Value::Object(w)) = spec.get("where") {
-        items.retain(|o| {
-            w.iter().all(|(k, want)| {
-                let have = o.get(k).cloned().unwrap_or(Value::Null);
-                match want {
-                    Value::Array(x) if x.len() == 2 && x[0].as_str().map(|s| OPS.contains(&s)).unwrap_or(false) => {
-                        apply_op(x[0].as_str().unwrap(), &[have, x[1].clone()]).map(|r| truthy(&r)).unwrap_or(false)
-                    }
-                    _ => apply_op("=", &[have, want.clone()]).map(|r| truthy(&r)).unwrap_or(false),
-                }
-            })
-        });
+        items.retain(|o| where_matches(o, w));
     }
     match spec.get("pick").and_then(Value::as_str) {
         Some("newest") => return Ok(items.first().cloned().unwrap_or(Value::Null)),
@@ -425,7 +428,7 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
 
 /// Event kinds that carry what other people wrote.
 fn outside_event(kind: &str) -> bool {
-    kind == "*" || kind.starts_with("message.") || kind.starts_with("invite.")
+    kind == "*" || kind.starts_with("message.") || kind.starts_with("invite.") || kind.starts_with("web.")
 }
 
 fn waits_on_outside(steps: &[Value]) -> bool {
