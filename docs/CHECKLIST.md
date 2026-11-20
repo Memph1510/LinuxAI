@@ -144,21 +144,31 @@ Not decided yet. Each is an option to discuss, not planned work.
 - Local vision model for private or offline screen reading
 - Measure how often it asks you, and make it go down
 
-### To decide later: from the Storytold / ArtCraft repositories ([RESEARCH_STORYTOLD.md](RESEARCH_STORYTOLD.md))
+### From the Storytold / ArtCraft repositories ([RESEARCH_STORYTOLD.md](RESEARCH_STORYTOLD.md))
 
-- Staged copy then verified export as a rule for every organ that edits files
-- An MCP surface for the verb registry, so outside agents can use LinuxAI under the same checks
-- Evidence records after acting: what was checked, what wasn't, how sure
-- Summary-first, paged tool results instead of clipping
-- One OS-wide "which model does each tool" table, editable in the Workspace
-- Local background removal and object selection in pure Rust on the CPU (BEN2, SAM on rten)
-- Ship selected Craft apps (PDF, spreadsheet, photo) as organs
+- [x] Finished work says what was checked and what wasn't (core-enforced for the AI; shown in the Workspace)
+- [x] Long results come as a summary and pages, never silently cut
+- [x] One table of which model does which job, yours to set
+- [x] Staged copy then verified export: the rule for every file-editing organ
+- [x] Scene-first picture prompt
+- [ ] Local background removal and object selection on the CPU (BEN2, SAM on rten), with verified model installs
+- [ ] Later: an MCP surface for the verb registry
+- [ ] Not yet: Craft apps as organs (PDFCraft to watch)
 
 ### To decide later: creative applications ([CREATIVE_TOOLS.md](CREATIVE_TOOLS.md))
 
-- Ship Blender in the image, or install it on first use
 - Whether live bridges may change the human's open scene while they work in it
 - Unity and Unreal accounts and licences: a setup task the AI walks you through, or yours alone
+
+### Blender ([BLENDER.md](BLENDER.md))
+
+- [x] Built into the image (decided: keep it built in; +1 GB on the ISO, +2.3 GB installed)
+- [x] Headless jobs on staged copies: build, change, reopen and compare, preview and check, render, export
+- [x] Scripts inside files never run; Python the AI writes needs your OK
+- [x] Live bridge in your open Blender: see what's selected; change it only when asked, as one undo step
+- [ ] Long renders as background tasks with progress
+- [ ] Plan verbs for Blender steps
+- [ ] UV/texturing ops, geometry nodes
 
 ### Calendar ([CALENDAR.md](CALENDAR.md))
 

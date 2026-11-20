@@ -766,3 +766,105 @@ def test_the_ai_keeps_the_calendar_from_conversation_and_sees_it_every_turn(env,
     assert not err and "Error" not in out, out
     cal = Agent(cfg, mem, tb, client=FakeClient([]))._calendar_context()
     assert "Lunch" not in cal and "Dentist" in cal, cal
+
+
+FAKE_BLENDER = r'''#!/usr/bin/env python3
+import json, sys, base64
+a = sys.argv
+job_path, result_path = a[a.index("--") + 1], a[a.index("--") + 2]
+j = json.load(open(job_path))
+png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+if j["op"] == "apply":
+    open(j["save_as"], "wb").write(b"BLENDER")
+    open(j["preview"]["output"], "wb").write(png)
+    r = {"ok": True, "done": [{"op": o["op"]} for o in j["ops"]], "before": {"objects": []},
+         "preview": {"path": j["preview"]["output"], "check": {"verdict": "ok"}}}
+elif j["op"] == "inspect":
+    r = {"ok": True, "scene": {"objects": [{"name": "Ball", "type": "MESH"}], "scripts_in_file": []}}
+else:
+    r = {"ok": False, "error": "not in the fake"}
+json.dump(r, open(result_path, "w"))
+'''
+
+
+def test_blender_tool_shows_previews_and_asks_before_python(env, live_core, monkeypatch):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    fake = tmp / "blender"
+    fake.write_text(FAKE_BLENDER)
+    fake.chmod(0o755)
+    (tmp / "engine.py").write_text("# the fake doesn't read it")
+    monkeypatch.setenv("LINUXAI_BLENDER", str(fake))
+    monkeypatch.setenv("LINUXAI_BLENDER_ENGINE", str(tmp / "engine.py"))
+    monkeypatch.setenv("LINUXAI_BLENDER_DIR", str(tmp / "b"))
+    assert "blender" in {t["name"] for t in tb.tools()}
+    out, err = tb.execute("blender", {"op": "new", "name": "desk", "ops": [{"op": "add", "type": "cube"}]})
+    assert not err and isinstance(out, list), out
+    assert out[1]["type"] == "image", "the AI sees the preview"
+    assert '"saved"' in out[0]["text"] and "desk.blend" in out[0]["text"]
+    # Python inside Blender: the human is asked, with the code in front of them.
+    asked = []
+    tb.asker = lambda q, o: asked.append(q) or "no"
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}]})
+    assert out == "The human said no." and "print(42)" in asked[0]
+    tb.asker = lambda q, o: "yes"
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}], "approved": True})
+    assert isinstance(out, list), out
+    # Behind the scenes nobody is there to say yes: it doesn't happen.
+    tb.mind = True
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}]})
+    assert "aren't here" in out
+    # The model can't approve for the human.
+    tb.mind, tb.asker = False, (lambda q, o: asked.append(q) or "no")
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "x"}], "approved": True})
+    assert out == "The human said no."
+
+
+def test_long_results_come_in_pages_and_nothing_is_lost(env):
+    cfg, mem, tb, tmp = env
+    lines = [f"line {i}: " + "x" * 60 for i in range(1500)]
+    (tmp / "big.txt").write_text("\n".join(lines))
+    out, err = tb.execute("run_command", {"command": f"cat {tmp / 'big.txt'}"})
+    assert not err and out.startswith("[result r1:") and "page 1 of" in out and "lines)" in out
+    pages = int(out.split(" of ")[1].split(";")[0])
+    text = out.split("\n", 2)[2]
+    for n in range(2, pages + 1):
+        more, _ = tb.execute("more", {"result": "r1", "page": n})
+        text += more.split("\n", 1)[1]
+    assert text == tb._results["r1"][0] and text.count("\nline ") == 1500, "every line is there, exactly"
+    # JSON gets its shape up front.
+    from linuxai.tools import summarize
+    assert summarize(json.dumps({"events": [{"kind": "a"}] * 300, "ok": True})).startswith("(shape: {events: [300 items of {kind")
+    # The rest of an outside result is outside information too.
+    tb._results["r9"] = ("y" * 30000, True)
+    tb.outside_seen = False
+    tb.execute("more", {"result": "r9", "page": 2})
+    assert tb.outside_seen
+    assert "Error" in tb.execute("more", {"result": "r404", "page": 2})[0]
+
+
+def test_finishing_a_task_says_how_the_ai_knows(env, live_core):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    tid = live_core.request("task_create", spec={"title": "Cheapest diesel near Memphis"}, source="ai")["task"]
+    out, _ = tb.execute("finish_task", {"task_id": tid, "done": True, "result": "Pilot, $3.41"})
+    assert out.startswith("Error") and "checked" in out, out
+    out, _ = tb.execute("finish_task", {"task_id": tid, "done": True, "result": "Pilot, $3.41",
+                                        "checked": ["GasBuddy, 6 stations, 20 min ago"], "not_checked": ["price at arrival"],
+                                        "confidence": 0.8})
+    assert out == "OK", out
+    tree = live_core.request("task", task=tid)["tree"]
+    assert tree["status"] == "done" and tree["evidence"]["checked"] == ["GasBuddy, 6 stations, 20 min ago"]
+
+
+def test_the_model_table_picks_each_jobs_model(env, live_core):
+    from linuxai.cli import use_models
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    live_core.request("models_set", source="human", job="background", uses="claude-sonnet-5-5")
+    live_core.request("models_set", source="human", job="thinking_effort", uses="medium")
+    use_models(cfg, live_core, "background")
+    assert cfg.model == "claude-sonnet-5-5" and cfg.effort == "medium"
+    out, _ = tb.execute("models", {})
+    assert "background: claude-sonnet-5-5 (your choice)" in out and "reading_email:" in out
+    assert live_core.request("models_set", job="background", uses="x")["ok"] is False, "the AI can't set it"

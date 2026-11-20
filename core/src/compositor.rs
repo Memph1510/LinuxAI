@@ -222,7 +222,8 @@ impl Organ {
     /// the Workspace (they keep drawing on the hidden workspace, so the live picture keeps coming).
     pub fn tidy(&self) {
         let Ok(list) = self.hypr.json("clients") else { return };
-        let list = list.as_array().cloned().unwrap_or_default();
+        let mut list = list.as_array().cloned().unwrap_or_default();
+        let mut moved = false;
         let is_ws = |c: &Value| c["title"] == "LinuxAI Workspace";
         let is_browser = |c: &Value| c["class"].as_str().map(|k| { let k = k.to_lowercase(); k.contains("chromium") || k.contains("chrome") }).unwrap_or(false);
         let hidden = |c: &Value| c["workspace"]["name"].as_str().map(|n| n.starts_with("special:")).unwrap_or(false);
@@ -232,7 +233,16 @@ impl Organ {
                 let _ = self.hypr.dispatch(&format!("hl.dsp.window.float({{ window = \"address:{a}\", action = \"toggle\" }})"));
             } else if !is_ws(c) && is_browser(c) && !hidden(c) {
                 let _ = self.hypr.dispatch(&format!("hl.dsp.window.move({{ window = \"address:{a}\", workspace = \"special:pages\", follow = false }})"));
+                moved = true;
             }
+        }
+        // Moving a page away can hand its main spot to another window: look again, and since that change was ours,
+        // not the human's, the Workspace goes back in the main spot.
+        if moved {
+            if let Ok(again) = self.hypr.json("clients") {
+                list = again.as_array().cloned().unwrap_or_default();
+            }
+            *self.promoted.lock().unwrap() = None;
         }
         // The main spot (master layout: the leftmost tiled window). Swap the Workspace in once, so it never fights you.
         if let Some(w) = list.iter().find(|c| is_ws(c)) {
@@ -260,7 +270,7 @@ impl Organ {
             if let Ok(s) = UnixStream::connect(me.hypr.dir.join(".socket2.sock")) {
                 let mut last_focus = String::new();
                 for line in BufReader::new(s).lines().map_while(Result::ok) {
-                    if line.starts_with("openwindow>>") || line.starts_with("windowtitle") {
+                    if line.starts_with("openwindow>>") || line.starts_with("windowtitle") || line.starts_with("closewindow>>") {
                         me.tidy();
                     }
                     if let Some((kind, data)) = Self::translate(&line) {
@@ -417,6 +427,48 @@ mod tests {
         assert_eq!(p["shown"]["magnify"], true);
         assert_eq!(p["shown"]["note"], "this line");
         assert_eq!(o.handle(&json!({"op": "point", "x": 1}))["ok"], false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Moving the AI's page away can hand the main spot to the session window; the Workspace goes back there,
+    /// even after it was promoted once (that change was the OS's, not the human's).
+    #[test]
+    fn the_workspace_keeps_the_main_spot_when_a_page_leaves_it() {
+        let dir = std::env::temp_dir().join(format!("lx-hypr-tidy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let win = |a: &str, class: &str, title: &str, x: i64| json!({"address": a, "class": class, "title": title,
+            "workspace": {"id": 1, "name": "1"}, "at": [x, 40], "size": [600, 700], "floating": false});
+        // Before: the page is in the main spot; after it's moved away, Hyprland gives the spot to the session.
+        let lists = vec![
+            json!([win("0xa1", "chromium", "Hello", 0), win("0xb2", "foot", "LinuxAI", 640), win("0xc3", "Chromium", "LinuxAI Workspace", 900)]),
+            json!([win("0xb2", "foot", "LinuxAI", 0), win("0xc3", "Chromium", "LinuxAI Workspace", 900)]),
+        ];
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let l = UnixListener::bind(dir.join(".socket.sock")).unwrap();
+        let (rec, served) = (asked.clone(), Arc::new(Mutex::new(0usize)));
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                rec.lock().unwrap().push(req.clone());
+                let out = if req == "j/clients" {
+                    let mut i = served.lock().unwrap();
+                    let moved = rec.lock().unwrap().iter().any(|r| r.contains("special:pages"));
+                    *i += 1;
+                    lists[if moved { 1 } else { 0 }].to_string()
+                } else { "ok".into() };
+                let _ = s.write_all(out.as_bytes());
+            }
+        });
+        let o = Organ { hypr: Hypr { dir: dir.clone() }, core: None, promoted: std::sync::Mutex::new(Some("0xc3".into())) };
+        o.tidy();
+        let got = asked.lock().unwrap().clone();
+        let page_moved = got.iter().position(|g| g.contains("0xa1") && g.contains("special:pages")).expect("page moved away");
+        let swap = got.iter().position(|g| g.contains("swapwithmaster")).unwrap_or_else(|| panic!("Workspace not put back: {got:?}"));
+        assert!(swap > page_moved);
+        assert!(got.iter().any(|g| g == r#"dispatch hl.dsp.focus({ window = "address:0xc3" })"#));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

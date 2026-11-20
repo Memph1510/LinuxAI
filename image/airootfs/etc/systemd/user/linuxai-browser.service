@@ -1,5 +1,7 @@
 [Unit]
 Description=LinuxAI shared browser (one Chromium you and the AI use at the same time)
+# Not for root: an admin logging in on a console gets no LinuxAI services (and no unsandboxed browser).
+ConditionUser=!root
 
 [Service]
 EnvironmentFile=-%h/.config/linuxai/env

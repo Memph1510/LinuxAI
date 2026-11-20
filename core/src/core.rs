@@ -272,10 +272,26 @@ impl Core {
     // API operations
     // ---------------------------------------------------------------------------------------
 
+    /// One request. If anything it wrote to memory failed to save (a full disk, say), it didn't happen as
+    /// reported: the answer says so instead of claiming success.
     pub fn handle(self: &Arc<Self>, req: &Value) -> Value {
+        let (failed_before, _) = self.mem.write_failures();
+        let mut r = self.handle_inner(req);
+        let (failed_after, why) = self.mem.write_failures();
+        if failed_after > failed_before && req["op"] != "ping" {
+            r = json!({"ok": false, "error": format!("the core couldn't save this to its memory: {why}"), "partial": r});
+        }
+        r
+    }
+
+    fn handle_inner(self: &Arc<Self>, req: &Value) -> Value {
         let op = req["op"].as_str().unwrap_or("");
         match op {
-            "ping" => json!({"ok": true, "version": env!("CARGO_PKG_VERSION")}),
+            "ping" => {
+                let (failed, why) = self.mem.write_failures();
+                json!({"ok": true, "version": env!("CARGO_PKG_VERSION"),
+                       "memory": if failed == 0 { json!({"healthy": true}) } else { json!({"healthy": false, "failed_writes": failed, "last_error": why}) }})
+            }
             "state" => json!({"ok": true, "state": *self.state.lock().unwrap()}),
             "verbs" => json!({"ok": true, "verbs": verbs::registry_json()}),
             "check" => {
@@ -372,6 +388,15 @@ impl Core {
             op if op.starts_with("playbook") => self.playbook_op(op, req),
             op if op.starts_with("prompt") => self.prompt_op(op, req),
             "object_put" | "find" => self.object_op(op, req),
+            "models" => crate::models::table(&self.mem),
+            // Which model does which job is the human's choice; the AI reads the table and can suggest.
+            "models_set" => {
+                if req["source"] != "human" {
+                    json!({"ok": false, "error": "which model does which job is the human's choice: suggest it to them"})
+                } else {
+                    crate::models::set(&self.mem, &self.bus, req["job"].as_str().unwrap_or(""), req["uses"].as_str().unwrap_or(""))
+                }
+            }
             "calendar" | "calendar_free" | "invites" | "calendar_import" => crate::calendar::op(&self.mem, &self.bus, op, req),
             // The calendar is the AI's working knowledge of the human's time: it writes what the human tells it
             // directly. Subscribed calendars and invitations stay outside information (calendar.rs refuses to edit them).

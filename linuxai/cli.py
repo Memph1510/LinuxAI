@@ -70,6 +70,20 @@ def show_log(memory: Memory) -> None:
 YES_NO = {"y": "yes", "yes": "yes", "n": "no", "no": "no", "always": "always", "a": "always"}
 
 
+def use_models(config: Config, core, job: str) -> None:
+    """Take this job's model (and the effort) from the core's table: the human's choice, the environment or the default."""
+    if not core:
+        return
+    try:
+        jobs = {j["job"]: j for j in core.request("models")["jobs"]}
+    except Exception:  # noqa: BLE001 - an older core without the table: keep the config's own values
+        return
+    if jobs.get(job, {}).get("uses"):
+        config.model = jobs[job]["uses"]
+    if jobs.get("thinking_effort", {}).get("uses"):
+        config.effort = jobs["thinking_effort"]["uses"]
+
+
 def connect_core():
     from .core_client import Core
 
@@ -223,6 +237,7 @@ def repl(config: Config) -> None:
 
     memory = Memory(config)
     core = connect_core()
+    use_models(config, core, "thinking")
     toolbox = Toolbox(config, memory, core=core, browser=shared_browser(core), screen=shared_screen(core))
     agent = Agent(config, memory, toolbox)
     _setup_readline(config)
@@ -326,6 +341,7 @@ def mind(config: Config) -> None:
     while not core.available():
         time.sleep(3)
     config.mode = "auto"
+    use_models(config, core, "background")
     memory = Memory(config)
     toolbox = Toolbox(config, memory, core=core, mind=True, browser=shared_browser(core), screen=shared_screen(core))
     agent = Agent(config, memory, toolbox)
@@ -475,7 +491,12 @@ def main(argv: list[str] | None = None) -> None:
         mind(config)
     elif words == ["extract"]:
         from .mail import main as extract_main
-        sys.exit(extract_main(os.environ.get("LINUXAI_EXTRACT_MODEL", config.model)))
+        core = connect_core()
+        if core:
+            use_models(config, core, "reading_email")  # your choice, else LINUXAI_EXTRACT_MODEL, else thinking's
+        elif os.environ.get("LINUXAI_EXTRACT_MODEL"):
+            config.model = os.environ["LINUXAI_EXTRACT_MODEL"]
+        sys.exit(extract_main(config.model))
     elif words == ["observe"]:
         from .observer import run
         run()

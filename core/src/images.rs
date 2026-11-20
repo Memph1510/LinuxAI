@@ -305,6 +305,12 @@ fn generate(req: &Value, api: &dyn Api, cfg: &ImageConfig) -> Result<Value, Stri
     let inputs: Vec<PathBuf> = req["inputs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).map(input_path).collect())
         .transpose()?.unwrap_or_default();
     let mut options = route(cfg, api);
+    // The human's order of preference for pictures (the model table), when set.
+    let order = api.call("models", json!({}))["jobs"].as_array()
+        .and_then(|j| j.iter().find(|j| j["job"] == "pictures").and_then(|j| j["uses"].as_str().map(String::from)))
+        .unwrap_or_default();
+    let rank = |b: &Value| order.split(',').map(str::trim).position(|o| b["backend"] == o).unwrap_or(usize::MAX);
+    options.sort_by_key(rank);
     if options.is_empty() {
         return Err(format!("nothing here can make pictures from a description yet. {}", advice(0.0, cfg)));
     }

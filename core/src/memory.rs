@@ -69,6 +69,9 @@ fn base36(mut n: u64) -> String {
 /// action in one plan never blocks the rest of the system.
 pub struct Memory {
     conn: Mutex<Connection>,
+    /// Writes that failed (disk full, read-only, corrupt): how many, and the last reason. Never silent: the core
+    /// reports a request whose writes failed as failed, and `ping` reports the memory's health.
+    failures: Mutex<(u64, String)>,
 }
 
 impl Memory {
@@ -79,26 +82,51 @@ impl Memory {
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         db.execute_batch(SCHEMA)?;
-        Ok(Memory { conn: Mutex::new(db) })
+        Ok(Memory { conn: Mutex::new(db), failures: Mutex::new((0, String::new())) })
     }
 
     fn c(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Record a write that failed. Returns whether it worked.
+    fn wr<T>(&self, r: rusqlite::Result<T>) -> bool {
+        match r {
+            Ok(_) => true,
+            Err(e) => {
+                let mut f = self.failures.lock().unwrap_or_else(|e| e.into_inner());
+                f.0 += 1;
+                f.1 = e.to_string();
+                eprintln!("linuxai memory: a write failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Tests: make every write fail, as a full disk would.
+    #[cfg(test)]
+    pub fn refuse_writes(&self) {
+        self.c().execute_batch("PRAGMA query_only = ON;").unwrap();
+    }
+
+    /// (failed writes so far, the last reason)
+    pub fn write_failures(&self) -> (u64, String) {
+        self.failures.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     pub fn in_memory() -> Self {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA).unwrap();
-        Memory { conn: Mutex::new(db) }
+        Memory { conn: Mutex::new(db), failures: Mutex::new((0, String::new())) }
     }
 
     // ---- events ----
     pub fn add_event(&self, kind: &str, data: &Value) -> i64 {
         let db = self.c();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO events(ts, kind, data) VALUES (?1, ?2, ?3)",
             params![now(), kind, data.to_string()],
-        );
+        ));
         db.last_insert_rowid()
     }
 
@@ -125,19 +153,19 @@ impl Memory {
     // ---- journal ----
     pub fn journal_begin(&self, plan_id: &str, key: &str, verb: &str, args: &Value, explain: &str) -> i64 {
         let db = self.c();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO journal(ts, plan_id, step_key, verb, args, explain, status) VALUES (?1,?2,?3,?4,?5,?6,'started')",
             params![now(), plan_id, key, verb, args.to_string(), explain],
-        );
+        ));
         db.last_insert_rowid()
     }
 
     pub fn journal_end(&self, id: i64, status: &str, result: &str) {
         let db = self.c();
-        let _ = db.execute(
+        self.wr(db.execute(
             "UPDATE journal SET status=?1, result=?2 WHERE id=?3",
             params![status, result, id],
-        );
+        ));
     }
 
     /// Status of a previously started step with this idempotency key, if any.
@@ -173,11 +201,11 @@ impl Memory {
     pub fn save_plan(&self, id: &str, name: &str, source: &str, status: &str, state: &Value) {
         let db = self.c();
         let t = now();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO plans(id, name, source, status, state, created, updated) VALUES (?1,?2,?3,?4,?5,?6,?6)
              ON CONFLICT(id) DO UPDATE SET status=excluded.status, state=excluded.state, updated=excluded.updated",
             params![id, name, source, status, state.to_string(), t],
-        );
+        ));
     }
 
     pub fn load_plan(&self, id: &str) -> Option<Value> {
@@ -205,19 +233,19 @@ impl Memory {
     // ---- rules ----
     pub fn put_rule(&self, name: &str, body: &Value, source: &str, enabled: bool) {
         let db = self.c();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO rules(name, body, enabled, source, created) VALUES (?1,?2,?3,?4,?5)
              ON CONFLICT(name) DO UPDATE SET body=excluded.body, enabled=excluded.enabled",
             params![name, body.to_string(), enabled as i64, source, now()],
-        );
+        ));
     }
 
     pub fn insert_rule_if_missing(&self, name: &str, body: &Value, source: &str) {
         let db = self.c();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT OR IGNORE INTO rules(name, body, enabled, source, created) VALUES (?1,?2,1,?3,?4)",
             params![name, body.to_string(), source, now()],
-        );
+        ));
     }
 
     pub fn set_rule_enabled(&self, name: &str, enabled: bool) -> bool {
@@ -243,19 +271,19 @@ impl Memory {
     // ---- mandates (trust learned from conversation) ----
     pub fn add_mandate(&self, verb: &str, target: &str, source: &str) {
         let db = self.c();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT OR IGNORE INTO mandates(verb, target, source, created) VALUES (?1,?2,?3,?4)",
             params![verb, target, source, now()],
-        );
+        ));
     }
 
     /// Create (or replace) an object with a fixed id, for system bookkeeping like prompt stats.
     pub fn put_object_with_id(&self, id: &str, typ: &str, fields: &Value) {
         let db = self.c();
         let t = now();
-        let _ = db.execute("INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,?2,NULL,?3,?4,?4)
+        self.wr(db.execute("INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,?2,NULL,?3,?4,?4)
                             ON CONFLICT(id) DO UPDATE SET fields=excluded.fields, updated=excluded.updated",
-                           params![id, typ, fields.to_string(), t]);
+                           params![id, typ, fields.to_string(), t]));
     }
 
     /// Merge fields into a stored object (provenance is kept).
@@ -296,10 +324,10 @@ impl Memory {
         let db = self.c();
         let id = format!("obj:{typ}/{}", new_id(""));
         let t = now();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,?2,?3,?4,?5,?5)",
             params![id, typ, handle, fields.to_string(), t],
-        );
+        ));
         id
     }
 
@@ -330,10 +358,10 @@ impl Memory {
     // ---- saved plans (reusable by name) ----
     pub fn save_named(&self, name: &str, body: &Value) {
         let db = self.c();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO saved(name, body, created) VALUES (?1,?2,?3) ON CONFLICT(name) DO UPDATE SET body=excluded.body",
             params![name, body.to_string(), now()],
-        );
+        ));
     }
 
     pub fn named(&self, name: &str) -> Option<Value> {
@@ -351,12 +379,12 @@ impl Memory {
     pub fn save_task(&self, t: &Value) {
         let db = self.c();
         let now_ = now();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO tasks(id, parent, status, body, created, updated) VALUES (?1,?2,?3,?4,?5,?5)
              ON CONFLICT(id) DO UPDATE SET status=excluded.status, body=excluded.body, updated=excluded.updated",
             params![t["id"].as_str().unwrap_or(""), t["parent"].as_str(), t["status"].as_str().unwrap_or("pending"),
                     t.to_string(), now_],
-        );
+        ));
     }
 
     pub fn load_task(&self, id: &str) -> Option<Value> {
@@ -409,8 +437,8 @@ impl Memory {
     // ---- playbook history (the files themselves live on disk, as markdown) ----
     pub fn playbook_archive(&self, category: &str, old_text: &str, reason: &str) {
         let db = self.c();
-        let _ = db.execute("INSERT INTO playbook_history(category, text, reason, ts) VALUES (?1,?2,?3,?4)",
-                           params![category, old_text, reason, now()]);
+        self.wr(db.execute("INSERT INTO playbook_history(category, text, reason, ts) VALUES (?1,?2,?3,?4)",
+                           params![category, old_text, reason, now()]));
     }
 
     pub fn playbook_history(&self, category: &str, limit: i64) -> Vec<Value> {
@@ -425,7 +453,7 @@ impl Memory {
     #[cfg(test)]
     pub fn add_event_at(&self, ts: f64, kind: &str, data: &Value) {
         let db = self.c();
-        let _ = db.execute("INSERT INTO events(ts, kind, data) VALUES (?1, ?2, ?3)", params![ts, kind, data.to_string()]);
+        self.wr(db.execute("INSERT INTO events(ts, kind, data) VALUES (?1, ?2, ?3)", params![ts, kind, data.to_string()]));
     }
 
     /// Remove history older than the retention windows. Whole days of events become one `digest` object
@@ -493,32 +521,32 @@ impl Memory {
                             }
                         }
                         f["notable"] = json!(list);
-                        let _ = db.execute("UPDATE objects SET fields=?1, updated=?2 WHERE id=?3", params![f.to_string(), t, id]);
+                        self.wr(db.execute("UPDATE objects SET fields=?1, updated=?2 WHERE id=?3", params![f.to_string(), t, id]));
                     }
                     None => {
                         let id = format!("obj:digest/{}", new_id(""));
                         let fields = json!({"day": d * 86400, "counts": counts, "notable": notable});
-                        let _ = db.execute("INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,'digest',NULL,?2,?3,?3)",
-                                           params![id, fields.to_string(), t]);
+                        self.wr(db.execute("INSERT INTO objects(id, type, handle, fields, created, updated) VALUES (?1,'digest',NULL,?2,?3,?3)",
+                                           params![id, fields.to_string(), t]));
                         digests += 1;
                     }
                 }
             }
-            let _ = db.execute("DELETE FROM events WHERE ts < ?1", params![events_cutoff]);
+            self.wr(db.execute("DELETE FROM events WHERE ts < ?1", params![events_cutoff]));
         }
         if !dry_run {
-            let _ = db.execute("DELETE FROM plans WHERE status IN ('done','stopped','failed') AND updated < ?1", params![plans_cutoff]);
-            let _ = db.execute("DELETE FROM journal WHERE ts < ?1", params![journal_cutoff]);
-            let _ = db.execute(&format!("{old_trees} DELETE FROM tasks WHERE id IN (SELECT id FROM old)"), params![tasks_cutoff]);
-            let _ = db.execute("DELETE FROM playbook_history WHERE id IN (SELECT h.id FROM playbook_history h WHERE
-                (SELECT COUNT(*) FROM playbook_history n WHERE n.category = h.category AND n.id > h.id) >= ?1)", params![r.playbook_versions]);
+            self.wr(db.execute("DELETE FROM plans WHERE status IN ('done','stopped','failed') AND updated < ?1", params![plans_cutoff]));
+            self.wr(db.execute("DELETE FROM journal WHERE ts < ?1", params![journal_cutoff]));
+            self.wr(db.execute(&format!("{old_trees} DELETE FROM tasks WHERE id IN (SELECT id FROM old)"), params![tasks_cutoff]));
+            self.wr(db.execute("DELETE FROM playbook_history WHERE id IN (SELECT h.id FROM playbook_history h WHERE
+                (SELECT COUNT(*) FROM playbook_history n WHERE n.category = h.category AND n.id > h.id) >= ?1)", params![r.playbook_versions]));
             // Give the space back when a lot was freed.
             let pages: i64 = db.query_row("PRAGMA page_count", [], |row| row.get(0)).unwrap_or(0);
             let free: i64 = db.query_row("PRAGMA freelist_count", [], |row| row.get(0)).unwrap_or(0);
             if pages > 0 && free * 4 > pages {
-                let _ = db.execute_batch("VACUUM;");
+                self.wr(db.execute_batch("VACUUM;"));
             }
-            let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+            self.wr(db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);"));
         }
         json!({"dry_run": dry_run, "events": n_events, "digests": digests, "plans": n_plans, "journal": n_journal, "tasks": n_tasks,
                "playbook_versions": n_versions})
@@ -584,11 +612,11 @@ impl Memory {
     pub fn pb_save_entry(&self, e: &Value) {
         let db = self.c();
         let t = now();
-        let _ = db.execute(
+        self.wr(db.execute(
             "INSERT INTO playbook_entries(id, category, body, status, created, updated) VALUES (?1,?2,?3,?4,?5,?5)
              ON CONFLICT(id) DO UPDATE SET body=excluded.body, status=excluded.status, updated=excluded.updated",
             params![e["id"].as_str().unwrap_or(""), e["category"].as_str().unwrap_or(""), e.to_string(),
-                    e["status"].as_str().unwrap_or("active"), t]);
+                    e["status"].as_str().unwrap_or("active"), t]));
     }
 
     pub fn pb_meta(&self, category: &str) -> Option<(String, String)> {
@@ -599,16 +627,16 @@ impl Memory {
 
     pub fn pb_set_meta(&self, category: &str, hash: &str, preamble: &str) {
         let db = self.c();
-        let _ = db.execute("INSERT INTO playbook_meta(category, hash, preamble) VALUES (?1,?2,?3)
+        self.wr(db.execute("INSERT INTO playbook_meta(category, hash, preamble) VALUES (?1,?2,?3)
                             ON CONFLICT(category) DO UPDATE SET hash=excluded.hash, preamble=excluded.preamble",
-                           params![category, hash, preamble]);
+                           params![category, hash, preamble]));
     }
 
     pub fn pb_save_proposal(&self, p: &Value) {
         let db = self.c();
-        let _ = db.execute("INSERT INTO playbook_proposals(id, body, status, created) VALUES (?1,?2,?3,?4)
+        self.wr(db.execute("INSERT INTO playbook_proposals(id, body, status, created) VALUES (?1,?2,?3,?4)
                             ON CONFLICT(id) DO UPDATE SET body=excluded.body, status=excluded.status",
-                           params![p["id"].as_str().unwrap_or(""), p.to_string(), p["status"].as_str().unwrap_or("held"), now()]);
+                           params![p["id"].as_str().unwrap_or(""), p.to_string(), p["status"].as_str().unwrap_or("held"), now()]));
     }
 
     pub fn pb_proposal(&self, id: &str) -> Option<Value> {

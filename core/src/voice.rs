@@ -34,8 +34,19 @@ fn home() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// A job's model from the core's table (which includes the environment and the default), if the core answers.
+fn from_table(job: &str) -> Option<String> {
+    let client = crate::client::Client::new(crate::default_socket());
+    crate::models::ask(&client, job).map(|v| v.strip_prefix("~/").map(|r| home().join(r).to_string_lossy().to_string()).unwrap_or(v))
+}
+
+fn piper_voice() -> Option<String> {
+    from_table("speaking").or_else(|| env("LINUXAI_PIPER_VOICE")).filter(|v| v.ends_with(".onnx"))
+}
+
 fn whisper_model() -> PathBuf {
-    env("LINUXAI_WHISPER_MODEL").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share/linuxai/models/ggml-base.en.bin"))
+    from_table("speech_to_text").or_else(|| env("LINUXAI_WHISPER_MODEL")).map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".local/share/linuxai/models/ggml-base.en.bin"))
 }
 
 /// The recorder command for a 16 kHz mono WAV file at `out`.
@@ -64,7 +75,7 @@ pub fn caps() -> Value {
     };
     let tts = if env("LINUXAI_TTS_CMD").is_some() {
         json!("command (LINUXAI_TTS_CMD)")
-    } else if which("piper").is_some() && env("LINUXAI_PIPER_VOICE").is_some() {
+    } else if which("piper").is_some() && piper_voice().is_some() {
         json!("piper")
     } else if which("espeak-ng").is_some() {
         json!("espeak-ng")
@@ -191,7 +202,7 @@ pub fn say(text: &str) -> Result<(), String> {
         cmd.args(["-c", &c]);
         return run(cmd, &text);
     }
-    if let (Some(piper), Some(voice)) = (which("piper"), env("LINUXAI_PIPER_VOICE")) {
+    if let (Some(piper), Some(voice)) = (which("piper"), piper_voice()) {
         let wav = std::env::temp_dir().join(format!("linuxai-say-{}.wav", std::process::id()));
         let mut cmd = Command::new(piper);
         cmd.arg("--model").arg(voice).arg("--output_file").arg(&wav);

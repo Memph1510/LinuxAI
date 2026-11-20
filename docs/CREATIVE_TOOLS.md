@@ -1,6 +1,6 @@
 # Blender, Unity and Unreal
 
-How LinuxAI should work with the big creative applications. This is a plan; nothing here is built yet.
+How LinuxAI works with the big creative applications. **Blender is built** ([BLENDER.md](BLENDER.md)); Unity and Unreal are still plans.
 
 ## The shape: one "app organ" pattern for all of them
 
@@ -32,7 +32,22 @@ copies), an organ process per app that owns the headless runs and the live bridg
 inspect scenes, a preview returned as an image, and playbooks per category (`3d/modeling`, `3d/render`,
 `game/build`).
 
-## Blender: first, and fully
+## The rule for every organ that edits files
+
+Adopted from the ArtCraft apps ([RESEARCH_STORYTOLD.md](RESEARCH_STORYTOLD.md)), and already how Blender and the
+picture organ work. Any organ that changes the human's files follows it:
+
+1. **Inspect** the file first.
+2. **Stage a copy:** the change goes to a new file next to the original (`name.ai-N.ext`). The original is never
+   written.
+3. **Edit** the copy with the application's own engine.
+4. **Preview and verify:** reopen the result, compare it with the original, and look at it. Report what was
+   checked and what wasn't.
+5. **Replace only with the human's OK**, keeping the original as a backup.
+
+Between organs, pass verified files, never in-memory handles. If a step fails, stop at the last verified file.
+
+## Blender: first, and fully (built: see [BLENDER.md](BLENDER.md))
 
 Blender is the best place to start: free, open source, in Arch's `extra` repository (`pacman -S blender`), and
 almost every action is available from Python (`bpy`).

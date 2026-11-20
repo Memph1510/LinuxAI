@@ -14,7 +14,8 @@ end)
 local function set(name, f) local ok, e = pcall(f); if not ok then print("linuxai: " .. name .. ": " .. tostring(e)) end end
 
 set("monitor", function () hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" }) end)
-set("env", function () hl.env("XDG_CURRENT_DESKTOP", "Hyprland"); hl.env("XCURSOR_SIZE", "24") end)
+set("env", function () hl.env("XDG_CURRENT_DESKTOP", "Hyprland"); hl.env("XCURSOR_SIZE", "24")
+    hl.env("BLENDER_SYSTEM_SCRIPTS", "/usr/share/linuxai/blender/scripts") end)
 set("general", function () hl.config({ general = { gaps_in = 6, gaps_out = 10, border_size = 2, layout = "master",
     col = { active_border = "rgb(46c2c9)", inactive_border = "rgb(233140)" } } }) end)
 -- The Workspace is the main window (the compositor organ puts it there): 70% of the screen, the session beside it.

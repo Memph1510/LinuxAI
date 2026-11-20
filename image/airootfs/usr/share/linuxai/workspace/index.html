@@ -77,6 +77,15 @@ button { cursor: pointer; }
 .ev time { font: 11px var(--mono); color: var(--fg-faint); padding-top: 2px; }
 .ev.you { color: var(--you); }
 .demo { font: 11px var(--mono); color: var(--fg-faint); }
+.models { flex: none; max-height: 45%; }
+.models summary { cursor: pointer; list-style: none; }
+.models summary::-webkit-details-marker { display: none; }
+.models[open] { flex: 1.2; }
+.mrow { display: grid; gap: 3px; padding: 6px; border-radius: 7px; background: var(--panel-2); }
+.mrow b { font: 600 11px var(--mono); letter-spacing: .04em; color: var(--fg-dim); }
+.mrow input { min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: 12.5px var(--mono); }
+.mrow .from { font-size: 11.5px; color: var(--fg-faint); }
+.mrow .from.you { color: var(--you); }
 
 /* Half a screen: the page beside one column holding what needs you, the work, and the steps. */
 @media (max-width: 1100px) {
@@ -119,6 +128,10 @@ button { cursor: pointer; }
       <div class="panel-h"><span class="label">What's happening</span></div>
       <div class="scroll" id="activity"></div>
     </section>
+    <details class="panel models" aria-label="Which model does what">
+      <summary class="panel-h"><span class="label">Which model does what</span><span class="label" id="modelsNote"></span></summary>
+      <div class="scroll" id="models"></div>
+    </details>
   </div>
 </div>
 
@@ -168,6 +181,21 @@ async function answer(i, text) {
   loadQuestions();
 }
 
+// ---- which model does what (yours to set) ----
+const jobName = { thinking: "Thinking with you", thinking_effort: "How hard it thinks", background: "Working behind the scenes",
+  reading_email: "Reading email", pictures: "Pictures (in order)", speech_to_text: "Your voice to text", speaking: "Its voice" };
+async function loadModels() {
+  const r = await core({ op: "models" });
+  $("models").innerHTML = (r.jobs || []).map((j) => `<label class="mrow"><b>${esc(jobName[j.job] || j.job)}</b>
+    <input data-job="${esc(j.job)}" value="${esc(j.from === "your choice" ? j.uses : "")}" placeholder="${esc(j.uses)}" aria-label="${esc(jobName[j.job] || j.job)}">
+    <span class="from ${j.from === "your choice" ? "you" : ""}">${esc(j.from)} · ${esc(j.what)}</span></label>`).join("");
+}
+async function setModel(input) {
+  const r = await core({ op: "models_set", job: input.dataset.job, uses: input.value.trim() });
+  $("modelsNote").textContent = r.ok ? "saved" : (r.error || "not saved");
+  if (r.ok) { addActivity({ kind: "you.answered", ts: Date.now() / 1000, data: { text: `${jobName[input.dataset.job]}: ${r.uses}` } }); loadModels(); }
+}
+
 // ---- the work ----
 async function loadTasks() {
   const r = await core({ op: "tasks", limit: 30 });
@@ -188,6 +216,9 @@ async function loadSteps(id) {
       <span class="meta"><span class="pill s-${esc(t.status)}">${esc(statusWord[t.status] || t.status)}</span><span>${esc(t.kind)}${human.includes(t.kind) ? " · yours" : ""}</span></span>
       ${t.result ? `<span class="q-why">${esc(typeof t.result === "string" ? t.result : JSON.stringify(t.result))}</span>` : ""}
       ${t.error ? `<span class="q-why" style="color:var(--bad)">${esc(t.error)}</span>` : ""}
+      ${t.evidence ? `<span class="q-why">${(t.evidence.checked || []).map((c) => `✓ ${esc(c)}`).join("<br>")}${
+        (t.evidence.not_checked || []).length ? "<br>" + t.evidence.not_checked.map((c) => `<span style="color:var(--you)">not checked: ${esc(c)}</span>`).join("<br>") : ""}${
+        typeof t.evidence.confidence === "number" ? `<br>${Math.round(t.evidence.confidence * 100)}% sure` : ""}</span>` : ""}
     </div>${t.children && t.children.length ? `<ul>${t.children.map(node).join("")}</ul>` : ""}</li>`;
   $("stepsTitle").textContent = r.tree.title;
   $("steps").innerHTML = `<ul class="steps">${node(r.tree)}</ul>`;
@@ -243,7 +274,7 @@ const words = {
   "task.done": (d) => `Done: ${d.title || ""}`, "task.failed": (d) => `Blocked: ${d.title || ""}`, "ai.tell": (d) => d.text || "",
   "browser.handoff": (d) => `Handed you a page: ${d.note || d.title || ""}`, "browser.showing": (d) => `Showing you: ${d.note || d.url || ""}`,
   "voice.heard": (d) => `You said: ${d.text || ""}`, "power.unplugged": () => "Unplugged: saving power", "power.plugged": () => "Plugged in",
-  "service.failed": (d) => `A service failed: ${d.unit || ""}`, "you.answered": (d) => `You answered: ${d.text || ""}`,
+  "service.failed": (d) => `A service failed: ${d.unit || ""}`, "you.answered": (d) => `You answered: ${d.text || ""}`, "models.changed": (d) => `Model for ${d.job}: ${d.now}`,
 };
 function addActivity(ev) {
   const f = words[ev.kind];
@@ -274,6 +305,8 @@ document.addEventListener("click", (e) => {
   if (p) return watch(p.dataset.page);
 });
 document.addEventListener("keydown", (e) => {
+  const m = e.target.closest && e.target.closest("[data-job]");
+  if (m && e.key === "Enter") return setModel(m);
   const f = e.target.closest && e.target.closest("[data-free]");
   if (f && e.key === "Enter") answer(+f.dataset.free, f.value);
 });
@@ -297,15 +330,24 @@ const DEMO = {
     { id: "t3", title: "Verizon bill is higher than usual", status: "done", category: "bills" }] },
   task: { ok: true, tree: { title: "Choosing a family SUV that tows the camper", kind: "work", status: "waiting", children: [
     { title: "Find SUVs under $40k that tow 3,800 lb", kind: "work", status: "done", result: "2 fit: Ridgeway LX, Summit Trail" },
-    { title: "Compare towing, mileage and price", kind: "work", status: "done", result: "Only the Summit Trail tows the camper with margin" },
+    { title: "Compare towing, mileage and price", kind: "work", status: "done", result: "Only the Summit Trail tows the camper with margin",
+      evidence: { checked: ["towing ratings on both makers' spec sheets"], not_checked: ["your camper's loaded weight (I used the listing's 3,800 lb)"], confidence: 0.85 } },
     { title: "Decide on a test drive", kind: "decision", status: "waiting" },
     { title: "Book the test drive", kind: "work", status: "pending" }] } },
+  models: { ok: true, jobs: [
+    { job: "thinking", uses: "claude-opus-5-5", from: "default", what: "the AI you talk with" },
+    { job: "thinking_effort", uses: "high", from: "default", what: "how hard it thinks" },
+    { job: "background", uses: "claude-sonnet-5-5", from: "your choice", what: "the AI working behind the scenes" },
+    { job: "reading_email", uses: "claude-opus-5-5", from: "same as thinking", what: "turning each email into claims" },
+    { job: "pictures", uses: "local_gpu,paid,local_cpu", from: "default", what: "making pictures, in order of preference" },
+    { job: "speech_to_text", uses: "~/.local/share/linuxai/models/ggml-base.en.bin", from: "default", what: "your voice to text" },
+    { job: "speaking", uses: "espeak-ng", from: "default", what: "the AI's voice" }] },
   pages: { ok: true, pages: [{ tab: "a", owner: "ai", title: "Compare SUVs", url: "https://drivelist.example/compare" }, { tab: "b", owner: "human", title: "Lone Star Motors", url: "https://lonestarmotors.example" }] },
 };
 
 (async function start() {
   $("mode").textContent = live ? "" : "example data (not connected)";
-  await Promise.all([loadQuestions(), loadTasks(), loadPages()]);
+  await Promise.all([loadQuestions(), loadTasks(), loadPages(), loadModels()]);
   if (!live) {
     state.selected = "t1"; loadTasks();
     [["Showing you: the two SUVs", 1795060200], ["You said: is this one a good deal", 1795060150], ["New work: Choosing a family SUV", 1795059000]]

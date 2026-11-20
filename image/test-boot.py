@@ -64,6 +64,11 @@ CHECKS = [
      "sudo -u linuxai sh -c 'cd /tmp && magick -size 400x300 xc:orange t.png && LINUXAI_IMAGES=/tmp/pics linuxai-core image do "
      "\"{\\\"op\\\":\\\"edit\\\",\\\"input\\\":\\\"/tmp/t.png\\\",\\\"ops\\\":[{\\\"resize\\\":\\\"50%\\\"}]}\"' | grep -o '\"width\":200'",
      r'"width":200'),
+    ("3D: Blender builds a scene on a staged copy, checks and previews it (Blender organ)",
+     "sudo -u linuxai sh -c 'cd /tmp && LINUXAI_BLENDER_DIR=/tmp/b linuxai-core blender do "
+     "\"{\\\"op\\\":\\\"new\\\",\\\"name\\\":\\\"boot\\\",\\\"ops\\\":[{\\\"op\\\":\\\"add\\\",\\\"type\\\":\\\"sphere\\\",\\\"name\\\":\\\"Ball\\\",\\\"location\\\":[0,0,2]},"
+     "{\\\"op\\\":\\\"camera\\\",\\\"name\\\":\\\"Camera\\\",\\\"look_at\\\":\\\"Ball\\\"}]}\"' | grep -oE '\"verdict\":\"[a-z]+\"|reopens'",
+     r'(?s)reopens.*"verdict":"ok"|"verdict":"ok".*reopens', 600),
     ("voice: speech-to-text and speaking are installed",
      "linuxai-core voice caps", r'"speech_to_text":"whisper\.cpp.*"text_to_speech":"espeak-ng"'),
     ("screen: Hyprland runs, or the text session took over and said why",
@@ -102,9 +107,30 @@ CHECKS = [
      "print('main' if all(ws['at'][0]<=x['at'][0] and ws['size'][0]>=x['size'][0] for x in others) else 'not-main', ws['at'], ws['size'])\n"
      "print('pages-hidden' if not any('chrom' in str(x['app']).lower() for x in others) else 'pages-visible', [x['title'][:20] for x in others])\"",
      r"(?s)^main.*^pages-hidden|no-hyprland"),
+    # (Started from a subshell: a job of the test's own shell would print a notice into the next typed command.)
+    # Blender's window needs OpenGL 4.3, which a VM with neither a graphics card nor KVM can't give it; so the
+    # bridge is started by hand in a headless Blender, loaded from where the session points real Blender.
+    ("3D: the live bridge loads in Blender and the AI can see the open scene",
+     ". /etc/profile.d/linuxai-blender.sh; ( sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 BLENDER_SYSTEM_SCRIPTS=$BLENDER_SYSTEM_SCRIPTS"
+     " setsid timeout 170 blender -b --factory-startup --python-expr \"import linuxai_bridge as b, time; s=b.Server(b.socket_path());"
+     " [(s.poll(), time.sleep(0.05)) for _ in range(3000)]\" </dev/null >/dev/null 2>&1 & );"
+     " for i in $(seq 60); do [ -n \"$(find /run/user/1000 -maxdepth 1 -name 'linuxai-blender-*.sock')\" ] && break; sleep 2; done;"
+     " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core blender do '{\"op\":\"live_view\"}'; pkill -x blender",
+     r'"ok":true.*"selected"|"selected".*"ok":true', 300),
     ("a task's decision step waits on the human",
      "linuxai-core ctl '{\"op\":\"task_create\",\"source\":\"human\",\"spec\":{\"title\":\"Boot test\",\"subtasks\":"
      "[{\"title\":\"Pick one\",\"kind\":\"decision\"}]}}' | grep -c '\"status\": \"waiting\"'", r"^[1-9]"),
+    ("the core saved everything it was told (no failed writes all run)",
+     "linuxai-core ctl '{\"op\":\"ping\"}' | grep -A3 '\"memory\"' | tr -d ' \\n'; echo", r'"memory":\{"healthy":true\}'),
+    ("screen: at the end of the run, the Workspace is still the main window",
+     "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sleep 6; sudo -u linuxai python3 -c \"import socket,json\n"
+     "s=socket.socket(socket.AF_UNIX);s.connect('/run/user/1000/linuxai-compositor.sock');s.sendall(b'{\\\"op\\\":\\\"windows\\\"}\\\\n')\n"
+     "w=[x for x in json.loads(s.makefile().readline())['windows'] if str(x['workspace'])!='-98' and x['workspace']==1]\n"
+     "ws=[x for x in w if x['title']=='LinuxAI Workspace'][0]\n"
+     "others=[x for x in w if x is not ws]\n"
+     "print('main' if all(ws['at'][0]<=x['at'][0] and ws['size'][0]>=x['size'][0] for x in others) else 'not-main', ws['at'], ws['size'])\n"
+     "print('pages-hidden' if not any('chrom' in str(x['app']).lower() for x in others) else 'pages-visible', [x['title'][:20] for x in others])\"",
+     r"(?s)^main.*^pages-hidden|no-hyprland"),
 ]
 
 
@@ -209,7 +235,7 @@ def main() -> int:
     ser, mon = str(tmp / "serial.sock"), str(tmp / "mon.sock")
     accel = "kvm" if os.path.exists("/dev/kvm") else "tcg,thread=multi"
     qemu = subprocess.Popen([
-        "qemu-system-x86_64", "-accel", accel, "-m", "3072", "-smp", str(min(os.cpu_count() or 2, 4)),
+        "qemu-system-x86_64", "-accel", accel, "-cpu", "SandyBridge", "-m", "3072", "-smp", str(min(os.cpu_count() or 2, 4)),
         "-cdrom", args.iso, "-boot", "d", "-display", "none", "-vga", "std",
         "-serial", f"unix:{ser},server,nowait", "-monitor", f"unix:{mon},server,nowait",
         "-nic", "user,model=virtio-net-pci"], stderr=subprocess.DEVNULL)
@@ -224,8 +250,8 @@ def main() -> int:
         con.run("export TERM=dumb PS1='# '; stty -echo cols 200", 30)
         state = con.run("timeout 240 systemctl is-system-running --wait; systemctl list-jobs --no-legend | head -5", 300)
         print(f"  system state: {' / '.join(state.split())[:200]}", flush=True)
-        for name, cmd, expect in CHECKS:
-            out = con.run(cmd, 180)
+        for name, cmd, expect, *limit in CHECKS:
+            out = con.run(cmd, limit[0] if limit else 180)
             ok = re.search(expect, out, re.M) is not None
             failed += not ok
             print(f"  {'✓' if ok else '✗'} {name}" + ("" if ok else f"\n      got: {out[-300:]!r}"), flush=True)
@@ -239,18 +265,24 @@ def main() -> int:
             con.run("""linuxai-core ctl '{"op":"submit","source":"human","plan":{"plan":"boot-question","why":"boot test","steps":[{"ask":"Book the test drive Saturday 10am?","opts":["Book it","Not now"],"why":"It is a $38,000 decision","lean":"Book it","as":"a"}]}}' >/dev/null;"""
                     """ linuxai-core ctl '{"op":"event","kind":"voice.listening","data":{}}' >/dev/null;"""
                     """ linuxai-core ctl '{"op":"event","kind":"screen.point","data":{"x":120,"y":300,"w":360,"h":60,"note":"This line","magnify":true,"seconds":30}}' >/dev/null; sleep 4; echo sent""", 60)
-            time.sleep(2)
-            monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
-            if (tmp / "overlay.ppm").exists():
+            # Under emulation the layer can take a while to catch up: look every few seconds, for up to 90 s (the
+            # pointer stays 30 s from when it's drawn, the listening pill until voice.done).
+            ok, found, deadline = False, {}, time.time() + 90
+            while not ok and time.time() < deadline:
+                time.sleep(4)
+                monitor(mon, f"screendump {tmp / 'overlay.ppm'}")
+                if not (tmp / "overlay.ppm").exists():
+                    continue
                 img = read_ppm(tmp / "overlay.ppm")
                 w, h, _ = img
-                ppm_to_png(tmp / "overlay.ppm", shots / "linuxai-overlay.png")
                 boxes = {"question card (top right)": (w - 400, 30, w, 330),
                          "voice indicator (bottom)": (w // 2 - 330, h - 80, w // 2 + 330, h),
                          "the AI's pointer (around 120,300 360x60)": (110, 290, 490, 370),
                          "the magnifier (beside it)": (500, 210, 870, 450)}
                 found = {k: amber_in(img, *b) - (amber_in(before, *b) if before else 0) for k, b in boxes.items()}
                 ok = all(n > 150 for n in found.values())
+            if (tmp / "overlay.ppm").exists():
+                ppm_to_png(tmp / "overlay.ppm", shots / "linuxai-overlay.png")
                 failed += not ok
                 print(f"  {'✓' if ok else '✗'} screen: the question card, voice indicator, the AI's pointer and its magnifier are drawn"
                       + ("" if ok else f"\n      amber pixels found: {found}"), flush=True)
