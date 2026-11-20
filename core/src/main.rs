@@ -19,6 +19,7 @@ mod blender;
 mod calendar;
 mod client;
 mod compositor;
+mod craft;
 mod core;
 mod engine;
 mod host;
@@ -306,6 +307,25 @@ fn main() {
             println!("{}", images::handle(&req, &client, &cfg));
             Ok(())
         }
+        Some("craft") => {
+            // linuxai-core craft [--socket PATH]  |  craft do '<json>'  |  craft apps
+            let socket = arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(craft::default_socket);
+            match args.get(2).map(String::as_str) {
+                Some("do") => {
+                    let req: Value = serde_json::from_str(args.get(3).map(String::as_str).unwrap_or("")).unwrap_or(json!({}));
+                    println!("{}", craft::request(&socket, &req));
+                    Ok(())
+                }
+                Some("apps") => {
+                    println!("{}", craft::Organ::new(craft::CraftConfig::from_env(), None).handle(&json!({"op": "apps"})));
+                    Ok(())
+                }
+                _ => {
+                    let core = client::Client::new(arg(&args, "--core").map(PathBuf::from).unwrap_or_else(default_socket));
+                    craft::run(socket, Some(Box::new(core)))
+                }
+            }
+        }
         Some("blender") => {
             let client = client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket));
             let cfg = blender::BlenderConfig::from_env();
@@ -397,7 +417,7 @@ fn main() {
             Ok(())
         }
         _ => {
-            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice|compositor|calendar|blender  (see source header)");
+            eprintln!("usage: linuxai-core daemon|ctl|check|snapshot|verbs|reach|mail|browser|image|voice|compositor|calendar|blender|craft  (see source header)");
             std::process::exit(2);
         }
     };

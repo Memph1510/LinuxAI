@@ -151,9 +151,9 @@ Not decided yet. Each is an option to discuss, not planned work.
 - [x] One table of which model does which job, yours to set
 - [x] Staged copy then verified export: the rule for every file-editing organ
 - [x] Scene-first picture prompt
-- [ ] Local background removal and object selection on the CPU (BEN2, SAM on rten), with verified model installs
+- [x] The 15 Craft apps as tools the AI uses to finish tasks ([CRAFT.md](CRAFT.md)): verified installs on first use, a sandbox for every app, results kept beside originals
+- [x] Offline background removal and subject selection (PhotoCraft)
 - [ ] Later: an MCP surface for the verb registry
-- [ ] Not yet: Craft apps as organs (PDFCraft to watch)
 
 ### To decide later: creative applications ([CREATIVE_TOOLS.md](CREATIVE_TOOLS.md))
 

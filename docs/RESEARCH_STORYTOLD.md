@@ -69,9 +69,9 @@ Ranked by how well they fit LinuxAI.
 | One tool → model table | **Built.** `core/src/models.rs`: thinking, effort, background, reading email, pictures (order), speech to text, voice. Yours to set (Workspace or session); the AI reads it and suggests. |
 | Staged copy, verified export | **The rule** for every file-editing organ ([CREATIVE_TOOLS.md](CREATIVE_TOOLS.md)). |
 | Scene first, then generate | **A prompt** (`images/compose-scene`), using Blender to block out exact compositions. |
-| Local cutouts on the CPU + verified installs | Next, when wanted. |
+| Local cutouts + verified installs | **Built** through the Craft apps: PhotoCraft's Select Subject and Remove Background run on this machine; every app installs verified (pinned hash + GPG signature, pinned key). |
 | MCP surface for outside agents | Later. |
-| Ship Craft apps as organs | Not yet (early alpha); PDFCraft is the one to watch. |
+| Ship Craft apps as organs | **Built** ([CRAFT.md](CRAFT.md)): all 15 apps as tools the AI uses to finish tasks, installed on first use, each in a sandbox. |
 
 ## Not for us
 

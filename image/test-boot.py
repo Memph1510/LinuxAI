@@ -69,6 +69,17 @@ CHECKS = [
      "\"{\\\"op\\\":\\\"new\\\",\\\"name\\\":\\\"boot\\\",\\\"ops\\\":[{\\\"op\\\":\\\"add\\\",\\\"type\\\":\\\"sphere\\\",\\\"name\\\":\\\"Ball\\\",\\\"location\\\":[0,0,2]},"
      "{\\\"op\\\":\\\"camera\\\",\\\"name\\\":\\\"Camera\\\",\\\"look_at\\\":\\\"Ball\\\"}]}\"' | grep -oE '\"verdict\":\"[a-z]+\"|reopens'",
      r'(?s)reopens.*"verdict":"ok"|"verdict":"ok".*reopens', 600),
+    ("craft: the Craft apps are known, pinned and signed (manifest), and the craft organ answers",
+     "sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core craft do '{\"op\":\"apps\"}' | python3 -c \"import json,sys;"
+     "r=json.load(sys.stdin);print('apps', len(r.get('apps', [])), r.get('error', ''))\"; python3 -c \"import json;"
+     "m=json.load(open('/usr/share/linuxai/craft/apps.json'));print('pinned', all(len(a['sha256'])==64 for a in m['apps'].values()), m['signing_key_fingerprint'])\"",
+     r"(?s)apps 15.*pinned True 2B76741B414AAD6CD33E631213A005C0B9D7C3ED"),
+    ("craft: the sandbox hides the human's files and the network from an app",
+     "sudo -u linuxai bash -c 'd=$(mktemp -d); mkdir -p $d/in $d/out; bwrap --unshare-all --new-session --ro-bind /usr /usr --symlink usr/lib /lib"
+     " --symlink usr/lib /lib64 --symlink usr/bin /bin --proc /proc --dev /dev --tmpfs /tmp --dir /work --ro-bind $d/in /work/in --bind $d/out /work/out"
+     " /usr/bin/bash -c \"ls /home | wc -l; touch /work/in/x 2>/dev/null || echo in-read-only; touch /work/out/x && echo out-writable;"
+     " getent hosts github.com >/dev/null || echo no-network\"'",
+     r"(?s)^0\s.*in-read-only.*out-writable.*no-network"),
     ("voice: speech-to-text and speaking are installed",
      "linuxai-core voice caps", r'"speech_to_text":"whisper\.cpp.*"text_to_speech":"espeak-ng"'),
     ("screen: Hyprland runs, or the text session took over and said why",

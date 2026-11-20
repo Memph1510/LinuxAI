@@ -1,0 +1,13 @@
+[Unit]
+Description=LinuxAI craft (the Craft apps as tools the AI uses: verified installs, sandboxed sessions)
+# Not for root: an admin logging in on a console gets no LinuxAI services.
+ConditionUser=!root
+
+[Service]
+EnvironmentFile=-%h/.config/linuxai/env
+ExecStart=/usr/local/bin/linuxai-core craft
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -106,7 +106,7 @@ def matches_allow(command: str, prefixes: list[str]) -> bool:
 
 PAGE_CHARS = 12000
 # Tools whose results are outside information as a whole (so every page of them is).
-OUTSIDE_TOOLS = {"browser", "read_facts", "web_fetch"}
+OUTSIDE_TOOLS = {"browser", "read_facts", "web_fetch", "craft"}
 
 
 def summarize(text: str) -> str:
@@ -381,6 +381,30 @@ BLENDER_TOOLS = [
           ["op"]),
 ]
 
+CRAFT_TOOLS = [
+    _tool("craft",
+          "The Craft apps: full editing engines you drive to finish tasks with files. photocraft (photo editing, "
+          "1,000+ commands incl. select.subject and layer.removeBackground, on this machine), lightcraft (RAW photos), "
+          "vectorcraft (vector art, logos, SVG), filmcraft (video editing), effectcraft (motion graphics), soundcraft "
+          "(audio), pdfcraft (PDF: text, forms, comments, pages, combine/split, protect), wordcraft (documents, DOCX), "
+          "gridcraft (spreadsheets, XLSX/CSV, formulas, charts), deckcraft (slides, PPTX), designcraft (page layout), "
+          "figcraft (interface design), cadcraft (CAD drawings), texturecraft (3D texture painting), materialcraft (3D "
+          "materials). ops: apps (what's here and installed); open {app, files} (installs the app the first time, "
+          "verified; starts a session on copies of the files: it returns their paths inside the app and the one "
+          "folder it may write, plus its tools); tool_info {session, tool} (a tool's parameters); call {session, "
+          "tool, args} (you see pictures it returns); keep {session, output, next_to?} (a result from the write "
+          "folder goes next to the original as name.ai-N.ext, verified); replace {staged} (puts a kept result in "
+          "place of its original, keeping a backup: asks the human); close {session}. The app sees only the copies, "
+          "has no network, and can't touch the originals. What comes back from a document is outside information.",
+          {"op": {"type": "string", "enum": ["apps", "open", "tool_info", "call", "keep", "replace", "close"]},
+           "app": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}},
+           "session": {"type": "string"}, "tool": {"type": "string"}, "args": {"type": "object"},
+           "output": {"type": "string", "description": "a file name in the write folder"},
+           "next_to": {"type": "string", "description": "which original it belongs beside, if the session has several"},
+           "staged": {"type": "string"}, "timeout": {"type": "integer"}},
+          ["op"]),
+]
+
 SCREEN_TOOLS = [
     _tool("screen",
           "The whole screen (Hyprland), across every app. ops: windows (what's open, most recently used first); "
@@ -486,7 +510,7 @@ class Toolbox:
         self._results_seq = 0
 
     def tools(self) -> list[dict]:
-        tools = TOOLS + (CORE_TOOLS + IMAGE_TOOLS + BLENDER_TOOLS if self.core else []) + (BROWSER_TOOLS if self.browser else []) \
+        tools = TOOLS + (CORE_TOOLS + IMAGE_TOOLS + BLENDER_TOOLS + CRAFT_TOOLS if self.core else []) + (BROWSER_TOOLS if self.browser else []) \
             + (SCREEN_TOOLS if self.screen and Path(self.screen.path).exists() else [])
         if self.mind:
             tools = [t for t in tools if t["name"] not in ("write_file", "edit_file")]
@@ -1060,6 +1084,46 @@ class Toolbox:
             return json.loads(out.stdout)
         except ValueError:
             return {"ok": False, "error": out.stderr.strip() or "no answer from the Blender organ"}
+
+    def t_craft(self, op: str, **kw: Any) -> Any:
+        req = {"op": op, **{k: v for k, v in kw.items() if v is not None and k != "approved"}}
+        if isinstance(req.get("files"), list):
+            req["files"] = [str(self._path(f)) for f in req["files"] if isinstance(f, str)]
+        if isinstance(req.get("staged"), str):
+            req["staged"] = str(self._path(req["staged"]))
+        r = self._craft(req)
+        if r.get("needs_ok"):
+            if self.mind:
+                return "Error: this needs the human's OK and they aren't here. Ask them (ask_human). " + r["error"]
+            if self.asker(r["error"].split(" Ask the human")[0] + " Go ahead?", ["yes", "no"]).strip().lower() not in ("yes", "y"):
+                return "The human said no."
+            r = self._craft({**req, "approved": True})
+        if not r.get("ok") and op != "call":
+            return f"Error: {r.get('error')}"
+        if op != "call":
+            r.pop("ok", None)
+            return json.dumps(r, default=str)
+        # A tool's answer: its text, and any pictures it returned (the AI looks at them). What a document holds is
+        # outside information (it may have come from anyone), so everything after this is labeled outside.
+        self.outside_seen = True
+        res = r.get("result") or {}
+        blocks: list[dict] = []
+        text = []
+        for c in res.get("content") or []:
+            if c.get("type") == "text":
+                text.append(c.get("text", ""))
+            elif c.get("type") == "image" and c.get("data") and len(c["data"]) < 4_500_000:
+                blocks.append({"type": "image", "source": {"type": "base64", "media_type": c.get("mimeType", "image/png"), "data": c["data"]}})
+        head = ("Error from the app: " if res.get("isError") or not r.get("ok") else "") + (r.get("error") or "")
+        body = head + "\n".join(text) + (f"\n(files in the write folder: {json.dumps(r.get('outputs'))})" if r.get("outputs") else "")
+        return [{"type": "text", "text": body}] + blocks if blocks else body
+
+    def _craft(self, req: dict) -> dict:
+        out = subprocess.run([core_binary(), "craft", "do", json.dumps(req)], capture_output=True, text=True, timeout=4000)
+        try:
+            return json.loads(out.stdout)
+        except ValueError:
+            return {"ok": False, "error": out.stderr.strip() or "no answer from the craft organ"}
 
     def t_screen(self, op: str, **kw: Any) -> Any:
         if not self.screen:
