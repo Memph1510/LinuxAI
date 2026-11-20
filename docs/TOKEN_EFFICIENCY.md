@@ -34,21 +34,25 @@ Uncached, the prefix costs about **$0.05 per request**. Read from the cache, it 
      history starts with the first's.
 2. **Long results come in pages** (summary and page 1 of N, with `more` for the rest). A 4,000-line log
    doesn't enter the conversation whole.
-3. **Pictures are sized once**, before they're first sent: at most 1,280 px on the long side. A picture costs
+3. **Looking again costs only what changed.** Rereading a file, command output or page in the same conversation
+   gives the differences (a 12,099-character log with two new lines: 322 characters). `read_file` `new_only` gives
+   a log's new lines since the AI last looked, across conversations. Pages the AI keeps an eye on are watched by
+   the browser instead of reread (see BROWSER.md).
+4. **Pictures are sized once**, before they're first sent: at most 1,280 px on the long side. A picture costs
    about width × height / 750 tokens every time a request carries it. A 1920×1080 screenshot is about 2,760
    tokens and becomes about 1,180. Pictures are never shrunk later, because that would be a history edit.
-4. **A usage ledger.** Every request's tokens (fresh input, read from cache, written to cache, output) go to
+5. **A usage ledger.** Every request's tokens (fresh input, read from cache, written to cache, output) go to
    `~/.local/share/linuxai/usage.jsonl`. Cache writes were previously uncounted.
    `cortex usage` shows tokens and cost per day, role and model, plus the share of input read from the cache.
-5. **One table of which model does which job** (from the ArtCraft work). Background work and email reading can
+6. **One table of which model does which job** (from the ArtCraft work). Background work and email reading can
    run on a cheaper model if you choose: Claude Haiku 5.5 is $0.10 / $0.50 per million, 40× cheaper than Opus
    on input. That's your decision, set in the Workspace. The AI never downgrades itself to save money.
 
 ## How the AI spends its thinking
 
 The biggest lever isn't the size of a request but how many the AI needs to run the machine. See
-[THINKING.md](THINKING.md): reflexes, habits, expectations (replies decided ahead), briefs, batches and effort by stakes. On a simulated day
-the same work costs 23% of what it did, with 27 model requests instead of 87, measured with
+[THINKING.md](THINKING.md): reflexes, habits, watches, expectations (replies decided ahead), briefs, batches and effort by stakes. On a
+simulated day the same work costs 13% of what it did, with 36 model requests instead of 187, measured with
 `tests/thinking_bench.py`.
 
 ## Next, once there are measurements

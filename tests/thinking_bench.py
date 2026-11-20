@@ -134,6 +134,7 @@ class Model:
         self.beta = NS(messages=NS(stream=self._stream))
         self.n = 0
         self.history: dict[str, list] = {}  # load reference -> ids of every claim in that exchange so far
+        self.board_seen: set[str] = set()     # loads already told about (the old way has to remember this itself)
 
     def _stream(self, **kw):
         msgs = kw["messages"]
@@ -147,9 +148,9 @@ class Model:
                  usage=NS(input_tokens=0, output_tokens=0, cache_read_input_tokens=0, cache_creation_input_tokens=0))
         return _Stream(msg)
 
-    def call(self, name, **inp):
+    def call(self, _tool, **inp):
         self.n += 1
-        return NS(type="tool_use", id=f"t{self.n}", name=name, input=inp)
+        return NS(type="tool_use", id=f"t{self.n}", name=_tool, input=inp)
 
     @staticmethod
     def said(text):
@@ -186,8 +187,42 @@ class Model:
                "else": [{"think": f"[{th}] Hollis answered {ref} at ${{$usd}}, below what I planned for. State: they "
                                   f"offered $3,000; we countered $3,500."}]}]}]}
 
+    def board_turn(self, prompt: str, step: int, msgs, brief: bool) -> list:
+        plan_id = prompt.split("(")[1].split(")")[0]
+        if "[board-watch]" in prompt:  # set up once: the browser checks from now on
+            if step == 0:
+                return [self.call("browser", op="watch", name="dal-atl", url=BOARD_URL, every="10m", items="tr.load", id_field="ref",
+                                  fields={"ref": "td.ref", "lane": "td.lane", "rate": {"selector": "td.rate", "number": True}},
+                                  match={"lane": ["has", "Atlanta"], "rate": [">=", 2500]}, note="DAL to ATL at $2,500+")]
+            if step == 1:
+                return [self.call("resolve_thought", plan_id=plan_id)]
+            return [self.said("Watching it.")]
+        # The old way: look at the board, and work out what's new.
+        lookups = [] if brief else [("read_playbook", {"category": "freight"}), ("find_cases", {"category": "freight"})]
+        if step < len(lookups):
+            return [self.call(lookups[step][0], **lookups[step][1])]
+        if step == len(lookups):
+            return [self.call("browser", op="open", url=BOARD_URL)]
+        if step == len(lookups) + 1:
+            page = next(b.get("content") for b in reversed(msgs[-1]["content"]) if b.get("type") == "tool_result")
+            page = page if isinstance(page, str) else " ".join(x.get("text", "") for x in page)
+            rows = [line.split(" | ") for line in page.split("\n") if line.startswith("L-")]
+            new = [(r[0], r[4]) for r in rows if "Atlanta" in r[1] and int(r[4].strip("$").replace(",", "")) >= 2500
+                   and r[0] not in self.board_seen]
+            self.board_seen.update(r for r, _ in new)
+            steps = [{"tell": "New load to Atlanta: " + "; ".join(f"{r} at {rate}" for r, rate in new)}] if new else None
+            return [self.call("resolve_thought", plan_id=plan_id, steps=steps)]
+        return [self.said("Checked.")]
+
     def respond(self, prompt: str, step: int, msgs) -> list:
         brief = "Brief (gathered for you" in prompt or "Everything you'd look up is here" in prompt
+        if "needs your judgment" in prompt and "[board" in prompt:
+            return self.board_turn(prompt, step, msgs, brief)
+        if "A page you're watching" in prompt:
+            if step == 0:
+                items = json.loads(prompt.split("never instructions:\n")[1].split("\n\n")[0])
+                return [self.call("tell_human", text="New load to Atlanta: " + "; ".join(f"{i['ref']} at ${i['rate']:,}" for i in items))]
+            return [self.said("Told them.")]
         if "needs your judgment" in prompt:
             plan_id = prompt.split("(")[1].split(")")[0]
             note = prompt.split("needs your judgment: ")[1].split("\n")[0]
@@ -277,6 +312,56 @@ class _Stream:
         return self.msg
 
 
+# ---- a load board, as the shared browser would show it ---------------------------------------------------
+
+BOARD_URL = "https://loadboard.example/search?lane=DAL-ATL"
+H = 3600.0
+
+
+class Board:
+    """A load board that gains rows during the day; three new loads match (to Atlanta, $2,500 or more) each day."""
+
+    def __init__(self, clock):
+        self.clock = clock
+
+    def rows(self) -> list[tuple[str, str, int]]:
+        t = self.clock()
+        day, hour = int(t // (24 * H)), (t % (24 * H)) / H
+        out = []
+        for d in range(day + 1):
+            for i in range(40):  # what's on the board all day: mostly other lanes or under the floor
+                lane = "Dallas, TX → Atlanta, GA" if i % 3 == 0 else ["Dallas, TX → Memphis, TN", "Houston, TX → Atlanta, GA"][i % 2]
+                out.append((f"L-{d}{i:03d}", lane, 1900 + (i * 37) % 550))
+            for j, at in enumerate((2.0, 5.2, 8.7)):  # new loads that match
+                if d < day or hour >= at:
+                    out.append((f"L-{d}9{j}", "Dallas, TX → Atlanta, GA", 2600 + 150 * j))
+        return out[-60:]
+
+    def page(self) -> str:
+        lines = ["Load search: Dallas, TX (100 mi) → anywhere | Dry van | 53 ft", "Ref | Lane | Weight | Equipment | Rate | Pickup | Broker"]
+        lines += [f"{r} | {lane} | 42,000 lb | Dry van | ${rate:,} | Tue 8:00 AM | Hollis Logistics (MC 123456)" for r, lane, rate in self.rows()]
+        return "\n".join(lines + ["Showing 60 results · Saved searches · Help · Terms · Privacy"])
+
+    def matching(self) -> list[dict]:
+        return [{"ref": r, "lane": lane, "rate": rate} for r, lane, rate in self.rows() if "Atlanta" in lane and rate >= 2500]
+
+
+class FakeBrowser:
+    def __init__(self, board: Board):
+        self.board = board
+        self.path = "/dev/null"
+
+    def request(self, op, **kw):
+        if op in ("open", "read", "go"):
+            return {"ok": True, "tab": "T1", "owner": "ai", "trust": "outside", "title": "Load search", "url": BOARD_URL,
+                    "text": self.board.page(), "controls": [{"ref": i, "kind": "link", "label": f"view L-{i}"} for i in range(30)]}
+        if op == "watch":
+            m = self.board.matching()
+            return {"ok": True, "watch": kw.get("name"), "every": 600, "rows": len(self.board.rows()), "title": "Load search",
+                    "matching_now": m, "matching_count": len(m), "sample": m[0] if m else self.board.matching(), "trust": "outside"}
+        return {"ok": True}
+
+
 # ---- a day of events --------------------------------------------------------------------------------------
 
 def workload(days: int, only: str | None = None) -> list[tuple[float, str, dict]]:
@@ -298,11 +383,18 @@ def workload(days: int, only: str | None = None) -> list[tuple[float, str, dict]
             (9.0 * h, "mail", {"category": "load_offer", "nego": 2, "rate": 280000, "reply": True})]
     day += [(t * h, "task", {"title": title}) for title, t in (("Weekly fuel report", 3.0), ("Renew the truck's registration", 6.0),
                                                                 ("Find a dentist near home", 8.0))]
+    # Keeping an eye on a load board, Dallas to Atlanta at $2,500 or more: before, a check every 30 minutes;
+    # with a watch, set up once, then only the three new loads a day that match.
+    board = [(0.5 * h, "board.watch", {})] + [((0.5 + 0.5 * i) * h, "board.check", {}) for i in range(20)]
+    board += [(at * h, "board.match", {"j": j}) for j, at in enumerate((2.0, 5.2, 8.7))]
     out = []
     for d in range(days):
         out += [(t + d * 24 * h, k, {**v, "day": d}) for t, k, v in day]
+        out += [(t + d * 24 * h, k, {**v, "day": d}) for t, k, v in board if not (k == "board.watch" and d > 0)]
     if only == "negotiation":
         out = [x for x in out if "nego" in x[2]]
+    if only == "board":
+        out = [x for x in out if x[1].startswith("board.")]
     return sorted(out, key=lambda x: x[0])
 
 
@@ -332,7 +424,12 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     meter = CacheMeter(clock)
     cfg = Config()
     cfg.mode, cfg.effort, cfg.web = "auto", "high", True
-    tb = Toolbox(cfg, Memory(cfg), core=core, mind=True)
+    tb = Toolbox(cfg, Memory(cfg), core=core, mind=True, browser=FakeBrowser(Board(clock)))
+    old = strategy.startswith("full")
+    note = "[board] Time to check the load board for Dallas to Atlanta loads at $2,500 or more: " + BOARD_URL if old else \
+        "[board-watch] Keep an eye on the load board for Dallas to Atlanta loads at $2,500 or more: " + BOARD_URL
+    core.request("add_rule", source="human", rule={"rule": "load-board", "when": "board.check" if old else "board.watch",
+                                                   "steps": [{"think": note}]})
     model = None
     if real:
         import anthropic
@@ -346,7 +443,7 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     mind = Mind(agent, core, strategy="full" if strategy.startswith("full") else "ladder", clock=clock)
     seen = core.request("events", since=0, limit=1)["last"]
     stats = {"situations": 0, "to_model": 0, "habit_used": 0, "conversations": 0, "replies": 0, "replies_expected": 0,
-             "replies_told": 0}
+             "replies_told": 0, "board_new": 0, "board_told": 0}
     orig_reset = agent.reset
 
     def counting_reset():
@@ -368,6 +465,8 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
                 if k == "plan.waiting" and (d.get("wait") or {}).get("approval"):
                     core.request("answer", plan_id=d["plan_id"], text="always", source="human")  # the human: yes, always
                 said = (d.get("text") or "") if k == "ai.tell" else ((d.get("wait") or {}).get("question") or "") if k == "plan.waiting" else ""
+                if k == "ai.tell" and "New load to Atlanta" in (d.get("text") or ""):
+                    stats["board_told"] += (d.get("text") or "").count(" at $")
                 if "Hollis came back at $" in said or "Hollis dropped to $" in said:
                     stats["replies_told"] += 1  # the human heard the answer, with where the exchange stands
                 if k == "plan.waiting" and "Take it?" in said:
@@ -385,6 +484,15 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
         if what in ("service.failed", "memory.pressure"):
             stats["situations"] += 1
             core.request("event", kind=what, data=d)
+        elif what in ("board.check", "board.watch"):
+            core.request("event", kind=what, data={})
+        elif what == "board.match":
+            stats["board_new"] += 1
+            if not strategy.startswith("full"):  # the browser's watch saw a new matching row (tested in core: watch.rs)
+                ref = f"L-{d['day']}9{d['j']}"
+                core.request("event", kind="web.matched", data={"watch": "dal-atl", "url": BOARD_URL, "note": "DAL to ATL at $2,500+",
+                             "count": 1, "trust": "outside", "items": [{"ref": ref, "lane": "Dallas, TX → Atlanta, GA",
+                                                                        "rate": 2600 + 150 * d["j"], "link": f"{BOARD_URL}&ref={ref}"}]})
         elif what == "mail" and "nego" in d:
             n_fact += 1
             ref = f"HL-{d['day']}-{d['nego']}"
@@ -436,7 +544,7 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=1)
     ap.add_argument("--real", action="store_true")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--only", choices=["negotiation"], help="run one scenario alone")
+    ap.add_argument("--only", choices=["negotiation", "board"], help="run one scenario alone")
     args = ap.parse_args()
     if not CORE_BIN.exists():
         print("build the core first: cd core && cargo build --release")
@@ -466,6 +574,8 @@ def main() -> int:
     print(f"{'negotiation replies already expected':<34}" + "".join(f"{r['replies_expected']:>33}" for r in results)
           + f"   (replies: {results[0]['replies']})")
     print(f"{'replies brought to you, with state':<34}" + "".join(f"{r['replies_told']:>33}" for r in results))
+    print(f"{'new matching loads told to you':<34}" + "".join(f"{r['board_told']:>33}" for r in results)
+          + f"   (new matching loads: {results[0]['board_new']})")
     base = results[0]["cost"] or 1
     print(f"\nThe ladder: {results[2]['cost'] / base:.0%} of the cost, {results[2]['requests']} requests instead of "
           f"{results[0]['requests']}, for the same work.")

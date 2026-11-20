@@ -33,6 +33,7 @@ mod reach;
 mod tasks;
 mod verbs;
 mod voice;
+mod watch;
 mod workspace;
 
 use serde_json::{json, Value};
