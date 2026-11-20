@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// What the Workspace page may ask the core: reading what to show, and answering as the human.
-const CORE_OPS: [&str; 6] = ["tasks", "task", "waiting", "answer", "events", "state"];
+const CORE_OPS: [&str; 8] = ["tasks", "task", "waiting", "answer", "events", "state", "models", "models_set"];
 
 pub fn default_path() -> String {
     std::env::var("LINUXAI_WORKSPACE").unwrap_or_else(|_| "/usr/share/linuxai/workspace/index.html".into())
@@ -147,6 +147,11 @@ impl Workspace {
                 let mut fields = req["request"].clone();
                 if let Value::Object(m) = &mut fields {
                     m.remove("op");
+                    // The Workspace is the human's own surface (only this page has the bridge): a change to the
+                    // model table made here is theirs.
+                    if op == "models_set" {
+                        m.insert("source".into(), json!("human"));
+                    }
                 }
                 core.request(op, fields).map_err(|e| e.to_string())
             }

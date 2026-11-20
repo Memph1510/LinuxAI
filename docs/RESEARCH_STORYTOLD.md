@@ -60,6 +60,19 @@ Ranked by how well they fit LinuxAI.
     PhotoCraft look the most useful. Caveat: they're young (alpha to early beta), and the ArtCraft name and
     logos are trademarks that forks must remove.
 
+## Decided
+
+| Idea | Decision |
+|---|---|
+| Evidence records ("checked / not checked") | **Built.** Finished tasks carry what was checked, what wasn't and how sure; the core requires it from the AI; plans list their own checks in `assess.verify`; the Workspace shows it. |
+| Summary first, then pages | **Built.** Long tool results come as their shape and page 1 of N; `more` reads the rest; nothing is cut silently. |
+| One tool → model table | **Built.** `core/src/models.rs`: thinking, effort, background, reading email, pictures (order), speech to text, voice. Yours to set (Workspace or session); the AI reads it and suggests. |
+| Staged copy, verified export | **The rule** for every file-editing organ ([CREATIVE_TOOLS.md](CREATIVE_TOOLS.md)). |
+| Scene first, then generate | **A prompt** (`images/compose-scene`), using Blender to block out exact compositions. |
+| Local cutouts on the CPU + verified installs | Next, when wanted. |
+| MCP surface for outside agents | Later. |
+| Ship Craft apps as organs | Not yet (early alpha); PDFCraft is the one to watch. |
+
 ## Not for us
 
 - The hosted model catalog and its accounts: we route paid generation through our own budget rules.

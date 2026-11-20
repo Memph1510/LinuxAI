@@ -855,3 +855,16 @@ def test_finishing_a_task_says_how_the_ai_knows(env, live_core):
     assert out == "OK", out
     tree = live_core.request("task", task=tid)["tree"]
     assert tree["status"] == "done" and tree["evidence"]["checked"] == ["GasBuddy, 6 stations, 20 min ago"]
+
+
+def test_the_model_table_picks_each_jobs_model(env, live_core):
+    from linuxai.cli import use_models
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    live_core.request("models_set", source="human", job="background", uses="claude-sonnet-5-5")
+    live_core.request("models_set", source="human", job="thinking_effort", uses="medium")
+    use_models(cfg, live_core, "background")
+    assert cfg.model == "claude-sonnet-5-5" and cfg.effort == "medium"
+    out, _ = tb.execute("models", {})
+    assert "background: claude-sonnet-5-5 (your choice)" in out and "reading_email:" in out
+    assert live_core.request("models_set", job="background", uses="x")["ok"] is False, "the AI can't set it"

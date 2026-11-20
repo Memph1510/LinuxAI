@@ -25,6 +25,7 @@ mod host;
 mod images;
 mod mail;
 mod memory;
+mod models;
 mod playbooks;
 mod prompts;
 mod reach;
@@ -40,7 +41,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-fn default_socket() -> PathBuf {
+pub(crate) fn default_socket() -> PathBuf {
     if let Ok(p) = std::env::var("LINUXAI_CORE_SOCKET") {
         return p.into();
     }

@@ -308,6 +308,9 @@ CORE_TOOLS = [
     _tool("suggest_prompt", "Suggest a new prompt or an improvement for the library (full markdown with a header). Held for the human's OK.",
           {"name": {"type": "string", "description": "e.g. freight/counter-offer"}, "text": {"type": "string"},
            "reason": {"type": "string"}}, ["name", "text", "reason"]),
+    _tool("models", "Which model does which job (thinking, background work, reading email, pictures, speech, voice), "
+          "and why: the human's choice, the environment or the default. The human sets it; you can suggest a change.",
+          {}, []),
     _tool("calendar",
           "The human's calendar: your record of their time, kept from conversation and used when you plan, decide "
           "and talk to them. There is no calendar screen; you are how they see it. Ops: agenda {from?, to?} (default "
@@ -948,6 +951,10 @@ class Toolbox:
         cond = {"category": category, **(where if isinstance(where, dict) else {})}
         r = self._core("find", spec={"type": "case", "where": cond, "last": last})
         return json.dumps(r.get("found", r), default=str)
+
+    def t_models(self) -> str:
+        r = self._core("models")
+        return "\n".join(f"{j['job']}: {j['uses']} ({j['from']}) - {j['what']}" for j in r.get("jobs", []))
 
     def t_calendar(self, op: str, minutes: int | None = None, **kw: Any) -> str:
         span = {k: kw[k] for k in ("from", "to") if kw.get(k)}

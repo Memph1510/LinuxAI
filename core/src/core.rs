@@ -388,6 +388,15 @@ impl Core {
             op if op.starts_with("playbook") => self.playbook_op(op, req),
             op if op.starts_with("prompt") => self.prompt_op(op, req),
             "object_put" | "find" => self.object_op(op, req),
+            "models" => crate::models::table(&self.mem),
+            // Which model does which job is the human's choice; the AI reads the table and can suggest.
+            "models_set" => {
+                if req["source"] != "human" {
+                    json!({"ok": false, "error": "which model does which job is the human's choice: suggest it to them"})
+                } else {
+                    crate::models::set(&self.mem, &self.bus, req["job"].as_str().unwrap_or(""), req["uses"].as_str().unwrap_or(""))
+                }
+            }
             "calendar" | "calendar_free" | "invites" | "calendar_import" => crate::calendar::op(&self.mem, &self.bus, op, req),
             // The calendar is the AI's working knowledge of the human's time: it writes what the human tells it
             // directly. Subscribed calendars and invitations stay outside information (calendar.rs refuses to edit them).
