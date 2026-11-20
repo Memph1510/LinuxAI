@@ -1,0 +1,164 @@
+{
+ "_about": "Craft apps LinuxAI can install when a task needs one. Pinned and reviewed: the tarball must match sha256 here, be signed (GPG .asc) by the ArtCraft Linux Release Signing Key with the pinned fingerprint, and agree with the release's SHA256SUMS.txt. Bump a version only with its new hash, reviewed.",
+ "release_url": "https://github.com/storytold/{app}/releases/download/v{version}/{asset}",
+ "signing_key_fingerprint": "2B76741B414AAD6CD33E631213A005C0B9D7C3ED",
+ "signing_key_asset": "release-signing-key.asc",
+ "apps": {
+  "photocraft": {
+   "version": "0.23.1",
+   "asset": "photocraft-0.23.1-linux-x86_64.tar.gz",
+   "sha256": "4383aef67a07cc370ad250a6ed60015205d3e6c463faf3ff4b0f67b8178ccfc8",
+   "cli": "photocraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "doc_inspect",
+   "what": "Photo editing: layers, selections (Select Subject on this machine), filters, adjustments, retouching; PSD/PSB, PNG, JPEG, TIFF, WebP and more"
+  },
+  "lightcraft": {
+   "version": "0.21.1",
+   "asset": "lightcraft-0.21.1-linux-x86_64.tar.gz",
+   "sha256": "b123de16915809a79e64ba4ee3aee9e1cded6ef23b737c06f81cdc7e2f286d62",
+   "cli": "lightcraft-cli",
+   "roots": "none",
+   "args": [
+    "--compact"
+   ],
+   "smoke": "doc_inspect",
+   "what": "RAW photo development and non-destructive photo adjustments, presets, batch export"
+  },
+  "vectorcraft": {
+   "version": "0.24.1",
+   "asset": "vectorcraft-0.24.1-linux-x86_64.tar.gz",
+   "sha256": "a090514252fde145495ac6fc65d6ff1311d698998e57ba434d5d0896c3d1fbfa",
+   "cli": "vectorcraft-cli",
+   "roots": "automation",
+   "args": [
+    "--headless"
+   ],
+   "smoke": "doc_inspect",
+   "what": "Vector art: shapes, paths, text, logos, icons, illustrations; SVG, PDF, EPS-style export"
+  },
+  "filmcraft": {
+   "version": "0.20.1",
+   "asset": "filmcraft-0.20.1-linux-x86_64.tar.gz",
+   "sha256": "3e4fea3cb8d473e68f189a0a8792ba46160fab507adab3ab8920073fd41f24fa",
+   "cli": "filmcraft-cli",
+   "roots": "none",
+   "args": [],
+   "smoke": "doc_inspect",
+   "what": "Video editing: cut, trim, arrange clips, titles, transitions, audio tracks, export"
+  },
+  "effectcraft": {
+   "version": "0.24.1",
+   "asset": "effectcraft-0.24.1-linux-x86_64.tar.gz",
+   "sha256": "5ce0393690144227fa9186e82308ad638a6ef6d9f976c996e6d03b5b51b65a7b",
+   "cli": "effectcraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "doc_inspect",
+   "what": "Motion graphics and compositing: animated titles, layers, keyframes, effects"
+  },
+  "soundcraft": {
+   "version": "0.20.1",
+   "asset": "soundcraft-0.20.1-linux-x86_64.tar.gz",
+   "sha256": "caefcf85c4f1138717d592d31ce5be07f2fca616ec36d63fac6760cdefbe28a9",
+   "cli": "soundcraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "inspect_session",
+   "what": "Audio: record, edit, mix, effects, clean up, export (a digital audio workstation)"
+  },
+  "pdfcraft": {
+   "version": "0.21.1",
+   "asset": "pdfcraft-cli-0.21.1-linux-x86_64.tar.gz",
+   "sha256": "a97b2e789d214360424f19814bc66f3eaf6d04ef5e42e472b46f7b9ddceea5c8",
+   "cli": "pdfcraft-cli",
+   "roots": "pdf",
+   "args": [
+    "--compact"
+   ],
+   "smoke": "doc_inspect",
+   "what": "PDF: read, find text, comment, fill forms, sign fields, rotate/move/delete/insert pages, combine, split, protect, metadata"
+  },
+  "wordcraft": {
+   "version": "0.18.1",
+   "asset": "wordcraft-0.18.1-linux-x86_64.tar.gz",
+   "sha256": "312a057d46dd80597c12dccfd1097ce25edea40baaaeb50bcb6f01ac1aebadb5",
+   "cli": "wordcraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "inspect_document",
+   "what": "Word processing: write and edit documents (DOCX and more), styles, tables, export to PDF"
+  },
+  "gridcraft": {
+   "version": "0.19.1",
+   "asset": "gridcraft-0.19.1-linux-x86_64.tar.gz",
+   "sha256": "8d97bba2d5bb00fd69ed55064852c1fd914de40d5ecd55ca01c8df81b828946d",
+   "cli": "gridcraft-cli",
+   "roots": "none",
+   "args": [],
+   "smoke": "inspect_workbook",
+   "what": "Spreadsheets: workbooks, formulas, tables, charts; XLSX/CSV"
+  },
+  "deckcraft": {
+   "version": "0.18.1",
+   "asset": "deckcraft-0.18.1-linux-x86_64.tar.gz",
+   "sha256": "5bae7d5566638624411ef968f2532ab3358dc280884144583e497c5631db8a26",
+   "cli": "deckcraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "list_commands",
+   "what": "Presentations: slides, layouts, speaker notes; PPTX and PDF export"
+  },
+  "designcraft": {
+   "version": "0.20.1",
+   "asset": "designcraft-0.20.1-linux-x86_64.tar.gz",
+   "sha256": "e91630d4cdf578ccb1e2f39f88e24e8520f1482d51ae4714657ee471e2237f44",
+   "cli": "designcraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "inspect_document",
+   "what": "Page layout: flyers, brochures, posters, multi-page print layouts; IDML/INDD import, PDF export"
+  },
+  "figcraft": {
+   "version": "0.18.1",
+   "asset": "figcraft-0.18.1-linux-x86_64.tar.gz",
+   "sha256": "8276d2ac55c6f77f7af3a411a9b00415d3feb0b59607a54523311340e653fc19",
+   "cli": "figcraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "inspect_document",
+   "what": "Interface design and prototyping: screens, components, frames"
+  },
+  "cadcraft": {
+   "version": "0.20.1",
+   "asset": "cadcraft-0.20.1-linux-x86_64.tar.gz",
+   "sha256": "57b6f1b41b4f3c542a82f103202ed1a779440e5ff8d25c08ef66abda1a8cb1b9",
+   "cli": "cadcraft-cli",
+   "roots": "none",
+   "args": [],
+   "smoke": "inspect_drawing",
+   "what": "CAD drafting: 2D drawings, dimensions, layers; DXF/DWG-style drawings"
+  },
+  "texturecraft": {
+   "version": "0.6.1",
+   "asset": "texturecraft-0.6.1-linux-x86_64.tar.gz",
+   "sha256": "e17d14a1ebb9f611da461708c29888750f982fdd7f0cd11e1690ec4a84068600",
+   "cli": "texturecraft-cli",
+   "roots": "automation",
+   "args": [],
+   "smoke": "session_inspect",
+   "what": "3D texture painting on models"
+  },
+  "materialcraft": {
+   "version": "0.4.1",
+   "asset": "materialcraft-0.4.1-linux-x86_64.tar.gz",
+   "sha256": "43115f8d3e2fee8f9f29bc07b03c984c2e8f6d04e0e1959439d73ec5cdf6830e",
+   "cli": "materialcraft-cli",
+   "roots": "material",
+   "args": [],
+   "smoke": "session_inspect",
+   "what": "Node-based material design for 3D (PBR materials and textures)"
+  }
+ }
+}

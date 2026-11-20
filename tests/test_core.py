@@ -868,3 +868,35 @@ def test_the_model_table_picks_each_jobs_model(env, live_core):
     out, _ = tb.execute("models", {})
     assert "background: claude-sonnet-5-5 (your choice)" in out and "reading_email:" in out
     assert live_core.request("models_set", job="background", uses="x")["ok"] is False, "the AI can't set it"
+
+
+def test_craft_tool_shows_pictures_marks_outside_and_asks_before_replacing(env, live_core):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    sent = []
+
+    def fake(req):
+        sent.append(req)
+        if req["op"] == "call":
+            return {"ok": True, "outputs": [{"name": "photo.png", "bytes": 12998}], "result": {"isError": False, "content": [
+                {"type": "text", "text": "{\"layer\":2}"}, {"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}]}}
+        if req["op"] == "replace" and not req.get("approved"):
+            return {"ok": False, "needs_ok": True, "error": "This replaces a.png with a.ai-1.png. Ask the human, then send approved: true."}
+        return {"ok": True, "op": req["op"]}
+    tb._craft = fake
+    assert "craft" in {t["name"] for t in tb.tools()}
+    (tmp / "photo.png").write_bytes(b"x")
+    tb.execute("craft", {"op": "open", "app": "photocraft", "files": ["photo.png"]})
+    assert sent[-1]["files"] == [str(tmp / "photo.png")], "paths are made absolute"
+    tb.outside_seen = False
+    out, err = tb.execute("craft", {"op": "call", "session": "s1", "tool": "command_run", "args": {"id": "layer.removeBackground"}})
+    assert not err and out[0]["type"] == "text" and out[1]["type"] == "image" and "photo.png" in out[0]["text"]
+    assert tb.outside_seen, "what comes back from a document is outside information"
+    asked = []
+    tb.asker = lambda q, o: asked.append(q) or "no"
+    out, _ = tb.execute("craft", {"op": "replace", "staged": "a.ai-1.png", "approved": True})
+    assert out == "The human said no." and "replaces a.png" in asked[0]
+    assert not any(r.get("approved") for r in sent), "the model can't approve for the human"
+    tb.mind = True
+    out, _ = tb.execute("craft", {"op": "replace", "staged": "a.ai-1.png"})
+    assert "aren't here" in out
