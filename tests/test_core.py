@@ -841,3 +841,17 @@ def test_long_results_come_in_pages_and_nothing_is_lost(env):
     tb.execute("more", {"result": "r9", "page": 2})
     assert tb.outside_seen
     assert "Error" in tb.execute("more", {"result": "r404", "page": 2})[0]
+
+
+def test_finishing_a_task_says_how_the_ai_knows(env, live_core):
+    cfg, mem, tb, tmp = env
+    tb.core = live_core
+    tid = live_core.request("task_create", spec={"title": "Cheapest diesel near Memphis"}, source="ai")["task"]
+    out, _ = tb.execute("finish_task", {"task_id": tid, "done": True, "result": "Pilot, $3.41"})
+    assert out.startswith("Error") and "checked" in out, out
+    out, _ = tb.execute("finish_task", {"task_id": tid, "done": True, "result": "Pilot, $3.41",
+                                        "checked": ["GasBuddy, 6 stations, 20 min ago"], "not_checked": ["price at arrival"],
+                                        "confidence": 0.8})
+    assert out == "OK", out
+    tree = live_core.request("task", task=tid)["tree"]
+    assert tree["status"] == "done" and tree["evidence"]["checked"] == ["GasBuddy, 6 stations, 20 min ago"]

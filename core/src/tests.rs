@@ -988,3 +988,35 @@ fn a_full_disk_is_reported_not_hidden() {
     assert_eq!(p["memory"]["healthy"], false, "{p}");
     assert!(p["memory"]["failed_writes"].as_u64().unwrap() > 0);
 }
+
+#[test]
+fn finished_work_says_what_was_checked_and_what_wasnt() {
+    let (c, _, _) = core_with_playbooks();
+    // The AI finishing a task itself has to say how it knows.
+    let r = c.handle(&json!({"op": "task_create", "spec": {"title": "Find the cheapest diesel near Memphis"}}));
+    let id = r["task"].as_str().unwrap().to_string();
+    let r = c.handle(&json!({"op": "task_done", "task": id, "result": "Pilot on I-40, $3.41"}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().unwrap().contains("checked"));
+    let r = c.handle(&json!({"op": "task_done", "task": id, "result": "Pilot on I-40, $3.41", "evidence": {
+        "checked": ["prices on GasBuddy for 6 stations within 10 miles, 20 minutes ago"],
+        "not_checked": ["whether the price holds until you get there"], "confidence": 0.8}}));
+    assert_eq!(r["ok"], true, "{r}");
+    let t = c.handle(&json!({"op": "task", "task": id}))["tree"].clone();
+    assert_eq!(t["evidence"]["not_checked"][0], "whether the price holds until you get there");
+    assert_eq!(t["evidence"]["by"], "ai");
+
+    // Done by a plan: what ran, plus what its own steps checked; a plan that checked nothing doesn't look verified.
+    let r = c.handle(&json!({"op": "task_create", "source": "human", "spec": {"title": "Quiet the fans",
+        "plan": {"steps": [{"do": "set", "what": "power.profile", "to": "quiet"}]}}}));
+    let t = c.handle(&json!({"op": "task", "task": r["task"]}))["tree"].clone();
+    assert_eq!(t["status"], "done", "{t}");
+    assert_eq!(t["evidence"]["by"], "plan");
+    assert!(t["evidence"]["not_checked"][0].as_str().unwrap().contains("no step of the plan checked it"), "{t}");
+    let r = c.handle(&json!({"op": "task_create", "source": "human", "spec": {"title": "Quiet the fans, checked",
+        "plan": {"assess": {"confidence": 0.9, "consequences": ["quieter"], "outcomes": ["fine"], "verify": ["the profile reads back as quiet"]},
+                 "steps": [{"do": "set", "what": "power.profile", "to": "quiet"}]}}}));
+    let t = c.handle(&json!({"op": "task", "task": r["task"]}))["tree"].clone();
+    assert_eq!(t["evidence"]["checked"][1], "the profile reads back as quiet", "{t}");
+    assert_eq!(t["evidence"]["not_checked"], json!([]));
+}

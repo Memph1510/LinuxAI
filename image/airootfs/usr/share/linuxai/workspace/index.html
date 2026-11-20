@@ -188,6 +188,9 @@ async function loadSteps(id) {
       <span class="meta"><span class="pill s-${esc(t.status)}">${esc(statusWord[t.status] || t.status)}</span><span>${esc(t.kind)}${human.includes(t.kind) ? " · yours" : ""}</span></span>
       ${t.result ? `<span class="q-why">${esc(typeof t.result === "string" ? t.result : JSON.stringify(t.result))}</span>` : ""}
       ${t.error ? `<span class="q-why" style="color:var(--bad)">${esc(t.error)}</span>` : ""}
+      ${t.evidence ? `<span class="q-why">${(t.evidence.checked || []).map((c) => `✓ ${esc(c)}`).join("<br>")}${
+        (t.evidence.not_checked || []).length ? "<br>" + t.evidence.not_checked.map((c) => `<span style="color:var(--you)">not checked: ${esc(c)}</span>`).join("<br>") : ""}${
+        typeof t.evidence.confidence === "number" ? `<br>${Math.round(t.evidence.confidence * 100)}% sure` : ""}</span>` : ""}
     </div>${t.children && t.children.length ? `<ul>${t.children.map(node).join("")}</ul>` : ""}</li>`;
   $("stepsTitle").textContent = r.tree.title;
   $("steps").innerHTML = `<ul class="steps">${node(r.tree)}</ul>`;
@@ -297,7 +300,8 @@ const DEMO = {
     { id: "t3", title: "Verizon bill is higher than usual", status: "done", category: "bills" }] },
   task: { ok: true, tree: { title: "Choosing a family SUV that tows the camper", kind: "work", status: "waiting", children: [
     { title: "Find SUVs under $40k that tow 3,800 lb", kind: "work", status: "done", result: "2 fit: Ridgeway LX, Summit Trail" },
-    { title: "Compare towing, mileage and price", kind: "work", status: "done", result: "Only the Summit Trail tows the camper with margin" },
+    { title: "Compare towing, mileage and price", kind: "work", status: "done", result: "Only the Summit Trail tows the camper with margin",
+      evidence: { checked: ["towing ratings on both makers' spec sheets"], not_checked: ["your camper's loaded weight (I used the listing's 3,800 lb)"], confidence: 0.85 } },
     { title: "Decide on a test drive", kind: "decision", status: "waiting" },
     { title: "Book the test drive", kind: "work", status: "pending" }] } },
   pages: { ok: true, pages: [{ tab: "a", owner: "ai", title: "Compare SUVs", url: "https://drivelist.example/compare" }, { tab: "b", owner: "human", title: "Lone Star Motors", url: "https://lonestarmotors.example" }] },

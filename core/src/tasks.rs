@@ -221,7 +221,7 @@ impl Core {
         let Some(t) = self.mem.transition_task(id, from, to, &patch) else { return };
         let kind = if to == "done" { "task.done" } else { "task.failed" };
         self.bus.emit(&self.mem, kind, json!({"task": id, "title": t["title"], "category": t["category"],
-            "kind": t["kind"], "result": t["result"], "error": t["error"], "parent": t["parent"]}));
+            "kind": t["kind"], "result": t["result"], "error": t["error"], "parent": t["parent"], "evidence": t["evidence"]}));
         if let Some(p) = t["parent"].as_str() {
             self.task_advance(p);
         }
@@ -240,7 +240,21 @@ impl Core {
             }
         }
         if kind == "plan.finished" {
-            self.task_finish(id, &["running", "waiting"], "done", json!({"result": result, "plan_id": summary["plan_id"]}));
+            // Say what's actually known: the steps ran, plus what the plan's own steps checked (assess.verify).
+            // A plan that checked nothing about its result doesn't get to look verified.
+            let plan = self.mem.load_plan(summary["plan_id"].as_str().unwrap_or("")).map(|p| p["plan"].clone()).unwrap_or(Value::Null);
+            let verify: Vec<Value> = plan["assess"]["verify"].as_array().cloned().unwrap_or_default().into_iter()
+                .filter(|v| v.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false)).collect();
+            let mut checked = vec![json!("the plan ran to the end without an error")];
+            let mut not_checked = vec![];
+            if verify.is_empty() {
+                not_checked.push(json!("whether the result is what was wanted: no step of the plan checked it"));
+            } else {
+                checked.extend(verify);
+            }
+            let evidence = json!({"checked": checked, "not_checked": not_checked, "by": "plan",
+                                  "confidence": plan["assess"]["confidence"].clone()});
+            self.task_finish(id, &["running", "waiting"], "done", json!({"result": result, "plan_id": summary["plan_id"], "evidence": evidence}));
         } else {
             let why = summary["error"].as_str().unwrap_or("stopped").to_string();
             self.task_finish(id, &["running", "waiting"], "failed", json!({"error": why, "plan_id": summary["plan_id"]}));
@@ -303,7 +317,16 @@ impl Core {
                 json!({"ok": true, "tree": self.task_tree(id)})
             }
             "task_done" => {
-                self.task_finish(id, &["needs_plan", "running", "waiting", "pending"], "done", json!({"result": req["result"]}));
+                // The AI says how it knows the work is done: what it checked, what it didn't, how sure it is.
+                let evidence = &req["evidence"];
+                let list = |k: &str| evidence[k].as_array().map(|a| a.iter().filter_map(Value::as_str).filter(|s| !s.trim().is_empty()).count());
+                if req["source"] != "human" && (list("checked").unwrap_or(0) == 0 || list("not_checked").is_none()
+                    || evidence["confidence"].as_f64().is_none()) {
+                    return json!({"ok": false, "error": "say how you know it's done: evidence {\"checked\": [what you verified,                         and how], \"not_checked\": [what you didn't verify, or []], \"confidence\": 0-1}"});
+                }
+                let ev = if evidence.is_object() { json!({"checked": evidence["checked"], "not_checked": evidence["not_checked"],
+                    "confidence": evidence["confidence"], "by": req["source"].as_str().unwrap_or("ai")}) } else { Value::Null };
+                self.task_finish(id, &["needs_plan", "running", "waiting", "pending"], "done", json!({"result": req["result"], "evidence": ev}));
                 json!({"ok": self.mem.load_task(id).map(|t| t["status"] == "done").unwrap_or(false)})
             }
             "task_fail" => {

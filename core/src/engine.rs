@@ -358,7 +358,7 @@ pub fn check(plan: &Value, mem: &Memory, source: &str, threshold: f64) -> Report
     check_with(plan, mem, source, threshold, None)
 }
 
-const ASSESS_HELP: &str = "before acting, assess it: add \"assess\": {\"confidence\": 0-1, \"consequences\": [what this will cause], \"outcomes\": [{\"if\": what might happen, \"then\": what you'd do}], \"unknowns\": [what you don't know yet], \"research\": what you looked into}";
+const ASSESS_HELP: &str = "before acting, assess it: add \"assess\": {\"confidence\": 0-1, \"consequences\": [what this will cause], \"outcomes\": [{\"if\": what might happen, \"then\": what you'd do}], \"unknowns\": [what you don't know yet], \"research\": what you looked into, \"verify\": [what the plan's own steps check about the result, if any]}";
 
 /// `novelty` is Some(reason) when the plan is a first-time situation (decided by the core from playbooks and cases).
 pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, novelty: Option<&str>) -> Report {
@@ -436,6 +436,7 @@ fn assess(plan: &Value, threshold: f64, novelty: Option<&str>, r: &mut Report) {
     let outcomes = strings(&a["outcomes"]);
     let unknowns = strings(&a["unknowns"]);
     let research = strings(&a["research"]);
+    let verify = strings(&a["verify"]);
     if conf.is_none() || consequences.is_empty() || outcomes.is_empty() {
         r.errors.push(format!("the assessment needs confidence, consequences and outcomes; {ASSESS_HELP}"));
         return;
@@ -455,7 +456,7 @@ fn assess(plan: &Value, threshold: f64, novelty: Option<&str>, r: &mut Report) {
         r.review.push(reason.to_string());
     }
     r.assessment = json!({"confidence": conf, "consequences": consequences, "outcomes": outcomes,
-                          "unknowns": unknowns, "research": research});
+                          "unknowns": unknowns, "research": research, "verify": verify});
 }
 
 fn check_block(steps: &[Value], path: &str, defined: &mut Vec<String>, mandates: &[(String, String)], r: &mut Report, depth: usize) {

@@ -247,8 +247,12 @@ CORE_TOOLS = [
           {"task_id": {"type": "string"}}, []),
     _tool("plan_task", "Give a task that needs a plan its plan (LinuxAI action language). It runs right away.",
           {"task_id": {"type": "string"}, "plan": {"type": "object"}}, ["task_id", "plan"]),
-    _tool("finish_task", "Mark a task done (with its result) or failed (with why), when you finished it without a plan.",
-          {"task_id": {"type": "string"}, "done": {"type": "boolean"}, "result": {"type": "string"}}, ["task_id", "done"]),
+    _tool("finish_task", "Mark a task done (with its result) or failed (with why), when you finished it without a plan. "
+          "Done needs how you know: what you checked (and how), what you didn't, and how sure you are.",
+          {"task_id": {"type": "string"}, "done": {"type": "boolean"}, "result": {"type": "string"},
+           "checked": {"type": "array", "items": {"type": "string"}, "description": "what you verified, and how"},
+           "not_checked": {"type": "array", "items": {"type": "string"}, "description": "what you didn't verify ([] if nothing)"},
+           "confidence": {"type": "number", "description": "0-1"}}, ["task_id", "done"]),
     _tool("read_playbook",
           "Read the playbooks (markdown) that govern a category, broadest first (freight, then freight/negotiate, "
           "then freight/negotiate/hollis).",
@@ -810,8 +814,11 @@ class Toolbox:
             return f"The plan didn't check out: {tree.get('error')}. Fix it and call plan_task again."
         return json.dumps(_slim_tree(tree))
 
-    def t_finish_task(self, task_id: str, done: bool, result: str = "") -> str:
-        r = self._core("task_done", task=task_id, result=result) if done else self._core("task_fail", task=task_id, error=result)
+    def t_finish_task(self, task_id: str, done: bool, result: str = "", checked: list | None = None,
+                      not_checked: list | None = None, confidence: float | None = None) -> str:
+        evidence = {"checked": checked or [], "not_checked": not_checked, "confidence": confidence}
+        r = (self._core("task_done", task=task_id, result=result, evidence=evidence) if done
+             else self._core("task_fail", task=task_id, error=result))
         return "OK" if r.get("ok") else f"Error: {r}"
 
     def t_read_playbook(self, category: str) -> str:
