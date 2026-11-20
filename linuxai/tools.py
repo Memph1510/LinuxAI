@@ -104,6 +104,50 @@ def matches_allow(command: str, prefixes: list[str]) -> bool:
     )
 
 
+# Pictures cost about (width x height) / 750 tokens each time a request carries them, and a tool result stays in
+# the conversation for the rest of the session. So they are sized once, before they are first sent (never edited
+# later, which would break the cache and the AI's earlier reasoning): at most this many pixels on the long side.
+IMAGE_MAX_SIDE = 1280
+
+
+def fit_images(out: Any) -> Any:
+    if not isinstance(out, list):
+        return out
+    return [_fit_image(b) if isinstance(b, dict) and b.get("type") == "image" else b for b in out]
+
+
+def _imagemagick(tool: str) -> list[str] | None:
+    """ImageMagick 7 (`magick identify`, `magick`) or 6 (`identify`, `convert`)."""
+    if shutil.which("magick"):
+        return ["magick", "identify"] if tool == "identify" else ["magick"]
+    found = shutil.which(tool if tool == "identify" else "convert")
+    return [found] if found else None
+
+
+def _fit_image(block: dict) -> dict:
+    src = block.get("source") or {}
+    if src.get("type") != "base64" or not src.get("data"):
+        return block
+    try:
+        raw = base64.b64decode(src["data"])
+        identify, convert = _imagemagick("identify"), _imagemagick("convert")
+        if not identify or not convert:
+            return block
+        probe = subprocess.run(identify + ["-format", "%w %h", "-"], input=raw, capture_output=True, timeout=30)
+        w, h = (int(x) for x in probe.stdout.decode().split()[:2])
+        if max(w, h) <= IMAGE_MAX_SIDE and len(raw) <= 1_500_000:
+            return block
+        # Shrink (never enlarge); photos and big screenshots go to JPEG, pictures with transparency stay PNG.
+        fmt = "png" if src.get("media_type") == "image/png" and len(raw) <= 1_500_000 else "jpeg"
+        out = subprocess.run(convert + ["-", "-resize", f"{IMAGE_MAX_SIDE}x{IMAGE_MAX_SIDE}>", "-quality", "85", f"{fmt}:-"],
+                             input=raw, capture_output=True, timeout=60)
+        if out.returncode != 0 or not out.stdout:
+            return block
+        return {**block, "source": {"type": "base64", "media_type": f"image/{fmt}", "data": base64.b64encode(out.stdout).decode()}}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return block  # no ImageMagick, or not a picture it reads: send as it is
+
+
 PAGE_CHARS = 12000
 # Tools whose results are outside information as a whole (so every page of them is).
 OUTSIDE_TOOLS = {"browser", "read_facts", "web_fetch", "craft"}
@@ -475,11 +519,16 @@ Steps (one keyword each):
       submit separate plans for anything that doesn't depend on the answer.
   {"tell": "<message>"}
   {"wait": "<event kind>", "max": "1h"} | {"wait": "10m"}   ($timed_out tells which happened)
+  {"wait": "message.received", "where": <expr using $event and plan vars>, "about": "<what you expect>",
+   "thread": "<track key>", "max": "2d"}      only the event that matches (e.g. this broker's reply about this load)
   {"think": "<note>"}                           hand back to you for judgment
   {"call": "<saved plan name>", "with": {...}}
 Expressions: "$var.path" reads a variable ($state = live machine state, $event = triggering event);
 "{$var}" inside text interpolates; prefix lists compute: ["=", a, b] [">", a, b] ["and", ...] ["+", a, b]
-["*", a, b] ["avg", "field", list] ["sum", list] ["count", list] ["pct", a, b] ["has", a, b] ["exists", a].
+["*", a, b] ["avg", "field", list] ["sum", list] ["count", list] ["pct", a, b] ["has", a, b] ["exists", a]
+["get", obj, "field"] ["first", list] ["pick", list, "field", value] (first item whose field equals value).
+An email event carries its claims inline: $event.data.claims, e.g. [{"type": "load_offer", "reference": "HL-3100",
+"rate_cents": 320000, ...}], plus from, subject, category; use ["pick", "$event.data.claims", "reference", "HL-3100"].
 {"find": {"type": T, "from": "@handle", "where": {field: value | [op, value]}, "pick": "newest", "last": N}}
 queries memory objects.
 Rules: {"rule": "<name>", "when": "<event kind or prefix.*>", "where": <expr>?, "steps": [...]}.
@@ -529,7 +578,7 @@ class Toolbox:
             outside = isinstance(out, str) and ('"trust": "outside"' in out or "'trust': 'outside'" in out)
             if outside:
                 self.outside_seen = True
-            return self._page(name, out, outside or name in OUTSIDE_TOOLS), False
+            return fit_images(self._page(name, out, outside or name in OUTSIDE_TOOLS)), False
         except TypeError as e:
             return f"Error: bad arguments for {name}: {e}", True
         except _Invalid as e:

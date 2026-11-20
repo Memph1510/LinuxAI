@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -483,8 +482,11 @@ def test_an_injection_email_becomes_claims_and_cannot_make_the_ai_act(env, live_
     offer_id = next(f for f in r["facts"] if f.startswith("obj:load_offer/"))
     # The raw email is kept for the human; the AI's tools can't read it.
     raw_file = next(cfg.mail_dir.glob("*.eml"))
-    with pytest.raises(Exception):
+    from linuxai.tools import _Invalid
+    with pytest.raises(_Invalid, match="raw email"):
         tb._path(str(raw_file))
+    out, err = tb.execute("read_file", {"path": str(raw_file)})
+    assert "raw email" in out and "SYSTEM OVERRIDE" not in out
     assert "Refused" in tb.t_run_command(f"cat {cfg.mail_dir}/*.eml", "x")
     # A plan that "forgets" it rests on the email is labeled anyway, must cite the claims, and waits for the human.
     plan = {"plan": "accept-hollis", "assess": {"confidence": 0.95, "consequences": ["load accepted"], "outcomes": ["fine"]},
@@ -900,3 +902,130 @@ def test_craft_tool_shows_pictures_marks_outside_and_asks_before_replacing(env, 
     tb.mind = True
     out, _ = tb.execute("craft", {"op": "replace", "staged": "a.ai-1.png"})
     assert "aren't here" in out
+
+
+def test_token_efficiency_stable_prefix_small_pictures_and_a_ledger(env, tmp_path):
+    import base64
+    import subprocess
+    from linuxai.tools import IMAGE_MAX_SIDE, _imagemagick, fit_images
+    cfg, mem, tb, tmp = env
+    # Pictures are sized once, before they are first sent.
+    big = tmp_path / "big.png"
+    if not _imagemagick("convert") or subprocess.run(_imagemagick("convert") + ["-size", "3000x2000", "xc:skyblue", str(big)]).returncode != 0:
+        pytest.skip("no ImageMagick")
+    block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(big.read_bytes()).decode()}}
+    small = fit_images([{"type": "text", "text": "x"}, block])[1]
+    raw = base64.b64decode(small["source"]["data"])
+    dims = subprocess.run(_imagemagick("identify") + ["-format", "%w %h", "-"], input=raw, capture_output=True).stdout.decode().split()
+    assert max(int(d) for d in dims) == IMAGE_MAX_SIDE
+    tiny = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+    assert fit_images([tiny])[0] is tiny, "small or unreadable pictures pass through untouched"
+    # Two requests in a session carry byte-identical tools and system, with a 1-hour marker on the system.
+    client = FakeClient([_msg([NS(type="text", text="one")], "end_turn"), _msg([NS(type="text", text="two")], "end_turn")])
+    agent = Agent(cfg, mem, tb, client=client)
+    agent.turn("hello")
+    agent.turn("again")
+    a, b = client.requests[0], client.requests[1]
+    assert json.dumps(a["tools"], sort_keys=True) == json.dumps(b["tools"], sort_keys=True)
+    assert a["system"] == b["system"] and a["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert a["cache_control"] == {"type": "ephemeral"}
+    # History is only ever appended to: the first request's messages are a prefix of the second's.
+    assert json.dumps(b["messages"][:len(a["messages"])], default=str) == json.dumps(a["messages"], default=str)
+    # Every request is in the ledger.
+    lines = [json.loads(line) for line in (cfg.home / "usage.jsonl").read_text().splitlines()]
+    assert len(lines) == 2 and lines[0]["role"] == "session" and {"input", "cache_read", "cache_write", "output"} <= set(lines[0])
+
+
+def test_usage_summary_reads_the_ledger(env, capsys):
+    from linuxai.cli import print_usage
+    cfg, mem, tb, tmp = env
+    cfg.home.mkdir(parents=True, exist_ok=True)
+    (cfg.home / "usage.jsonl").write_text(
+        json.dumps({"ts": 1795200000, "role": "mind", "model": "claude-opus-5-5", "input": 1000, "cache_read": 9000,
+                    "cache_write": 0, "output": 500}) + "\nnot json\n")
+    print_usage(cfg)
+    out = capsys.readouterr().out
+    assert "mind" in out and "9,000" in out and "90%" in out, out
+
+
+def test_the_mind_spends_thinking_by_level(env):
+    """The ladder: handled situations don't wake the AI; routine things wait and go together; effort follows stakes."""
+    from linuxai.mind import Mind
+    cfg, mem, tb, tmp = env
+    turns = []
+
+    class FakeAgent:
+        config = NS(effort="high")
+        toolbox = NS(outside_seen=False)
+
+        def reset(self):
+            pass
+
+        def turn(self, text):
+            turns.append((text.split("\n")[0][:60], self.config.effort, text))
+
+    class FakeCore:
+        def request(self, op, **kw):
+            if op == "plan":
+                return {"plan": {"status": "needs_thought" if kw["plan_id"] == "p-open" else "running"}}
+            if op == "playbook":
+                return {"chain": [{"category": kw["category"], "text": "- Restart once, then tell the human."}]}
+            if op == "find":
+                return {"found": [{"decision": "restarted cups", "outcome": "fine"}]}
+            if op == "object":
+                return {"object": {"id": kw["id"], "trust": "outside", "text": "rate $1,640"}}
+            return {"ok": True}
+    now = {"t": 0.0}
+    mind = Mind(FakeAgent(), FakeCore(), strategy="ladder", clock=lambda: now["t"], batch_secs=600)
+    # Already handled (by a habit, say): the AI isn't woken.
+    mind.on_event({"kind": "plan.needs_thought", "data": {"plan_id": "p-done", "plan": "x", "wait": {"note": "n"}}})
+    assert turns == []
+    # Still open: one brief, with the playbook and past cases in it, at medium effort.
+    mind.on_event({"kind": "plan.needs_thought", "data": {"plan_id": "p-open", "plan": "service-failed", "wait": {"note": "cups failed"}}})
+    assert len(turns) == 1 and turns[0][1] == "medium" and "Restart once" in turns[0][2] and "restarted cups" in turns[0][2]
+    # Routine mail waits; an urgent one (a load offer) goes now; the routine ones go together later, at low effort.
+    mail = lambda c, n: {"kind": "message.received", "data": {"category": c, "from": "dana@x", "authenticated": True,  # noqa: E731
+                                                              "subject": f"m{n}", "message": f"obj:message/{n}", "facts": [f"f{n}"], "contact": "contacts/x/dana"}}
+    mind.on_event(mail("other", 1))
+    now["t"] = 60
+    mind.on_event(mail("invoice_or_bill", 2))
+    assert len(turns) == 1, "routine mail waits"
+    mind.on_event(mail("load_offer", 3))
+    assert len(turns) == 2 and turns[1][1] == "medium" and "rate $1,640" in turns[1][2], "an urgent one goes now, facts included"
+    now["t"] = 700
+    mind.tick()
+    assert len(turns) == 3 and turns[2][1] == "low" and "m1" in turns[2][2] and "m2" in turns[2][2], "both in one conversation"
+    # Spam and newsletters never reach the model.
+    mind.on_event(mail("newsletter", 4))
+    mind.on_event(mail("phishing_or_spam", 5))
+    # A reply a plan is already waiting for (the broker's answer to our counter) is handled by that plan.
+    expected = mail("load_offer", 7)
+    expected["data"]["expected_by"] = [{"plan_id": "p-nego", "about": "Dana's answer to our $3,500 counter"}]
+    mind.on_event(expected)
+    mind.flush()
+    assert len(turns) == 3
+    # Work the human asked for gets high effort; the effort setting is restored afterwards.
+    mind.on_event({"kind": "task.needs_plan", "data": {"task": "t1", "title": "Fuel report", "category": "general", "playbooks": []}})
+    assert turns[-1][1] == "high" and FakeAgent.config.effort == "high"
+    # The old strategy is still there for comparison: one conversation per email, at the configured effort.
+    turns.clear()
+    old = Mind(FakeAgent(), FakeCore(), strategy="full", clock=lambda: 0)
+    old.on_event(mail("other", 6))
+    assert len(turns) == 1 and "read_facts" in turns[0][2]
+
+
+def test_open_exchanges_are_in_the_ais_context(env, live_core):
+    """A negotiation's state is kept in one place and shown to the AI, so a reply is understood without rereading."""
+    from linuxai.agent import Agent
+    cfg, mem, tb, _ = env
+    tb.core = live_core
+    plan = {"plan": "negotiate HL-3100", "steps": [
+        {"do": "track", "thread": "load:HL-3100", "with": "dana@hollis-logistics.com", "about": "Dallas to Atlanta",
+         "state": "they offered $3,000; we countered $3,500", "waiting_for": "their answer"},
+        {"wait": "message.received", "where": ["exists", ["pick", "$event.data.claims", "reference", "HL-3100"]],
+         "thread": "load:HL-3100", "about": "Dana's answer to $3,500", "max": "2d"}]}
+    r = live_core.request("submit", plan=plan, source="human")
+    assert r["result"]["status"] == "waiting:event", r
+    ctx = Agent(cfg, mem, tb, client=FakeClient([]))._context("hello")
+    assert "<open_threads>" in ctx and "we countered $3,500" in ctx and "handles the reply" in ctx, ctx
+    assert "Dana's answer to $3,500" in ctx, "the waiting plan says what it expects"

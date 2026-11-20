@@ -278,8 +278,24 @@ fn main() {
             Ok(())
         })(),
         Some("check") => {
-            let text = std::fs::read_to_string(args.get(2).map(String::as_str).unwrap_or("/dev/stdin")).unwrap_or_default();
-            let plan: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+            // linuxai-core check [FILE.json | '<plan json>']   (no argument: the plan on stdin)
+            let given = args.get(2).map(String::as_str).unwrap_or("/dev/stdin");
+            let text = if given.trim_start().starts_with('{') { given.to_string() } else {
+                match std::fs::read_to_string(given) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("linuxai-core check: can't read {given}: {e}");
+                        std::process::exit(2);
+                    }
+                }
+            };
+            let plan: Value = match serde_json::from_str(&text) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("linuxai-core check: that plan isn't valid JSON: {e}");
+                    std::process::exit(2);
+                }
+            };
             let mem = memory::Memory::in_memory();
             let r = engine::check(&plan, &mem, "ai", 0.8);
             println!("{}", serde_json::to_string_pretty(&r).unwrap());
