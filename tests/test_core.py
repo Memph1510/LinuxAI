@@ -934,3 +934,15 @@ def test_token_efficiency_stable_prefix_small_pictures_and_a_ledger(env, tmp_pat
     # Every request is in the ledger.
     lines = [json.loads(line) for line in (cfg.home / "usage.jsonl").read_text().splitlines()]
     assert len(lines) == 2 and lines[0]["role"] == "session" and {"input", "cache_read", "cache_write", "output"} <= set(lines[0])
+
+
+def test_usage_summary_reads_the_ledger(env, capsys):
+    from linuxai.cli import print_usage
+    cfg, mem, tb, tmp = env
+    cfg.home.mkdir(parents=True, exist_ok=True)
+    (cfg.home / "usage.jsonl").write_text(
+        json.dumps({"ts": 1795200000, "role": "mind", "model": "claude-opus-5-5", "input": 1000, "cache_read": 9000,
+                    "cache_write": 0, "output": 500}) + "\nnot json\n")
+    print_usage(cfg)
+    out = capsys.readouterr().out
+    assert "mind" in out and "9,000" in out and "90%" in out, out

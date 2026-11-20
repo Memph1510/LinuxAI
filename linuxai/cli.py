@@ -467,6 +467,41 @@ def install_service() -> None:
           f"systemctl --user enable --now cortex-observer.service")
 
 
+# $ per million tokens: (input, output, cache read). Cache writes: 1.25x input (5 minutes) or 2x (1 hour).
+PRICES = {"claude-opus-5-5": (4.00, 20.00, 0.20), "claude-sonnet-5-5": (2.00, 10.00, 0.10), "claude-haiku-5-5": (0.10, 0.50, 0.01),
+          "claude-fable-5-2": (8.00, 40.00, 0.20)}
+
+
+def print_usage(config: Config) -> None:
+    """`cortex usage`: what the AI's requests cost, per day and per role, from its ledger (usage.jsonl)."""
+    import datetime
+    import json as _json
+    path = config.home / "usage.jsonl"
+    if not path.exists():
+        print("No usage recorded yet.")
+        return
+    days: dict = {}
+    for line in path.read_text().splitlines():
+        try:
+            r = _json.loads(line)
+        except ValueError:
+            continue
+        key = (datetime.date.fromtimestamp(r["ts"]).isoformat(), r.get("role", "?"), r.get("model", "?"))
+        d = days.setdefault(key, {"requests": 0, "input": 0, "cache_read": 0, "cache_write": 0, "output": 0})
+        d["requests"] += 1
+        for k in ("input", "cache_read", "cache_write", "output"):
+            d[k] += r.get(k, 0)
+    print(f"{'day':<11} {'role':<8} {'model':<18} {'reqs':>5} {'fresh in':>10} {'from cache':>11} {'to cache':>9} {'out':>8} {'cost':>8}  cached")
+    for (day, role, model), d in sorted(days.items()):
+        p_in, p_out, p_read = PRICES.get(model, (0, 0, 0))
+        cost = (d["input"] * p_in + d["cache_write"] * p_in * 2 + d["cache_read"] * p_read + d["output"] * p_out) / 1e6
+        total_in = d["input"] + d["cache_read"] + d["cache_write"]
+        hit = d["cache_read"] / total_in if total_in else 0
+        print(f"{day:<11} {role:<8} {model:<18} {d['requests']:>5} {d['input']:>10,} {d['cache_read']:>11,} {d['cache_write']:>9,} "
+              f"{d['output']:>8,} {'$' + format(cost, '.2f'):>8}  {hit:.0%}")
+    print("(cost counts cache writes at the 1-hour rate, an upper bound; 'cached' is the share of input read from the cache)")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="cortex", description="An AI mind that runs your Linux machine.")
     p.add_argument("--version", action="version", version=__version__)
@@ -497,6 +532,8 @@ def main(argv: list[str] | None = None) -> None:
         elif os.environ.get("LINUXAI_EXTRACT_MODEL"):
             config.model = os.environ["LINUXAI_EXTRACT_MODEL"]
         sys.exit(extract_main(config.model))
+    elif words == ["usage"]:
+        print_usage(config)
     elif words == ["observe"]:
         from .observer import run
         run()
