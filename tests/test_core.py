@@ -946,3 +946,65 @@ def test_usage_summary_reads_the_ledger(env, capsys):
     print_usage(cfg)
     out = capsys.readouterr().out
     assert "mind" in out and "9,000" in out and "90%" in out, out
+
+
+def test_the_mind_spends_thinking_by_level(env):
+    """The ladder: handled situations don't wake the AI; routine things wait and go together; effort follows stakes."""
+    from linuxai.mind import Mind
+    cfg, mem, tb, tmp = env
+    turns = []
+
+    class FakeAgent:
+        config = NS(effort="high")
+        toolbox = NS(outside_seen=False)
+
+        def reset(self):
+            pass
+
+        def turn(self, text):
+            turns.append((text.split("\n")[0][:60], self.config.effort, text))
+
+    class FakeCore:
+        def request(self, op, **kw):
+            if op == "plan":
+                return {"plan": {"status": "needs_thought" if kw["plan_id"] == "p-open" else "running"}}
+            if op == "playbook":
+                return {"chain": [{"category": kw["category"], "text": "- Restart once, then tell the human."}]}
+            if op == "find":
+                return {"found": [{"decision": "restarted cups", "outcome": "fine"}]}
+            if op == "object":
+                return {"object": {"id": kw["id"], "trust": "outside", "text": "rate $1,640"}}
+            return {"ok": True}
+    now = {"t": 0.0}
+    mind = Mind(FakeAgent(), FakeCore(), strategy="ladder", clock=lambda: now["t"], batch_secs=600)
+    # Already handled (by a habit, say): the AI isn't woken.
+    mind.on_event({"kind": "plan.needs_thought", "data": {"plan_id": "p-done", "plan": "x", "wait": {"note": "n"}}})
+    assert turns == []
+    # Still open: one brief, with the playbook and past cases in it, at medium effort.
+    mind.on_event({"kind": "plan.needs_thought", "data": {"plan_id": "p-open", "plan": "service-failed", "wait": {"note": "cups failed"}}})
+    assert len(turns) == 1 and turns[0][1] == "medium" and "Restart once" in turns[0][2] and "restarted cups" in turns[0][2]
+    # Routine mail waits; an urgent one (a load offer) goes now; the routine ones go together later, at low effort.
+    mail = lambda c, n: {"kind": "message.received", "data": {"category": c, "from": "dana@x", "authenticated": True,  # noqa: E731
+                                                              "subject": f"m{n}", "message": f"obj:message/{n}", "facts": [f"f{n}"], "contact": "contacts/x/dana"}}
+    mind.on_event(mail("other", 1))
+    now["t"] = 60
+    mind.on_event(mail("invoice_or_bill", 2))
+    assert len(turns) == 1, "routine mail waits"
+    mind.on_event(mail("load_offer", 3))
+    assert len(turns) == 2 and turns[1][1] == "medium" and "rate $1,640" in turns[1][2], "an urgent one goes now, facts included"
+    now["t"] = 700
+    mind.tick()
+    assert len(turns) == 3 and turns[2][1] == "low" and "m1" in turns[2][2] and "m2" in turns[2][2], "both in one conversation"
+    # Spam and newsletters never reach the model.
+    mind.on_event(mail("newsletter", 4))
+    mind.on_event(mail("phishing_or_spam", 5))
+    mind.flush()
+    assert len(turns) == 3
+    # Work the human asked for gets high effort; the effort setting is restored afterwards.
+    mind.on_event({"kind": "task.needs_plan", "data": {"task": "t1", "title": "Fuel report", "category": "general", "playbooks": []}})
+    assert turns[-1][1] == "high" and FakeAgent.config.effort == "high"
+    # The old strategy is still there for comparison: one conversation per email, at the configured effort.
+    turns.clear()
+    old = Mind(FakeAgent(), FakeCore(), strategy="full", clock=lambda: 0)
+    old.on_event(mail("other", 6))
+    assert len(turns) == 1 and "read_facts" in turns[0][2]

@@ -1020,3 +1020,47 @@ fn finished_work_says_what_was_checked_and_what_wasnt() {
     assert_eq!(t["evidence"]["checked"][1], "the profile reads back as quiet", "{t}");
     assert_eq!(t["evidence"]["not_checked"], json!([]));
 }
+
+#[test]
+fn a_solved_situation_becomes_a_habit_replayed_without_the_model_until_it_fails() {
+    let (c, fake) = core();
+    trust_set(&c);
+    let thinking = |c: &Arc<Core>| -> Vec<Value> {
+        c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().iter().filter(|p| p["status"] == "needs_thought").cloned().collect()
+    };
+    let kinds = |c: &Arc<Core>| -> Vec<String> {
+        c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+            .map(|e| e["kind"].as_str().unwrap_or("").to_string()).collect()
+    };
+    let assess = json!({"confidence": 0.9, "consequences": ["the cache is dropped"], "outcomes": ["memory frees up"]});
+    let fix = json!([{"do": "set", "what": "{$event.data.target}", "to": "dropped"}]);
+
+    // First time: the AI is woken and works it out.
+    c.emit("memory.pressure", json!({"available_mb": 120, "target": "page-cache"}));
+    let w = thinking(&c);
+    assert_eq!(w.len(), 1, "the AI is asked: {w:?}");
+    assert_eq!(w[0]["wait"]["habit"], "memory.pressure");
+    let r = c.handle(&json!({"op": "resolve", "plan_id": w[0]["plan_id"], "steps": fix, "assess": assess}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(kinds(&c).contains(&"habit.learned".to_string()), "it worked, so it's remembered");
+
+    // Next time: the same situation is handled with no model at all, through the usual checks.
+    c.emit("memory.pressure", json!({"available_mb": 110, "target": "page-cache"}));
+    assert!(thinking(&c).is_empty(), "the AI isn't woken");
+    assert!(kinds(&c).contains(&"habit.used".to_string()));
+    assert_eq!(calls(&fake).iter().filter(|x| x.contains("page-cache dropped")).count(), 2);
+
+    // When the replay fails, the habit is retired and the AI thinks fresh next time.
+    c.emit("memory.pressure", json!({"available_mb": 90, "target": "explode"}));
+    assert!(kinds(&c).contains(&"habit.retired".to_string()));
+    c.emit("memory.pressure", json!({"available_mb": 80, "target": "page-cache"}));
+    assert_eq!(thinking(&c).len(), 1, "back to thinking");
+
+    // A situation it hasn't solved (another service) still wakes the AI; the human can see and forget habits.
+    c.emit("service.failed", json!({"unit": "cups"}));
+    assert_eq!(thinking(&c).iter().filter(|p| p["wait"]["habit"] == "service.failed:cups").count(), 1);
+    let h = c.handle(&json!({"op": "habits"}));
+    assert_eq!(h["habits"][0]["key"], "memory.pressure", "{h}");
+    assert_eq!(c.handle(&json!({"op": "habit_forget", "habit": "memory.pressure"}))["ok"], false, "only the human forgets");
+    assert_eq!(c.handle(&json!({"op": "habit_forget", "habit": "memory.pressure", "source": "human"}))["ok"], true);
+}

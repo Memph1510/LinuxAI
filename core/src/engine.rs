@@ -1044,6 +1044,11 @@ fn exec_step(exec: &mut Exec, step: &Value, ctx: &Ctx) -> Result<Flow, String> {
     if let Some(note) = m.get("think") {
         exec.status = "needs_thought".into();
         exec.wait = json!({"note": display(&eval(note, &vars, ctx)?)});
+        // A named situation ("service.failed:cups"): once the AI's answer to it has worked, the core replays that
+        // answer next time instead of waking the AI (a habit).
+        if let Some(h) = m.get("habit") {
+            exec.wait["habit"] = json!(display(&eval(h, &vars, ctx)?));
+        }
         return Ok(Flow::Pause);
     }
     if let Some(name) = m.get("call").and_then(Value::as_str) {

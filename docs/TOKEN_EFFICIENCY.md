@@ -44,6 +44,12 @@ Uncached, the prefix costs about **$0.05 per request**. Read from the cache, it 
    run on a cheaper model if you choose: Claude Haiku 5.5 is $0.10 / $0.50 per million, 40× cheaper than Opus
    on input. That's your decision, set in the Workspace. The AI never downgrades itself to save money.
 
+## How the AI spends its thinking
+
+The biggest lever isn't the size of a request but how many the AI needs to run the machine. See
+[THINKING.md](THINKING.md): reflexes, habits, briefs, batches and effort by stakes. On a simulated day the same work
+costs 24% of what it did, with 25 model requests instead of 77, measured with `tests/thinking_bench.py`.
+
 ## Next, once there are measurements
 
 Measure first with `tests/uat.py` and the ledger, then change one thing at a time:

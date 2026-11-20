@@ -341,6 +341,11 @@ fn set(what: &str, to: &str) -> Result<Value, String> {
 
 impl Organs for LinuxHost {
     fn invoke(&self, verb: &str, args: &Value) -> Result<Value, String> {
+        // Rehearsal: the whole core runs (rules, plans, trust, habits, journal), but nothing touches the machine.
+        // For benchmarks and for trying a plan safely. Set LINUXAI_REHEARSAL=1 on the daemon.
+        if std::env::var("LINUXAI_REHEARSAL").map(|v| v == "1").unwrap_or(false) {
+            return Ok(json!({"rehearsal": true, "verb": verb, "args": args}));
+        }
         match verb {
             "set" => set(&s(args, "what"), &s(args, "to")),
             "limit" => {
