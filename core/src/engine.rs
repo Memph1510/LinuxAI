@@ -1241,6 +1241,13 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
         "unschedule" => crate::calendar::cancel(ctx.mem, ctx.bus, args["id"].as_str().unwrap_or("")),
         "reschedule" => crate::calendar::change(ctx.mem, ctx.bus, args["id"].as_str().unwrap_or(""), &args),
         "answer_invite" => crate::calendar::answer_invite(ctx.mem, ctx.bus, args["id"].as_str().unwrap_or(""), args["answer"].as_str().unwrap_or(""), "ai"),
+        // Rehearsal records it without sending, like every other action.
+        "send_email" if std::env::var("LINUXAI_REHEARSAL").map(|v| v == "1").unwrap_or(false) =>
+            Ok(json!({"rehearsal": true, "verb": verb, "args": args})),
+        "send_email" => crate::send::SmtpConfig::from_env().and_then(|cfg| crate::send::send(ctx.mem, &cfg, &args)).inspect(|v| {
+            ctx.bus.emit(ctx.mem, "message.sent", json!({"id": v["id"], "to": v["to"], "subject": args["subject"],
+                                                          "in_reply_to": args["in_reply_to"], "plan": exec.name}));
+        }),
         _ => ctx.organs.invoke(verb, &args),
     };
     match result {

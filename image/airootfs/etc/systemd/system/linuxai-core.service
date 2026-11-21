@@ -6,6 +6,8 @@ Wants=dbus.service
 
 [Service]
 Type=notify
+# Sending email (the send_email verb) happens in the core: LINUXAI_SMTP_* and LINUXAI_MAIL_FROM in mail.env.
+EnvironmentFile=-/etc/linuxai/mail.env
 ExecStart=/usr/local/bin/linuxai-core daemon --group linuxai --playbooks /home/linuxai/playbooks --prompts /home/linuxai/prompts
 Restart=always
 RestartSec=2

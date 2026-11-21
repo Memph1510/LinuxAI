@@ -1254,7 +1254,7 @@ fn malformed_plans_never_crash_the_core() {
             0 => json!(r.pick(STRS)),
             1 => json!((r.next() % 1000) as i64 - 500),
             2 => json!(f64::from_bits(r.next() & 0x7FEF_FFFF_FFFF_FFFF)),
-            3 => json!(r.next() % 2 == 0),
+            3 => json!(r.next().is_multiple_of(2)),
             4 => Value::Null,
             5 => { let n = r.next() % 4; let mut a = vec![json!(r.pick(OPS))]; for _ in 0..n { a.push(val(r, depth + 1)); } json!(a) }
             6 => json!((0..r.next() % 4).map(|_| val(r, depth + 1)).collect::<Vec<_>>()),
@@ -1269,16 +1269,16 @@ fn malformed_plans_never_crash_the_core() {
         m.insert(kw.into(), if kw == "do" { json!(r.pick(VERBS)) } else { val(r, depth + 1) });
         for _ in 0..r.next() % 4 {
             let k = *r.pick(WORDS);
-            m.insert(k.into(), if depth < 6 && r.next() % 3 == 0 { json!((0..2).map(|_| step(r, depth + 2)).collect::<Vec<_>>()) } else { val(r, depth + 1) });
+            m.insert(k.into(), if depth < 6 && r.next().is_multiple_of(3) { json!((0..2).map(|_| step(r, depth + 2)).collect::<Vec<_>>()) } else { val(r, depth + 1) });
         }
         for k in ["what", "to", "unit", "text", "program", "thread", "reference", "terms"] {
-            if r.next() % 4 == 0 { m.insert(k.into(), val(r, depth + 1)); }
+            if r.next().is_multiple_of(4) { m.insert(k.into(), val(r, depth + 1)); }
         }
         Value::Object(m)
     }
     let (c, _fake) = core();
     let mut r = Rng(0x9E37_79B9_7F4A_7C15);
-    for i in 0..3000 {
+    for i in 0..3000u32 {
         let steps: Vec<Value> = (0..1 + r.next() % 5).map(|_| step(&mut r, 0)).collect();
         let plan = if i.is_multiple_of(50) { val(&mut r, 0) } else { json!({"plan": format!("fuzz {i}"), "steps": steps, "with": {"x": val(&mut r, 3)}}) };
         let _ = engine::check(&plan, &c.mem, if i.is_multiple_of(2) { "ai" } else { "human" }, 0.8);
@@ -1310,4 +1310,27 @@ fn the_deepest_plan_the_socket_accepts_doesnt_crash_the_core() {
         assert!(r.is_object(), "{r}");
     }
     assert_eq!(c.handle(&json!({"op": "ping"}))["ok"], true);
+}
+
+#[test]
+fn an_email_goes_out_only_with_the_humans_ok_and_they_see_all_of_it() {
+    let (c, _fake) = core();
+    let assess = json!({"confidence": 0.85, "consequences": ["Dana gets our counter"], "outcomes": [{"if": "she declines", "then": "tell the human"}]});
+    let plan = json!({"plan": "counter HL-3100", "category": "general", "assess": assess, "steps": [
+        {"do": "send_email", "to": "dana@hollis-logistics.com", "subject": "HL-3100", "text": "Hi Dana, we can do it at $3,500."}]});
+    let r = c.submit(&plan, "ai");
+    assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
+    let q = r["result"]["wait"]["question"].as_str().unwrap();
+    assert!(q.contains("dana@hollis-logistics.com") && q.contains("we can do it at $3,500"), "the whole message is in front of them: {q}");
+    // Nothing was sent; "no" means nothing happens.
+    let r = c.handle(&json!({"op": "answer", "plan_id": r["result"]["plan_id"], "text": "no", "source": "human"}));
+    assert_eq!(r["result"]["status"], "stopped", "{r}");
+    assert!(c.mem.objects_of("sent_message", 10).is_empty());
+    // Waiting for a reply and then sending rests on outside information: ordinary trust doesn't cover it.
+    c.mem.add_mandate("send_email", "dana@hollis-logistics.com", "human:always");
+    let plan = json!({"plan": "answer Dana", "category": "general", "assess": assess, "steps": [
+        {"wait": "message.received", "where": ["=", "$event.data.from", "dana@hollis-logistics.com"], "max": "2d"},
+        {"do": "send_email", "to": "dana@hollis-logistics.com", "subject": "Re: HL-3100", "text": "Thanks, confirmed."}]});
+    let r = engine::check(&plan, &c.mem, "ai", 0.8);
+    assert!(r.outside && r.needs_approval, "a reply to what a stranger sends needs the outside OK");
 }

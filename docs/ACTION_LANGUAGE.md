@@ -91,7 +91,7 @@ If you ask what it did, you get:
 
 ### Exchanges, decided ahead
 
-When the AI sends or prepares something that expects an answer (a counter-offer, a question to a broker), it
+When the AI sends something that expects an answer (a counter-offer with `send_email`, a question to a broker), it
 writes the follow-up at the same time: keep the state with `track`, wait for exactly that reply, and decide now
 what each foreseeable answer means. The reply is then handled when it arrives, with no rereading and no model:
 
