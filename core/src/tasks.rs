@@ -9,6 +9,7 @@ use crate::memory::new_id;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
+use crate::crash::Locked;
 
 pub const HUMAN_KINDS: &[&str] = &["action", "evaluation", "critique", "decision"];
 const FINISHED: &[&str] = &["done", "failed", "cancelled"];
@@ -464,7 +465,7 @@ impl Core {
                 json!({"ok": true, "id": id})
             }
             "find" => {
-                let state = self.state.lock().unwrap().clone();
+                let state = self.state.lk().clone();
                 let ctx = engine::Ctx { mem: &self.mem, organs: &self.organs, bus: &self.bus, state: &state };
                 match engine::eval(&json!({"find": req["spec"]}), &Map::new(), &ctx) {
                     Ok(v) => json!({"ok": true, "found": v}),

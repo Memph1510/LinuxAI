@@ -251,6 +251,7 @@ pub fn listen(max: Duration) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use crate::crash::Locked;
     use super::*;
     use std::sync::Mutex;
 
@@ -264,7 +265,7 @@ mod tests {
 
     #[test]
     fn record_transcribe_and_speak_through_configured_commands() {
-        let _g = ENV.lock().unwrap();
+        let _g = ENV.lk();
         let dir = std::env::temp_dir().join(format!("lx-voice-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // A stand-in microphone that writes a file and keeps "recording" until stopped.

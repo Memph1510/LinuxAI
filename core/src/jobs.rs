@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use crate::crash::Locked;
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
 const KEEP_OUTPUT: usize = 4000;
@@ -29,7 +30,7 @@ impl Jobs {
 
     /// Jobs that have finished since the last call.
     pub fn take_finished(&self) -> Vec<Value> {
-        std::mem::take(&mut *self.done.lock().unwrap())
+        std::mem::take(&mut *self.done.lk())
     }
 }
 
@@ -64,7 +65,7 @@ impl Organs for Jobs {
                 Err(e) => (None, String::new(), Some(e.clone())),
             };
             let rehearsal = r.as_ref().map(|v| v["rehearsal"] == true).unwrap_or(false);
-            done.lock().unwrap().push(json!({"job": job, "program": a["program"], "args": a["args"], "code": code,
+            done.lk().push(json!({"job": job, "program": a["program"], "args": a["args"], "code": code,
                 "ok": error.is_none() && (code == Some(0) || rehearsal), "output": tail(&output, KEEP_OUTPUT),
                 "error": error, "seconds": start.elapsed().as_secs_f64().round(), "rehearsal": rehearsal}));
         });

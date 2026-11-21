@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use crate::crash::Locked;
 
 /// Rules LinuxAI ships with. They are the starting reflexes for running the machine; the AI adds
 /// its own as it learns, and any of them can be switched off.
@@ -115,17 +116,17 @@ impl Core {
     }
 
     fn with_ctx<T>(&self, f: impl FnOnce(&Ctx) -> T) -> T {
-        let state = self.state.lock().unwrap().clone();
+        let state = self.state.lk().clone();
         let ctx = Ctx { mem: &self.mem, organs: &self.organs, bus: &self.bus, state: &state };
         f(&ctx)
     }
 
     fn claim(&self, id: &str) -> bool {
-        self.active.lock().unwrap().insert(id.to_string())
+        self.active.lk().insert(id.to_string())
     }
 
     fn release(&self, id: &str) {
-        self.active.lock().unwrap().remove(id);
+        self.active.lk().remove(id);
     }
 
     /// Load a stored plan and advance it, holding its claim. None if it's busy or doesn't exist.
@@ -135,17 +136,33 @@ impl Core {
         }
         let out = self.with_ctx(|ctx| {
             let mut ex = ctx.mem.load_plan(id).and_then(|p| serde_json::from_value::<Exec>(p).ok()).ok_or("no such plan")?;
-            f(&mut ex, ctx);
+            if let Err(msg) = crate::crash::catch(|| f(&mut ex, ctx)) {
+                Self::failed_by_panic(&mut ex, &msg, ctx);
+            }
             Ok(ex)
         });
         self.release(id);
         out
     }
 
+    /// A bug hit while running a plan: the plan fails on its own (recorded, freed, the human told), and nothing else
+    /// stops. Without this, the plan would stay claimed and "running" forever.
+    fn failed_by_panic(ex: &mut Exec, msg: &str, ctx: &Ctx) {
+        ex.status = "failed".into();
+        ex.error = Some(format!("LinuxAI hit an internal error running this plan: {msg}"));
+        engine::persist(ex, ctx);
+        ctx.bus.emit(ctx.mem, "plan.failed", ex.summary());
+        ctx.bus.emit(ctx.mem, "linuxai.crash", crate::crash::event("core", &format!("plan '{}'", ex.name), msg));
+    }
+
     /// Run a brand-new plan (claimed for the duration).
     fn run_new(&self, mut ex: Exec, f: impl FnOnce(&mut Exec, &Ctx)) -> Exec {
         self.claim(&ex.id);
-        self.with_ctx(|ctx| f(&mut ex, ctx));
+        self.with_ctx(|ctx| {
+            if let Err(msg) = crate::crash::catch(|| f(&mut ex, ctx)) {
+                Self::failed_by_panic(&mut ex, &msg, ctx);
+            }
+        });
         self.release(&ex.id);
         ex
     }
@@ -155,7 +172,9 @@ impl Core {
         if self.background {
             let c = self.clone();
             std::thread::spawn(move || {
-                job(&c);
+                if let Err(msg) = crate::crash::catch(|| job(&c)) {
+                    c.bus.emit(&c.mem, "linuxai.crash", crate::crash::event("core", "background work", &msg));
+                }
                 c.settle();
             });
         } else {
@@ -182,7 +201,7 @@ impl Core {
     }
 
     fn broadcast(&self, ev: &Value) {
-        self.subscribers.lock().unwrap().retain(|tx| tx.send(ev.clone()).is_ok());
+        self.subscribers.lk().retain(|tx| tx.send(ev.clone()).is_ok());
     }
 
     /// An event from outside (senses, organs, the human).
@@ -200,7 +219,7 @@ impl Core {
     /// False (and a one-time warning event) when a rule has fired too often in the last minute.
     fn rule_may_fire(&self, name: &str) -> bool {
         let t = now();
-        let mut fires = self.rule_fires.lock().unwrap();
+        let mut fires = self.rule_fires.lk();
         let list = fires.entry(name.to_string()).or_default();
         list.retain(|x| t - x < 60.0);
         let max = rule_max_per_minute();
@@ -283,6 +302,31 @@ impl Core {
 
     /// After a restart: carry on with every plan that was mid-way. Steps already carried out are not
     /// repeated (each action's idempotency key is in the journal).
+    /// Under systemd: if the core's automatic-restart count went up since it last looked, it stopped unexpectedly
+    /// (a crash, an abort, the out-of-memory killer). Say so: from the inside, a crash otherwise leaves no trace but the
+    /// journal. Manual restarts and reboots don't count.
+    pub fn notice_unexpected_restarts(self: &Arc<Self>) {
+        if std::env::var_os("INVOCATION_ID").is_none() {
+            return; // not started by systemd
+        }
+        let Ok(out) = std::process::Command::new("systemctl").args(["show", "linuxai-core.service", "-p", "NRestarts", "--value"]).output() else { return };
+        let Ok(count) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() else { return };
+        self.restarts_seen(count);
+    }
+
+    /// Compare the current restart count with the last one seen (kept in memory across restarts).
+    pub fn restarts_seen(self: &Arc<Self>, count: u64) {
+        let id = "obj:system/core-restarts";
+        let before = self.mem.object(id).and_then(|o| o["count"].as_u64());
+        self.mem.put_object_with_id(id, "system", &json!({"count": count, "checked": now()}));
+        if let Some(b) = before.filter(|b| count > *b) {
+            let n = count - b;
+            self.emit("linuxai.crash", crate::crash::event("core", "unexpected stop",
+                &format!("LinuxAI's core stopped unexpectedly {} and was restarted automatically; plans in progress were resumed. The journal has the details (journalctl -u linuxai-core).",
+                         if n == 1 { "once".to_string() } else { format!("{n} times") })));
+        }
+    }
+
     pub fn recover(self: &Arc<Self>) {
         for st in self.mem.plans_with_status("running") {
             let id = st["id"].as_str().unwrap_or("").to_string();
@@ -334,10 +378,10 @@ impl Core {
 
     /// One pass of the senses.
     pub fn sense(self: &Arc<Self>, full: bool) {
-        let prev = self.state.lock().unwrap().clone();
+        let prev = self.state.lk().clone();
         let cur = host::snapshot(full, &prev);
         let events = host::derive_events(&prev, &cur);
-        *self.state.lock().unwrap() = cur;
+        *self.state.lk() = cur;
         for (kind, data) in events {
             self.emit(&kind, data);
         }
@@ -367,7 +411,7 @@ impl Core {
                 json!({"ok": true, "version": env!("CARGO_PKG_VERSION"),
                        "memory": if failed == 0 { json!({"healthy": true}) } else { json!({"healthy": false, "failed_writes": failed, "last_error": why}) }})
             }
-            "state" => json!({"ok": true, "state": *self.state.lock().unwrap()}),
+            "state" => json!({"ok": true, "state": *self.state.lk()}),
             "verbs" => json!({"ok": true, "verbs": verbs::registry_json()}),
             "check" => {
                 let source = req["source"].as_str().unwrap_or("ai");
@@ -463,11 +507,11 @@ impl Core {
                 }
                 json!({"ok": true, "pruned": r})
             }
-            "stats" => json!({"ok": true, "stats": self.mem.stats(), "active_plans": self.active.lock().unwrap().len(),
-                              "subscribers": self.subscribers.lock().unwrap().len()}),
+            "stats" => json!({"ok": true, "stats": self.mem.stats(), "active_plans": self.active.lk().len(),
+                              "subscribers": self.subscribers.lk().len()}),
             "sense" => {
                 self.sense(true);
-                json!({"ok": true, "state": *self.state.lock().unwrap()})
+                json!({"ok": true, "state": *self.state.lk()})
             }
             op if op.starts_with("task") => self.task_op(op, req),
             op if op.starts_with("playbook") => self.playbook_op(op, req),
@@ -588,7 +632,7 @@ impl Core {
         // The AI answering a named situation: if its answer works, it becomes a habit.
         if let (Some(s), Some(key)) = (&steps, self.mem.load_plan(id).and_then(|p| p["wait"]["habit"].as_str().map(String::from))) {
             if req["reasoning"] != "habit" {
-                self.habit_candidates.lock().unwrap().insert(id.to_string(), (key, json!(s), req["assess"].clone()));
+                self.habit_candidates.lk().insert(id.to_string(), (key, json!(s), req["assess"].clone()));
             }
         }
         let report = match &steps {
@@ -646,11 +690,11 @@ impl Core {
             return false;
         }
         let plan_id = plan["plan_id"].as_str().unwrap_or("").to_string();
-        self.habit_runs.lock().unwrap().insert(plan_id.clone(), key.to_string());
+        self.habit_runs.lk().insert(plan_id.clone(), key.to_string());
         // The same path the AI's answer takes: checked again, trust and approval as usual.
         let r = self.resolve(&json!({"plan_id": plan_id, "steps": h["steps"], "assess": h["assess"], "reasoning": "habit"}));
         if r["ok"] == false {
-            self.habit_runs.lock().unwrap().remove(&plan_id);
+            self.habit_runs.lk().remove(&plan_id);
             return false; // the check has changed its mind (e.g. outside information now): let the AI think
         }
         self.mem.patch_object(&Self::habit_id(key), &json!({"last_used": now(), "uses": h["uses"].as_u64().unwrap_or(0) + 1}));
@@ -661,7 +705,7 @@ impl Core {
     fn habit_on_plan_end(self: &Arc<Self>, kind: &str, plan: &Value) {
         let id = plan["plan_id"].as_str().unwrap_or("");
         let ok = kind == "plan.finished";
-        if let Some(key) = self.habit_runs.lock().unwrap().remove(id) {
+        if let Some(key) = self.habit_runs.lk().remove(id) {
             let hid = Self::habit_id(&key);
             if let Some(h) = self.mem.object(&hid) {
                 if ok && verifies(&h["steps"]) {
@@ -676,7 +720,7 @@ impl Core {
                 }
             }
         }
-        if let Some((key, steps, assess)) = self.habit_candidates.lock().unwrap().remove(id) {
+        if let Some((key, steps, assess)) = self.habit_candidates.lk().remove(id) {
             if ok {
                 let hid = Self::habit_id(&key);
                 let prev = self.mem.object(&hid);

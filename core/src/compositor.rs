@@ -24,6 +24,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use crate::crash::Locked;
 
 /// Hyprland's sockets for the running instance.
 pub struct Hypr {
@@ -242,14 +243,14 @@ impl Organ {
             if let Ok(again) = self.hypr.json("clients") {
                 list = again.as_array().cloned().unwrap_or_default();
             }
-            *self.promoted.lock().unwrap() = None;
+            *self.promoted.lk() = None;
         }
         // The main spot (master layout: the leftmost tiled window). Swap the Workspace in once, so it never fights you.
         if let Some(w) = list.iter().find(|c| is_ws(c)) {
             let (Some(a), Some(x)) = (addr(&w["address"]), w["at"][0].as_i64()) else { return };
             let behind = list.iter().any(|c| !is_ws(c) && c["floating"] != true && !is_browser(c) && !hidden(c)
                 && c["workspace"]["id"] == w["workspace"]["id"] && c["at"][0].as_i64().map(|cx| cx < x).unwrap_or(false));
-            let mut done = self.promoted.lock().unwrap();
+            let mut done = self.promoted.lk();
             if behind && done.as_deref() != Some(a.as_str()) {
                 let _ = self.hypr.dispatch(&format!("hl.dsp.focus({{ window = \"address:{a}\" }})"));
                 let _ = self.hypr.dispatch("hl.dsp.layout(\"swapwithmaster\")");
@@ -372,7 +373,7 @@ mod tests {
                 let mut buf = [0u8; 4096];
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                rec.lock().unwrap().push(req.clone());
+                rec.lk().push(req.clone());
                 let out = match req.as_str() {
                     "j/clients" => json!([
                         {"address": "0x5a1", "class": "chromium", "title": "Compare SUVs", "workspace": {"id": 1}, "at": [0, 0], "size": [1280, 900], "floating": false, "fullscreen": 0, "pid": 10, "focusHistoryID": 1},
@@ -405,16 +406,16 @@ mod tests {
         assert_eq!(o.handle(&json!({"op": "focus", "app": "Chromium"}))["window"], "0x5a1");
         assert_eq!(o.handle(&json!({"op": "workspace", "window": "0x5b2", "to": 3}))["ok"], true);
         assert_eq!(o.handle(&json!({"op": "effects", "on": false}))["ok"], true);
-        let got = asked.lock().unwrap().clone();
+        let got = asked.lk().clone();
         assert!(got.contains(&r#"dispatch hl.dsp.focus({ window = "address:0x5a1" })"#.to_string()), "{got:?}");
         assert!(got.contains(&r#"dispatch hl.dsp.window.move({ window = "address:0x5b2", workspace = "3", follow = false })"#.to_string()));
         assert!(got.iter().any(|g| g.starts_with("eval hl.config({ animations = { enabled = false }")), "{got:?}");
 
         // The Workspace never floats: tidy puts it back in the layout (the stand-in lists it as floating).
         o.tidy();
-        assert!(asked.lock().unwrap().iter().any(|g| g == r#"dispatch hl.dsp.window.float({ window = "address:0x5c3", action = "toggle" })"#));
+        assert!(asked.lk().iter().any(|g| g == r#"dispatch hl.dsp.window.float({ window = "address:0x5c3", action = "toggle" })"#));
         // ... and the AI's page windows (chromium) go out of sight; the session window stays.
-        let got = asked.lock().unwrap().clone();
+        let got = asked.lk().clone();
         assert!(got.iter().any(|g| g == r#"dispatch hl.dsp.window.move({ window = "address:0x5a1", workspace = "special:pages", follow = false })"#), "{got:?}");
         assert!(!got.iter().any(|g| g.contains("0x5b2") && g.contains("special:pages")));
         // Nothing but a real window address reaches a dispatch.
@@ -452,10 +453,10 @@ mod tests {
                 let mut buf = [0u8; 4096];
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                rec.lock().unwrap().push(req.clone());
+                rec.lk().push(req.clone());
                 let out = if req == "j/clients" {
-                    let mut i = served.lock().unwrap();
-                    let moved = rec.lock().unwrap().iter().any(|r| r.contains("special:pages"));
+                    let mut i = served.lk();
+                    let moved = rec.lk().iter().any(|r| r.contains("special:pages"));
                     *i += 1;
                     lists[if moved { 1 } else { 0 }].to_string()
                 } else { "ok".into() };
@@ -464,7 +465,7 @@ mod tests {
         });
         let o = Organ { hypr: Hypr { dir: dir.clone() }, core: None, promoted: std::sync::Mutex::new(Some("0xc3".into())) };
         o.tidy();
-        let got = asked.lock().unwrap().clone();
+        let got = asked.lk().clone();
         let page_moved = got.iter().position(|g| g.contains("0xa1") && g.contains("special:pages")).expect("page moved away");
         let swap = got.iter().position(|g| g.contains("swapwithmaster")).unwrap_or_else(|| panic!("Workspace not put back: {got:?}"));
         assert!(swap > page_moved);

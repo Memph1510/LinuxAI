@@ -67,6 +67,11 @@ pub fn message_for(ev: &Value) -> Option<String> {
             Some(format!("LinuxAI: {note}. It's open in the browser: {} ({}). Give the tab back when you're done.",
                          d["title"].as_str().unwrap_or(""), d["url"].as_str().unwrap_or("")))
         }
+        // A bug in LinuxAI itself (a caught panic, or the core restarting after a crash). One text per incident.
+        "linuxai.crash" => Some(format!("LinuxAI: internal error in {} ({}): {}", d["component"].as_str().unwrap_or("?"),
+                                        d["what"].as_str().unwrap_or("?"), d["message"].as_str().unwrap_or("unknown"))),
+        // A plan stopped by an internal error is already reported as linuxai.crash.
+        "plan.failed" if d["error"].as_str().map(|e| e.starts_with("LinuxAI hit an internal error")).unwrap_or(false) => None,
         "plan.failed" => Some(format!("LinuxAI: '{}' failed: {}. I'll look into it.", d["plan"].as_str().unwrap_or(""),
                                       d["error"].as_str().unwrap_or("unknown"))),
         _ => None,

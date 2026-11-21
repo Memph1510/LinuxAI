@@ -17,6 +17,7 @@ use crate::browser::{press, Cdp, Organ};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use crate::crash::Locked;
 
 /// What the Workspace page may ask the core: reading what to show, and answering as the human.
 const CORE_OPS: [&str; 8] = ["tasks", "task", "waiting", "answer", "events", "state", "models", "models_set"];
@@ -42,7 +43,7 @@ pub struct Workspace {
 impl Workspace {
     /// Open the Workspace (or bring it back if it's already open).
     pub fn open(organ: &Organ, b: &Arc<Cdp>, url: &str) -> std::io::Result<String> {
-        if let Some(w) = organ.workspace.lock().unwrap().as_ref().filter(|w| b.owner(&w.tab).is_some() && Arc::ptr_eq(&w.cdp, b)) {
+        if let Some(w) = organ.workspace.lk().as_ref().filter(|w| b.owner(&w.tab).is_some() && Arc::ptr_eq(&w.cdp, b)) {
             let _ = b.call("Target.activateTarget", json!({"targetId": w.tab}), None);
             return Ok(w.tab.clone());
         }
@@ -72,7 +73,7 @@ impl Workspace {
                                      tab: tab.clone(), session, url: url.to_string(), watched: Mutex::new(None) });
         w.clone().listen();
         w.clone().forward_core_events();
-        *organ.workspace.lock().unwrap() = Some(w);
+        *organ.workspace.lk() = Some(w);
         Ok(tab)
     }
 
@@ -96,7 +97,7 @@ impl Workspace {
                         });
                     }
                     "Page.screencastFrame" => {
-                        let watched = self.watched.lock().unwrap().clone();
+                        let watched = self.watched.lk().clone();
                         if let Some((tab, s)) = watched.filter(|(_, s)| s == sid) {
                             let p = &ev["params"];
                             let _ = self.cdp.call("Page.screencastFrameAck", json!({"sessionId": p["sessionId"]}), Some(&s));
@@ -175,7 +176,7 @@ impl Workspace {
                 let s = self.cdp.session(&tab).map_err(|e| e.to_string())?;
                 let w = req["width"].as_u64().unwrap_or(1280).clamp(320, 2560);
                 let h = req["height"].as_u64().unwrap_or(800).clamp(240, 1600);
-                *self.watched.lock().unwrap() = Some((tab.clone(), s.clone()));
+                *self.watched.lk() = Some((tab.clone(), s.clone()));
                 self.cdp.call("Page.startScreencast", json!({"format": "jpeg", "quality": 70, "maxWidth": w, "maxHeight": h}), Some(&s))
                     .map_err(|e| e.to_string())?;
                 Ok(json!({"ok": true, "tab": tab}))
@@ -186,7 +187,7 @@ impl Workspace {
             }
             "input" => {
                 // The human, acting on the page shown in the Workspace (any page: it's their screen).
-                let (tab, s) = self.watched.lock().unwrap().clone().ok_or("no page is shown")?;
+                let (tab, s) = self.watched.lk().clone().ok_or("no page is shown")?;
                 let x = req["x"].as_f64().unwrap_or(0.0);
                 let y = req["y"].as_f64().unwrap_or(0.0);
                 let call = |m: &str, p: Value| self.cdp.call(m, p, Some(&s)).map(|_| ()).map_err(|e| e.to_string());
@@ -212,7 +213,7 @@ impl Workspace {
     }
 
     fn unwatch(&self) {
-        if let Some((_, s)) = self.watched.lock().unwrap().take() {
+        if let Some((_, s)) = self.watched.lk().take() {
             let _ = self.cdp.call("Page.stopScreencast", json!({}), Some(&s));
         }
     }
