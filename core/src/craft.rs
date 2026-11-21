@@ -34,6 +34,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use crate::crash::Locked;
 
 pub struct CraftConfig {
     pub manifest: PathBuf,
@@ -395,7 +396,7 @@ impl Organ {
     }
 
     fn session(&self, id: &str) -> Result<Arc<Mutex<Session>>, String> {
-        self.sessions.lock().unwrap().get(id).cloned().ok_or_else(|| format!("no open session {id:?} (they close after 20 idle minutes)"))
+        self.sessions.lk().get(id).cloned().ok_or_else(|| format!("no open session {id:?} (they close after 20 idle minutes)"))
     }
 
     pub fn apps(&self) -> Result<Value, String> {
@@ -403,8 +404,8 @@ impl Organ {
         let apps: Vec<Value> = m["apps"].as_object().into_iter().flatten().map(|(name, s)| json!({
             "app": name, "what": s["what"], "version": s["version"], "installed": installed_cli(&self.cfg, name, s).is_some(),
             "confined_by": if s["roots"] == "none" { "the sandbox only" } else { "its own folder limits and the sandbox" }})).collect();
-        let open: Vec<Value> = self.sessions.lock().unwrap().iter().map(|(id, s)| {
-            let s = s.lock().unwrap();
+        let open: Vec<Value> = self.sessions.lk().iter().map(|(id, s)| {
+            let s = s.lk();
             json!({"session": id, "app": s.app, "files": s.originals})
         }).collect();
         Ok(json!({"ok": true, "apps": apps, "open": open}))
@@ -428,7 +429,7 @@ impl Organ {
                     };
                     let files: Vec<PathBuf> = req["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(PathBuf::from).collect();
                     let id = {
-                        let mut n = self.seq.lock().unwrap();
+                        let mut n = self.seq.lk();
                         *n += 1;
                         format!("{app}-{}-{}", std::process::id(), *n)
                     };
@@ -441,21 +442,21 @@ impl Organ {
                     let (inp, out) = if self.cfg.sandbox { ("/work/in".to_string(), "/work/out".to_string()) }
                         else { (dir.join("in").to_string_lossy().to_string(), dir.join("out").to_string_lossy().to_string()) };
                     let inputs: Vec<String> = s.originals.iter().map(|f| format!("{inp}/{}", f.file_name().unwrap_or_default().to_string_lossy())).collect();
-                    self.sessions.lock().unwrap().insert(id.clone(), Arc::new(Mutex::new(s)));
+                    self.sessions.lk().insert(id.clone(), Arc::new(Mutex::new(s)));
                     Ok(json!({"ok": true, "session": id, "app": app, "inputs": inputs, "write_to": out,
                               "note": "the inputs are copies of the human's files; save results under write_to, then keep the ones that matter",
                               "tools": names}))
                 }
                 "tool_info" => {
                     let s = self.session(req["session"].as_str().unwrap_or(""))?;
-                    let mut s = s.lock().unwrap();
+                    let mut s = s.lk();
                     let want = req["tool"].as_str().unwrap_or("");
                     let t = s.tools()?.into_iter().find(|t| t["name"] == want).ok_or(format!("no tool {want:?}"))?;
                     Ok(json!({"ok": true, "tool": t}))
                 }
                 "call" => {
                     let s = self.session(req["session"].as_str().unwrap_or(""))?;
-                    let mut s = s.lock().unwrap();
+                    let mut s = s.lk();
                     let timeout = Duration::from_secs(req["timeout"].as_u64().unwrap_or(600).min(3600));
                     let r = s.call(req["tool"].as_str().unwrap_or(""), req["args"].clone(), timeout)?;
                     Ok(json!({"ok": r["isError"] != true, "result": r, "outputs": s.outputs()}))
@@ -463,7 +464,7 @@ impl Organ {
                 "keep" => {
                     // A result the AI keeps: next to the original it came from, as name.ai-N.ext.
                     let s = self.session(req["session"].as_str().unwrap_or(""))?;
-                    let s = s.lock().unwrap();
+                    let s = s.lk();
                     let name = req["output"].as_str().unwrap_or("");
                     if name.is_empty() || name.contains('/') || name.starts_with('.') {
                         return Err("output: a file name from out/".into());
@@ -525,8 +526,8 @@ impl Organ {
                 }
                 "close" => {
                     let id = req["session"].as_str().unwrap_or("");
-                    let s = self.sessions.lock().unwrap().remove(id).ok_or(format!("no open session {id:?}"))?;
-                    let dir = s.lock().unwrap().dir.clone();
+                    let s = self.sessions.lk().remove(id).ok_or(format!("no open session {id:?}"))?;
+                    let dir = s.lk().dir.clone();
                     drop(s);
                     let _ = std::fs::remove_dir_all(&dir);
                     Ok(json!({"ok": true, "closed": id}))
@@ -539,7 +540,7 @@ impl Organ {
 
     /// Sessions nobody used for 20 minutes are closed (their copies and outputs go with them).
     pub fn sweep(&self) {
-        let idle: Vec<String> = self.sessions.lock().unwrap().iter()
+        let idle: Vec<String> = self.sessions.lk().iter()
             .filter(|(_, s)| s.try_lock().map(|s| s.last_used.elapsed() > Duration::from_secs(1200)).unwrap_or(false))
             .map(|(k, _)| k.clone()).collect();
         for id in idle {

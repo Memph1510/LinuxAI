@@ -150,10 +150,15 @@ auto-filing matches → *proposed* until the human confirms; habits learned on m
 jobs lost on restart → reported as lost; cut-off tool inputs → schema-checked; no outgoing mail → `send_email`
 with the human's OK. Fuzz test (3,000 malformed plans) found nothing in the core.
 
-**Known limits that remain**: single-user trust boundary (the AI's commands run as the user; in a session the
-human approves commands, behind the scenes only read-only commands run directly); a background job's result is
-lost (reported) on restart; the benchmark varies 36–40 requests with thread timing; 111 Python style lint findings
-and ~10 Rust warnings outstanding (none correctness); `chrono`/`chrono-tz` marked unmaintained upstream.
+**Crashes** (PR #13): locks recover after a panic; a panic fails only its own plan or request; you're texted about
+every crash, including the core restarting unexpectedly. **Dependency audits** run in CI.
+
+**Known limits that remain** (tracked as GitHub issues): single-user trust boundary (the AI's commands run as the
+user; in a session the human approves commands, behind the scenes only read-only commands run directly, and
+"read-only" is a heuristic); the live ISO has autologin and passwordless sudo (must change before install); mail
+passwords' file permissions unverified; a background job's result is lost (reported) on restart; the benchmark
+varies 36–40 requests with thread timing; 111 Python style lint findings and ~10 Rust warnings outstanding (none
+correctness); `chrono`/`chrono-tz` marked unmaintained upstream.
 
 ## 7. What to do next (in order)
 

@@ -14,6 +14,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::crash::Locked;
 
 const MIN_EVERY: f64 = 60.0;
 const KEEP_SEEN: usize = 3000;
@@ -106,7 +107,7 @@ impl Organ {
     pub(crate) fn watch_op(&self, op: &str, req: &Value) -> Value {
         match op {
             "watches" => {
-                let w = self.watches.lock().unwrap();
+                let w = self.watches.lk();
                 let list: Vec<Value> = w.iter().map(|(name, x)| json!({"name": name, "url": x["spec"]["url"], "every": x["spec"]["every"],
                     "match": x["spec"]["match"], "note": x["spec"]["note"], "last_check": x["last_check"], "rows": x["rows"],
                     "problem": x["problem"]})).collect();
@@ -114,9 +115,9 @@ impl Organ {
             }
             "unwatch" => {
                 let name = req["name"].as_str().unwrap_or("");
-                let gone = self.watches.lock().unwrap().remove(name).is_some();
-                save(&self.profile, &self.watches.lock().unwrap());
-                if let Some(tab) = self.watch_tabs.lock().unwrap().remove(name) {
+                let gone = self.watches.lk().remove(name).is_some();
+                save(&self.profile, &self.watches.lk());
+                if let Some(tab) = self.watch_tabs.lk().remove(name) {
                     if let Ok(b) = self.browser() {
                         let _ = b.call("Target.closeTarget", json!({"targetId": tab}), None);
                     }
@@ -135,7 +136,7 @@ impl Organ {
                 let name = req["name"].as_str().map(String::from).unwrap_or_else(|| url.to_string());
                 let spec = json!({"url": url, "every": every, "items": req["items"], "fields": req["fields"], "match": req["match"],
                                   "key": req["id_field"], "note": req["note"]});
-                self.watches.lock().unwrap().insert(name.clone(), json!({"spec": spec, "seen": [], "next": 0.0}));
+                self.watches.lk().insert(name.clone(), json!({"spec": spec, "seen": [], "next": 0.0}));
                 // First look now: everything there is counted as seen; what already matches comes back to the AI here.
                 match self.check(&name) {
                     Ok(f) => {
@@ -146,8 +147,8 @@ impl Organ {
                                "next": "only new rows that match will be reported, as web.matched events"})
                     }
                     Err(e) => {
-                        self.watches.lock().unwrap().remove(&name);
-                        save(&self.profile, &self.watches.lock().unwrap());
+                        self.watches.lk().remove(&name);
+                        save(&self.profile, &self.watches.lk());
                         json!({"ok": false, "error": format!("couldn't read the page: {e}")})
                     }
                 }
@@ -156,7 +157,7 @@ impl Organ {
     }
 
     fn watch_tab(&self, b: &Cdp, name: &str) -> std::io::Result<String> {
-        if let Some(t) = self.watch_tabs.lock().unwrap().get(name).filter(|t| b.owner(t).is_some()) {
+        if let Some(t) = self.watch_tabs.lk().get(name).filter(|t| b.owner(t).is_some()) {
             return Ok(t.clone());
         }
         let id = b.call("Target.createTarget", json!({"url": "about:blank", "newWindow": true, "background": true}), None)?["targetId"]
@@ -166,13 +167,13 @@ impl Organ {
             std::thread::sleep(Duration::from_millis(20));
         }
         b.set_owner(&id, "watch");
-        self.watch_tabs.lock().unwrap().insert(name.to_string(), id.clone());
+        self.watch_tabs.lk().insert(name.to_string(), id.clone());
         Ok(id)
     }
 
     /// Load the page, pick out its rows, and work out which matching rows are new. Saves what was seen.
     pub(crate) fn check(&self, name: &str) -> Result<Found, String> {
-        let spec = self.watches.lock().unwrap().get(name).map(|w| w["spec"].clone()).ok_or("no such watch")?;
+        let spec = self.watches.lk().get(name).map(|w| w["spec"].clone()).ok_or("no such watch")?;
         let b = self.browser().map_err(|e| e.to_string())?;
         let tab = self.watch_tab(&b, name).map_err(|e| e.to_string())?;
         let s = b.session(&tab).map_err(|e| e.to_string())?;
@@ -187,7 +188,7 @@ impl Organ {
         let want = spec["match"].as_object().cloned().unwrap_or_default();
         let matching: Vec<Value> = rows.iter().filter(|r| crate::engine::where_matches(r, &want)).cloned().collect();
 
-        let mut all = self.watches.lock().unwrap();
+        let mut all = self.watches.lk();
         let w = all.get_mut(name).ok_or("the watch was removed")?;
         let first = w["last_check"].is_null();
         let mut seen: Vec<String> = w["seen"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
@@ -228,10 +229,10 @@ impl Organ {
     /// Check every watch that's due; tell the core about new matching rows.
     pub(crate) fn check_due(&self) {
         let t = now();
-        let due: Vec<String> = self.watches.lock().unwrap().iter()
+        let due: Vec<String> = self.watches.lk().iter()
             .filter(|(_, w)| w["next"].as_f64().unwrap_or(0.0) <= t).map(|(n, _)| n.clone()).collect();
         for name in due {
-            let spec = self.watches.lock().unwrap().get(&name).map(|w| w["spec"].clone()).unwrap_or_default();
+            let spec = self.watches.lk().get(&name).map(|w| w["spec"].clone()).unwrap_or_default();
             match self.check(&name) {
                 Ok(f) if !f.new_matches.is_empty() => {
                     self.tell_core("web.matched", json!({"watch": name, "url": spec["url"], "note": spec["note"], "title": f.title,
@@ -241,7 +242,7 @@ impl Organ {
                 Ok(_) => {}
                 Err(e) => {
                     // Try again at the next interval; a page that's down isn't worth waking anyone for.
-                    if let Some(w) = self.watches.lock().unwrap().get_mut(&name) {
+                    if let Some(w) = self.watches.lk().get_mut(&name) {
                         w["next"] = json!(t + spec["every"].as_f64().unwrap_or(600.0));
                         w["error"] = json!(e);
                     }

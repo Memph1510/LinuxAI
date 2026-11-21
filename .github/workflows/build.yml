@@ -21,8 +21,25 @@ jobs:
       - name: AI layer (Python) tests
         run: pip install -e . pytest && pytest -q
 
+  # Known vulnerabilities in dependencies: a reported vulnerability fails the build. "Unmaintained" notices
+  # (chrono, chrono-tz today) are warnings, printed but not failing.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Rust dependencies (RustSec advisories)
+        run: cd core && cargo audit
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python dependencies (PyPI advisories)
+        run: pip install pip-audit && pip-audit .
+
   iso:
-    needs: test
+    needs: [test, audit]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest

@@ -38,6 +38,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
+use crate::crash::Locked;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// A cold Chromium on a busy or slow machine (several starting at once, a laptop just after boot) can take well
@@ -190,18 +191,18 @@ impl Cdp {
             }
         }
         self.alive.store(false, Ordering::SeqCst);
-        self.pending.lock().unwrap().clear(); // wakes every waiting call with an error
+        self.pending.lk().clear(); // wakes every waiting call with an error
     }
 
     fn dispatch(&self, v: Value) {
         if let Some(id) = v["id"].as_u64() {
-            if let Some(tx) = self.pending.lock().unwrap().remove(&id) {
+            if let Some(tx) = self.pending.lk().remove(&id) {
                 let _ = tx.send(v);
             }
             return;
         }
         if matches!(v["method"].as_str(), Some("Runtime.bindingCalled" | "Page.screencastFrame")) {
-            self.listeners.lock().unwrap().retain(|l| l.send(v.clone()).is_ok());
+            self.listeners.lk().retain(|l| l.send(v.clone()).is_ok());
             return;
         }
         let p = &v["params"];
@@ -209,17 +210,17 @@ impl Cdp {
         match v["method"].as_str().unwrap_or("") {
             "Target.targetCreated" | "Target.targetInfoChanged" if info["type"] == "page" => {
                 let id = info["targetId"].as_str().unwrap_or("").to_string();
-                let mut tabs = self.tabs.lock().unwrap();
+                let mut tabs = self.tabs.lk();
                 let t = tabs.entry(id).or_insert(Tab { url: String::new(), title: String::new(), owner: "human", session: None });
                 t.url = info["url"].as_str().unwrap_or("").to_string();
                 t.title = info["title"].as_str().unwrap_or("").to_string();
             }
             "Target.targetDestroyed" => {
-                self.tabs.lock().unwrap().remove(p["targetId"].as_str().unwrap_or(""));
+                self.tabs.lk().remove(p["targetId"].as_str().unwrap_or(""));
             }
             "Target.detachedFromTarget" => {
                 let sid = p["sessionId"].as_str().unwrap_or("");
-                for t in self.tabs.lock().unwrap().values_mut() {
+                for t in self.tabs.lk().values_mut() {
                     if t.session.as_deref() == Some(sid) {
                         t.session = None;
                     }
@@ -231,12 +232,12 @@ impl Cdp {
 
     pub fn listen(&self) -> mpsc::Receiver<Value> {
         let (tx, rx) = mpsc::channel();
-        self.listeners.lock().unwrap().push(tx);
+        self.listeners.lk().push(tx);
         rx
     }
 
     pub fn url_of(&self, tab: &str) -> Option<String> {
-        self.tabs.lock().unwrap().get(tab).map(|t| t.url.clone())
+        self.tabs.lk().get(tab).map(|t| t.url.clone())
     }
 
     pub fn alive(&self) -> bool {
@@ -257,15 +258,15 @@ impl Cdp {
             msg["sessionId"] = json!(s);
         }
         let (tx, rx) = mpsc::channel();
-        self.pending.lock().unwrap().insert(id, tx);
+        self.pending.lk().insert(id, tx);
         {
-            let mut out = self.out.lock().unwrap();
+            let mut out = self.out.lk();
             let mut bytes = serde_json::to_vec(&msg)?;
             bytes.push(0);
             out.write_all(&bytes)?;
         }
         let reply = rx.recv_timeout(timeout).map_err(|_| {
-            self.pending.lock().unwrap().remove(&id);
+            self.pending.lk().remove(&id);
             std::io::Error::other(format!("{method}: no reply from the browser"))
         })?;
         if let Some(e) = reply.get("error") {
@@ -275,7 +276,7 @@ impl Cdp {
     }
 
     pub(crate) fn session(&self, tab: &str) -> std::io::Result<String> {
-        if let Some(s) = self.tabs.lock().unwrap().get(tab).and_then(|t| t.session.clone()) {
+        if let Some(s) = self.tabs.lk().get(tab).and_then(|t| t.session.clone()) {
             return Ok(s);
         }
         let r = self.call("Target.attachToTarget", json!({"targetId": tab, "flatten": true}), None)?;
@@ -283,7 +284,7 @@ impl Cdp {
         // Know where the human's pointer is, on this page and every page this tab loads from now on.
         let _ = self.call("Page.addScriptToEvaluateOnNewDocument", json!({"source": TRACK_JS}), Some(&s));
         let _ = self.call("Runtime.evaluate", json!({"expression": TRACK_JS}), Some(&s));
-        if let Some(t) = self.tabs.lock().unwrap().get_mut(tab) {
+        if let Some(t) = self.tabs.lk().get_mut(tab) {
             t.session = Some(s.clone());
         }
         Ok(s)
@@ -313,7 +314,7 @@ impl Cdp {
     }
 
     pub fn tabs(&self) -> Vec<Value> {
-        let mut list: Vec<Value> = self.tabs.lock().unwrap().iter()
+        let mut list: Vec<Value> = self.tabs.lk().iter()
             .filter(|(_, t)| !t.url.starts_with("devtools://") && t.owner != "workspace")
             .map(|(id, t)| json!({"tab": id, "url": t.url, "title": t.title, "owner": t.owner}))
             .collect();
@@ -322,11 +323,11 @@ impl Cdp {
     }
 
     pub(crate) fn owner(&self, tab: &str) -> Option<&'static str> {
-        self.tabs.lock().unwrap().get(tab).map(|t| t.owner)
+        self.tabs.lk().get(tab).map(|t| t.owner)
     }
 
     pub(crate) fn set_owner(&self, tab: &str, owner: &'static str) {
-        if let Some(t) = self.tabs.lock().unwrap().get_mut(tab) {
+        if let Some(t) = self.tabs.lk().get_mut(tab) {
             t.owner = owner;
         }
     }
@@ -334,7 +335,7 @@ impl Cdp {
     #[allow(dead_code)] // tests; in service, systemd stops the whole group
     pub fn shutdown(&self) {
         let _ = self.call("Browser.close", json!({}), None);
-        let mut c = self.child.lock().unwrap();
+        let mut c = self.child.lk();
         let start = Instant::now();
         let mut exited = false;
         while start.elapsed() < Duration::from_secs(5) {
@@ -350,7 +351,7 @@ impl Cdp {
         }
         // The process is gone: say so now, rather than when the reader notices the pipe closed.
         self.alive.store(false, Ordering::SeqCst);
-        self.pending.lock().unwrap().clear();
+        self.pending.lk().clear();
     }
 }
 
@@ -501,14 +502,14 @@ impl Organ {
 
     /// The running browser, started (or restarted, if it died or the human closed it) as needed.
     pub fn browser(&self) -> std::io::Result<Arc<Cdp>> {
-        let mut slot = self.cdp.lock().unwrap();
+        let mut slot = self.cdp.lk();
         if let Some(c) = slot.as_ref().filter(|c| c.alive()) {
             return Ok(c.clone());
         }
         let c = Cdp::launch(&self.bin, &self.profile, self.headless, self.app.as_deref())?;
         // Let the first tab report in, so it's there (and yours) from the start.
         let start = Instant::now();
-        while c.tabs.lock().unwrap().is_empty() && start.elapsed() < Duration::from_secs(5) {
+        while c.tabs.lk().is_empty() && start.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(50));
         }
         *slot = Some(c.clone());
@@ -517,7 +518,7 @@ impl Organ {
 
     #[allow(dead_code)]
     pub fn shutdown(&self) {
-        if let Some(c) = self.cdp.lock().unwrap().take() {
+        if let Some(c) = self.cdp.lk().take() {
             c.shutdown();
         }
     }
@@ -561,7 +562,7 @@ impl Organ {
         let max = req["max"].as_u64().unwrap_or(20000) as usize;
         if op == "workspace_status" {
             // Is the Workspace open, and is its page connected to the OS (not showing example data)?
-            let w = self.workspace.lock().unwrap().clone();
+            let w = self.workspace.lk().clone();
             return match w {
                 Some(w) if b.owner(&w.tab).is_some() => {
                     let v = b.eval(&w.tab, "({title: document.title, connected: typeof window.linuxai === 'function'})").unwrap_or(json!({}));

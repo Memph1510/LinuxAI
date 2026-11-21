@@ -5,6 +5,7 @@ use crate::memory::Memory;
 use crate::verbs::Organs;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
+use crate::crash::Locked;
 
 #[derive(Clone, Default)]
 struct Fake {
@@ -13,7 +14,7 @@ struct Fake {
 
 impl Organs for Fake {
     fn invoke(&self, verb: &str, args: &Value) -> Result<Value, String> {
-        self.calls.lock().unwrap().push((verb.to_string(), args.clone()));
+        self.calls.lk().push((verb.to_string(), args.clone()));
         if args["what"] == "explode" {
             return Err("boom".into());
         }
@@ -34,7 +35,7 @@ fn core_holding(hold: f64) -> (Arc<Core>, Fake) {
 }
 
 fn calls(f: &Fake) -> Vec<String> {
-    f.calls.lock().unwrap().iter().map(|(v, a)| format!("{v} {} {}", a["what"].as_str().unwrap_or(""), a["to"].as_str().unwrap_or(""))).collect()
+    f.calls.lk().iter().map(|(v, a)| format!("{v} {} {}", a["what"].as_str().unwrap_or(""), a["to"].as_str().unwrap_or(""))).collect()
 }
 
 #[test]
@@ -162,7 +163,7 @@ fn think_hands_back_to_the_ai() {
     assert_eq!(r["result"]["status"], "waiting:answer", "restarting needs the human's ok first: {r}");
     let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": p["plan_id"], "text": "yes"}));
     assert_eq!(r["result"]["status"], "done", "{r}");
-    assert_eq!(fake.calls.lock().unwrap()[0].0, "restart");
+    assert_eq!(fake.calls.lk()[0].0, "restart");
 }
 
 #[test]
@@ -240,7 +241,7 @@ impl Organs for Slow {
         if verb == "run" {
             std::thread::sleep(std::time::Duration::from_millis(1500));
         }
-        self.calls.lock().unwrap().push((verb.to_string(), args.clone()));
+        self.calls.lk().push((verb.to_string(), args.clone()));
         Ok(json!({"ok": true}))
     }
 }
@@ -363,7 +364,7 @@ fn many_plans_at_once_all_finish() {
         })
     }).collect();
     for t in threads { t.join().unwrap(); }
-    let sets = fake.calls.lock().unwrap().len();
+    let sets = fake.calls.lk().len();
     assert!(sets >= 200, "only {sets} actions ran");
     assert!(c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().is_empty());
 }
@@ -374,7 +375,7 @@ fn a_plan_is_saved_before_its_first_step_runs() {
     struct Peek(Arc<Mutex<Option<Value>>>, Arc<Memory>);
     impl Organs for Peek {
         fn invoke(&self, _: &str, _: &Value) -> Result<Value, String> {
-            *self.0.lock().unwrap() = Some(json!(self.1.plans_with_status("running").len()));
+            *self.0.lk() = Some(json!(self.1.plans_with_status("running").len()));
             Ok(json!({}))
         }
     }
@@ -385,7 +386,7 @@ fn a_plan_is_saved_before_its_first_step_runs() {
     let seen = Arc::new(Mutex::new(None));
     let c = Arc::new(Core::new(Memory::open(&db).unwrap(), Box::new(Peek(seen.clone(), Arc::new(Memory::open(&db).unwrap())))));
     c.submit(&json!({"plan": "one", "steps": [{"do": "set", "what": "power.profile", "to": "x"}]}), "human");
-    assert_eq!(*seen.lock().unwrap(), Some(json!(1)), "plan was not saved before its first action");
+    assert_eq!(*seen.lk(), Some(json!(1)), "plan was not saved before its first action");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1333,4 +1334,67 @@ fn an_email_goes_out_only_with_the_humans_ok_and_they_see_all_of_it() {
         {"do": "send_email", "to": "dana@hollis-logistics.com", "subject": "Re: HL-3100", "text": "Thanks, confirmed."}]});
     let r = engine::check(&plan, &c.mem, "ai", 0.8);
     assert!(r.outside && r.needs_approval, "a reply to what a stranger sends needs the outside OK");
+}
+
+#[derive(Clone, Default)]
+struct Buggy;
+
+impl Organs for Buggy {
+    fn invoke(&self, _verb: &str, args: &Value) -> Result<Value, String> {
+        if args["what"] == "trip" {
+            let v: Vec<i32> = vec![];
+            let _ = v[3]; // a bug: index out of range
+        }
+        Ok(json!({"ok": true}))
+    }
+}
+
+#[test]
+fn a_bug_fails_its_own_plan_and_nothing_else() {
+    let c = Arc::new(Core::new(Memory::in_memory(), Box::new(Buggy)));
+    let kinds = |c: &Arc<Core>, k: &str| -> Vec<Value> {
+        c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+            .filter(|e| e["kind"] == k).cloned().collect()
+    };
+    // A new plan hits the bug: it fails on its own, recorded; the human is told once.
+    let r = c.submit(&json!({"plan": "trips", "steps": [{"do": "set", "what": "trip", "to": "x"}]}), "human");
+    assert_eq!(r["result"]["status"], "failed", "{r}");
+    assert!(r["result"]["error"].as_str().unwrap().contains("internal error"), "{r}");
+    let crashes = kinds(&c, "linuxai.crash");
+    assert_eq!(crashes.len(), 1, "{crashes:?}");
+    assert!(crashes[0]["data"]["message"].as_str().unwrap().contains("index out of bounds"), "{crashes:?}");
+    let text = crate::reach::message_for(&crashes[0]).unwrap();
+    assert!(text.starts_with("LinuxAI: internal error in core (plan 'trips')"), "{text}");
+    let failed = kinds(&c, "plan.failed");
+    assert!(crate::reach::message_for(&failed[0]).is_none(), "one text per incident, not two");
+    // A plan resumed after an answer hits it too: same outcome, and the plan isn't left claimed or running.
+    let r = c.submit(&json!({"plan": "later", "steps": [{"ask": "go?", "opts": ["yes", "no"]},
+                                                       {"do": "set", "what": "trip", "to": "x"}]}), "human");
+    let id = r["result"]["plan_id"].clone();
+    let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes", "source": "human"}));
+    assert_eq!(r["result"]["status"], "failed", "{r}");
+    assert_eq!(c.handle(&json!({"op": "plan", "plan_id": id}))["plan"]["status"], "failed");
+    let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes", "source": "human"}));
+    assert_ne!(r["error"], "that plan is busy right now; try again in a moment", "the claim was released");
+    // Everything else carries on.
+    let r = c.submit(&json!({"plan": "fine", "steps": [{"do": "set", "what": "power.profile", "to": "balanced"}]}), "human");
+    assert_eq!(r["result"]["status"], "done", "{r}");
+    assert_eq!(c.handle(&json!({"op": "ping"}))["ok"], true);
+}
+
+#[test]
+fn an_unexpected_restart_is_told_once() {
+    let (c, _fake) = core();
+    let crashes = |c: &Arc<Core>| c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+        .filter(|e| e["kind"] == "linuxai.crash").count();
+    c.restarts_seen(0); // first start: nothing to compare with
+    c.restarts_seen(0); // a clean restart: the count didn't move
+    assert_eq!(crashes(&c), 0);
+    c.restarts_seen(2);
+    assert_eq!(crashes(&c), 1);
+    let ev = c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+        .find(|e| e["kind"] == "linuxai.crash").cloned().unwrap();
+    assert!(ev["data"]["message"].as_str().unwrap().contains("stopped unexpectedly 2 times"), "{ev}");
+    c.restarts_seen(2);
+    assert_eq!(crashes(&c), 1, "told once");
 }

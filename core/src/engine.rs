@@ -8,6 +8,7 @@ use crate::verbs::{self, Effect, Organs};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::sync::Mutex;
+use crate::crash::Locked;
 
 // ---------------------------------------------------------------------------------------------
 // Execution state
@@ -63,10 +64,10 @@ impl Bus {
     pub fn emit(&self, mem: &Memory, kind: &str, data: Value) {
         let id = mem.add_event(kind, &data);
         let ev = json!({"id": id, "ts": now(), "kind": kind, "data": data});
-        self.pending.lock().unwrap().push((kind.to_string(), ev));
+        self.pending.lk().push((kind.to_string(), ev));
     }
     pub fn drain(&self) -> Vec<(String, Value)> {
-        std::mem::take(&mut *self.pending.lock().unwrap())
+        std::mem::take(&mut *self.pending.lk())
     }
 }
 
@@ -776,7 +777,7 @@ pub fn read_approval(text: &str) -> Option<bool> {
     Some(words.contains(&"always"))
 }
 
-fn persist(exec: &Exec, ctx: &Ctx) {
+pub(crate) fn persist(exec: &Exec, ctx: &Ctx) {
     ctx.mem.save_plan(&exec.id, &exec.name, &exec.source, &exec.status, &serde_json::to_value(exec).unwrap());
 }
 

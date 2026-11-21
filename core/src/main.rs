@@ -22,6 +22,7 @@ mod client;
 mod compositor;
 mod craft;
 mod core;
+mod crash;
 mod engine;
 mod host;
 mod jobs;
@@ -45,6 +46,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
+use crate::crash::Locked;
 
 pub(crate) fn default_socket() -> PathBuf {
     if let Ok(p) = std::env::var("LINUXAI_CORE_SOCKET") {
@@ -110,7 +112,7 @@ fn serve(core: Arc<core::Core>, stream: UnixStream) {
         if req["op"] == "follow" {
             // Stream every event from now on, one JSON object per line.
             let (tx, rx) = mpsc::channel();
-            core.subscribers.lock().unwrap().push(tx);
+            core.subscribers.lk().push(tx);
             let _ = writeln!(writer, "{}", json!({"ok": true, "following": true}));
             for ev in rx {
                 if writeln!(writer, "{ev}").is_err() {
@@ -119,7 +121,15 @@ fn serve(core: Arc<core::Core>, stream: UnixStream) {
             }
             return;
         }
-        let resp = core.handle(&req);
+        // One request hitting a bug fails alone: the caller gets an error, the human is told, the core keeps serving.
+        let resp = match crash::catch(|| core.handle(&req)) {
+            Ok(r) => r,
+            Err(msg) => {
+                let op = req["op"].as_str().unwrap_or("?").to_string();
+                core.emit("linuxai.crash", crash::event("core", &format!("request '{op}'"), &msg));
+                json!({"ok": false, "error": format!("LinuxAI hit an internal error handling '{op}' (recorded): {msg}")})
+            }
+        };
         if writeln!(writer, "{resp}").is_err() {
             return;
         }
@@ -142,6 +152,7 @@ fn daemon(args: &[String]) -> std::io::Result<()> {
     core.file_gid = arg(args, "--group").or_else(|| std::env::var("LINUXAI_GROUP").ok()).as_deref().and_then(group_id);
     let core = Arc::new(core);
     core.recover();
+    core.notice_unexpected_restarts();
 
     if let Some(dir) = socket.parent() {
         std::fs::create_dir_all(dir)?;
@@ -266,6 +277,7 @@ fn mail_cmd(args: &[String]) -> std::io::Result<()> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    crash::install(args.get(1).map(String::as_str).unwrap_or("linuxai-core"));
     let result = match args.get(1).map(String::as_str) {
         Some("daemon") => daemon(&args),
         Some("ctl") => ctl(&args),

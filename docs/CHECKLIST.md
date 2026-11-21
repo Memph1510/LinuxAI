@@ -116,6 +116,16 @@ From an objective review of everything built so far. Each was first shown by a f
 Also added: a fuzz test (3,000 random and malformed plans through the checker and the core, and plans at the
 socket's maximum depth). Nothing crashed.
 
+### Crashes and dependencies (2026-11-21, from "how are bugs, crashes and security handled?")
+
+| Gap | Fix |
+|---|---|
+| A panic while holding a lock "poisoned" it, so every later request touching that lock panicked too: one bug could take the whole core down | Every lock recovers after a panic (`crash::Locked`); the data behind them stays consistent |
+| A panic while running a plan left it claimed and "running" forever | The plan fails on its own with "internal error", is saved and freed; everything else carries on |
+| A panic answering a request dropped the connection with no answer | The caller gets an error, and the core keeps serving |
+| Crashes were only in the journal | You're texted about each one (`linuxai.crash`): caught panics, panics in organs (browser, Craft, Workspace…), and the core restarting after an unexpected stop (systemd's restart count) |
+| The dependency audit ran by hand | `cargo audit` and `pip-audit` run in CI on every push; a vulnerability fails the build |
+
 ## Next pieces (decided 2026-11-18; any order; install to disk waits until you're at the laptop)
 
 - [x] **Prompt library** (`~/prompts/`, core `src/prompts.rs`, starter set in `library/prompts/`): markdown prompts by use case, with fill-in slots, which model they suit,
