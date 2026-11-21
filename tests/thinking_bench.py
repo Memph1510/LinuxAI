@@ -183,7 +183,9 @@ class Model:
                  {"do": "track", "thread": th, "state": "they came back at ${$usd}; waiting on you"},
                  {"ask": f"Hollis came back at ${{$usd}} on {ref} (they offered $3,000, we asked $3,500). Take it?",
                   "opts": ["take", "counter", "pass"], "lean": "take", "why": "between their offer and ours", "as": "choice"},
-                 {"if": ["=", "$choice", "take"], "then": [{"do": "track", "thread": th, "state": "agreed at ${$usd}", "status": "closed"}]}],
+                 {"if": ["=", "$choice", "take"], "then": [{"do": "track", "thread": th, "state": "agreed at ${$usd}", "status": "closed"},
+                                                          {"do": "agree", "reference": ref, "with": "dana@hollis-logistics.example",
+                                                           "terms": {"rate_cents": ["*", "$usd", 100]}}]}],
                "else": [{"think": f"[{th}] Hollis answered {ref} at ${{$usd}}, below what I planned for. State: they "
                                   f"offered $3,000; we countered $3,500."}]}]}]}
 
@@ -268,6 +270,14 @@ class Model:
             contact = prompt.split("read_playbook ")[1].split(")")[0]
             seq = [("read_facts", {"ids": [f for f in facts if f != "none"]}), ("read_playbook", {"category": contact})]
             nego = self._nego(prompt)
+            if nego and "Rate confirmation" in prompt:  # what did we agree? reread the exchange to find out
+                earlier = [f for f in self.history.get(nego[0], []) if f not in facts]
+                seq.append(("read_facts", {"ids": earlier}))
+                if step < len(seq):
+                    return [self.call(seq[step][0], **seq[step][1])]
+                if step == len(seq):
+                    return [self.call("tell_human", text=f"The rate confirmation for {nego[0]} matches what was agreed ({nego[1]}).")]
+                return [self.said("Done.")]
             if nego and nego[2]:  # a reply: work out where the exchange stood by rereading it
                 earlier = [f for f in self.history.get(nego[0], []) if f not in facts]
                 seq.append(("read_facts", {"ids": earlier}))
@@ -286,7 +296,7 @@ class Model:
             return [self.said("Nothing else needs doing.")]
         if "Email (outside information" in prompt:  # a brief with one or several emails
             nego = self._nego(prompt)
-            if nego and not nego[2] and step == 0:  # the counter, with what each answer will mean decided now
+            if nego and not nego[2] and "Rate confirmation" not in prompt and step == 0:  # the counter, with what each answer will mean decided now
                 return [self.call("submit_plan", plan=self.nego_plan(nego[0])),
                         self.call("tell_human", text=f"Hollis offered $3,000 on {nego[0]}; I'd counter at $3,500.")]
             if step == 0 and "load_offer" in prompt:
@@ -380,7 +390,9 @@ def workload(days: int, only: str | None = None) -> list[tuple[float, str, dict]
     day += [(1.1 * h, "mail", {"category": "load_offer", "nego": 1, "rate": 300000}),
             (3.5 * h, "mail", {"category": "load_offer", "nego": 1, "rate": 320000, "reply": True}),
             (7.5 * h, "mail", {"category": "load_offer", "nego": 2, "rate": 300000}),
-            (9.0 * h, "mail", {"category": "load_offer", "nego": 2, "rate": 280000, "reply": True})]
+            (9.0 * h, "mail", {"category": "load_offer", "nego": 2, "rate": 280000, "reply": True}),
+            # The first one was settled at $3,200: the broker's rate confirmation follows.
+            (5.0 * h, "mail", {"category": "rate_confirmation", "nego": 1, "rate": 320000, "ratecon": True})]
     day += [(t * h, "task", {"title": title}) for title, t in (("Weekly fuel report", 3.0), ("Renew the truck's registration", 6.0),
                                                                 ("Find a dentist near home", 8.0))]
     # Keeping an eye on a load board, Dallas to Atlanta at $2,500 or more: before, a check every 30 minutes;
@@ -443,7 +455,7 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     mind = Mind(agent, core, strategy="full" if strategy.startswith("full") else "ladder", clock=clock)
     seen = core.request("events", since=0, limit=1)["last"]
     stats = {"situations": 0, "to_model": 0, "habit_used": 0, "conversations": 0, "replies": 0, "replies_expected": 0,
-             "replies_told": 0, "board_new": 0, "board_told": 0}
+             "replies_told": 0, "board_new": 0, "board_told": 0, "ratecons": 0, "ratecons_checked": 0}
     orig_reset = agent.reset
 
     def counting_reset():
@@ -465,6 +477,8 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
                 if k == "plan.waiting" and (d.get("wait") or {}).get("approval"):
                     core.request("answer", plan_id=d["plan_id"], text="always", source="human")  # the human: yes, always
                 said = (d.get("text") or "") if k == "ai.tell" else ((d.get("wait") or {}).get("question") or "") if k == "plan.waiting" else ""
+                if k == "ai.tell" and "matches what was agreed" in (d.get("text") or ""):
+                    stats["ratecons_checked"] += 1
                 if k == "ai.tell" and "New load to Atlanta" in (d.get("text") or ""):
                     stats["board_told"] += (d.get("text") or "").count(" at $")
                 if "Hollis came back at $" in said or "Hollis dropped to $" in said:
@@ -503,10 +517,15 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
             if model:
                 model.history.setdefault(ref, []).append(fact.get("id"))
             stats["replies"] += 1 if d.get("reply") else 0
+            stats["ratecons"] += 1 if d.get("ratecon") else 0
+            claims = [{**claim, "id": fact.get("id")}]
+            # As email ingestion does (core/src/mail.rs): checked against what was agreed.
+            agreements = core.request("agreements_check", claims=claims, document=f"obj:message/m{n_fact}").get("checked") or []
+            subject = (f"Rate confirmation: Load {ref}: {amount}" if d.get("ratecon")
+                       else f"{'Re: ' if d.get('reply') else ''}Load {ref}: {amount}")
             core.request("event", kind="message.received", data={
-                "from": "dana@hollis-logistics.example", "authenticated": True,
-                "subject": f"{'Re: ' if d.get('reply') else ''}Load {ref}: {amount}", "category": "load_offer",
-                "message": f"obj:message/m{n_fact}", "facts": [fact.get("id")], "claims": [{**claim, "id": fact.get("id")}],
+                "from": "dana@hollis-logistics.example", "authenticated": True, "subject": subject, "category": d["category"],
+                "message": f"obj:message/m{n_fact}", "facts": [fact.get("id")], "claims": claims, "agreements": agreements,
                 "contact": "contacts/hollis-logistics/dana"})
         elif what == "mail":
             n_fact += 1
@@ -574,6 +593,8 @@ def main() -> int:
     print(f"{'negotiation replies already expected':<34}" + "".join(f"{r['replies_expected']:>33}" for r in results)
           + f"   (replies: {results[0]['replies']})")
     print(f"{'replies brought to you, with state':<34}" + "".join(f"{r['replies_told']:>33}" for r in results))
+    print(f"{'rate cons checked vs. agreement':<34}" + "".join(f"{r['ratecons_checked']:>33}" for r in results)
+          + f"   (rate confirmations: {results[0]['ratecons']})")
     print(f"{'new matching loads told to you':<34}" + "".join(f"{r['board_told']:>33}" for r in results)
           + f"   (new matching loads: {results[0]['board_new']})")
     base = results[0]["cost"] or 1

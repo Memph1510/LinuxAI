@@ -1182,6 +1182,16 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
             let a = args.as_object().unwrap();
             return Ok(json!(track(ctx, a, &exec.name)));
         }
+        "agree" => {
+            let a = args.as_object().unwrap();
+            let reference = str_arg(a, "reference");
+            let id = crate::agreements::id(&reference);
+            let fields = json!({"reference": reference, "terms": a.get("terms").cloned().unwrap_or(json!({})), "with": a.get("with"),
+                "about": a.get("about"), "thread": a.get("thread"), "status": "agreed", "documents": [], "by_plan": exec.name, "agreed": now()});
+            ctx.mem.put_object_with_id(&id, "agreement", &fields);
+            ctx.bus.emit(ctx.mem, "agreement.made", json!({"id": id, "reference": reference, "terms": fields["terms"]}));
+            return Ok(json!(id));
+        }
         "enable_rule" => {
             let name = str_arg(args.as_object().unwrap(), "name");
             if !ctx.mem.set_rule_enabled(&name, true) {

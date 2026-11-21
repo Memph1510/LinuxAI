@@ -307,7 +307,7 @@ pub fn check_form(raw: &Value) -> Value {
         let amount = m["amount_cents"].as_i64().filter(|a| (0..100_000_000_000).contains(a))?;
         Some(json!({"amount_cents": amount, "currency": s(&m["currency"], 8).as_str().map(|c| json!(c)).unwrap_or(json!("USD")),
                     "direction": m["direction"].as_str().filter(|d| directions.contains(d)).unwrap_or("unknown"),
-                    "what": s(&m["what"], 200)}))
+                    "what": s(&m["what"], 200), "reference": s(&m["reference"], 80)}))
     }).collect();
     let schedule: Vec<Value> = list(&raw["schedule"]).iter().map(|x| json!({"title": s(&x["title"], 200),
         "start": s(&x["start"], 60), "end": s(&x["end"], 60), "location": s(&x["location"], 200)})).collect();
@@ -572,11 +572,14 @@ pub fn ingest(raw: &[u8], api: &dyn Api, cfg: &MailConfig) -> Result<Value, Stri
         api.call("object_patch", json!({"id": pid, "fields": {"messages": n("messages") + 1,
             "corrections": n("corrections") + corrected.len() as i64, "last_seen": source["date"]}}));
     }
+    // Checked against what was agreed (a rate confirmation for a load we settled at $3,200, say).
+    let agreements = api.call("agreements_check", json!({"claims": claims, "document": mid}))["checked"].clone();
+    let agreements = if agreements.is_array() { agreements } else { json!([]) };
     api.call("event", json!({"kind": "message.received", "data": {
-        "message": mid, "facts": derived, "claims": claims, "category": facts["category"], "from": from, "authenticated": source["authenticated"],
+        "message": mid, "facts": derived, "claims": claims, "agreements": agreements, "category": facts["category"], "from": from, "authenticated": source["authenticated"],
         "subject": info["subject"], "trust": "outside", "contact": person["contact"], "corrected": corrected, "issues": issues,
         "invites": invites}}));
-    Ok(json!({"message": mid, "facts": derived, "claims": claims, "category": facts["category"], "corrected": corrected, "contact": person["contact"],
+    Ok(json!({"message": mid, "facts": derived, "claims": claims, "agreements": agreements, "category": facts["category"], "corrected": corrected, "contact": person["contact"],
               "extract_error": extract_error, "invites": invites}))
 }
 
@@ -843,6 +846,46 @@ mod tests {
         let th = core.call("threads", json!({}))["threads"][0].clone();
         assert_eq!(th["state"], "they came back at 320000 cents; waiting on you");
         assert_eq!(th["history"][0]["state"], "they offered $3,000; we countered $3,500", "the earlier state is kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_document_is_checked_against_what_was_agreed() {
+        let dir = std::env::temp_dir().join(format!("linuxai-agree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let core: Arc<Core> = Arc::new(Core::new(Memory::in_memory(), Box::new(NoOrgans)));
+        let r = core.submit(&json!({"plan": "settled HL-3100", "steps": [
+            {"do": "agree", "reference": "HL-3100", "with": "dana@hollis-logistics.com", "terms": {"rate_cents": 320000, "destination": "Atlanta, GA"}}]}), "human");
+        assert_eq!(r["result"]["status"], "done", "{r}");
+        let cfg = |name: &str, f: Value| MailConfig { mail_dir: dir.join("mail"), authserv_id: Some("mx.linuxai.local".into()),
+            extract_cmd: fake_extractor(&dir, name, f) };
+        // The rate confirmation says what was agreed: matched, and the agreement is confirmed.
+        let rc = json!({"category": "rate_confirmation", "summary": "Rate con.", "loads": [{"reference": "HL-3100", "rate_cents": 320000,
+            "origin": "Dallas, TX", "destination": "Atlanta, GA"}]});
+        let raw = email(&["mx.linuxai.local; dmarc=pass"], None, Some("Rate confirmation attached."), "", None);
+        let got = ingest(&raw, &core, &cfg("rc", rc)).unwrap();
+        assert_eq!(got["agreements"][0]["matches"], true, "{got}");
+        assert_eq!(got["agreements"][0]["compared"], json!(["destination", "rate_cents"]));
+        let a = core.call("object", json!({"id": "obj:agreement/hl-3100"}))["object"].clone();
+        assert_eq!(a["status"], "confirmed");
+        assert_eq!(a["documents"][0]["document"], got["message"]);
+        // The invoice bills $3,000: the difference is spelled out, and the agreement is disputed.
+        let inv = json!({"category": "invoice_or_bill", "summary": "Invoice.", "money": [{"amount_cents": 300000, "direction": "we_owe",
+            "what": "freight HL-3100", "reference": "HL-3100"}]});
+        let raw = email(&["mx.linuxai.local; dmarc=pass"], None, Some("Invoice for HL-3100."), "", None);
+        let got = ingest(&raw, &core, &cfg("inv", inv)).unwrap();
+        let chk = &got["agreements"][0];
+        assert_eq!(chk["matches"], false, "{got}");
+        assert_eq!(chk["differences"], json!([{"field": "rate_cents", "agreed": 320000, "claimed": 300000}]));
+        assert_eq!(core.call("object", json!({"id": "obj:agreement/hl-3100"}))["object"]["status"], "disputed");
+        let evs = core.call("events", json!({"since": 0, "limit": 1000}))["events"].as_array().unwrap().clone();
+        let last = evs.iter().rev().find(|e| e["kind"] == "message.received").unwrap();
+        assert_eq!(last["data"]["agreements"][0]["differences"][0]["claimed"], 300000, "the mind sees it on the event");
+        // Mail about something never agreed isn't checked against anything.
+        let other = json!({"category": "load_offer", "summary": "Offer.", "loads": [{"reference": "HL-9", "rate_cents": 100000}]});
+        let raw = email(&["mx.linuxai.local; dmarc=pass"], None, Some("New load."), "", None);
+        assert_eq!(ingest(&raw, &core, &cfg("o", other)).unwrap()["agreements"], json!([]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

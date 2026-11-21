@@ -541,6 +541,9 @@ Expressions: "$var.path" reads a variable ($state = live machine state, $event =
 "{$var}" inside text interpolates; prefix lists compute: ["=", a, b] [">", a, b] ["and", ...] ["+", a, b]
 ["*", a, b] ["avg", "field", list] ["sum", list] ["count", list] ["pct", a, b] ["has", a, b] ["exists", a]
 ["get", obj, "field"] ["first", list] ["pick", list, "field", value] (first item whose field equals value).
+Long work: {"do": "run", "program": ..., "args": [...], "background": true, "as": "job"}, then
+{"wait": "job.finished", "where": ["=", "$event.data.job", "$job.job"], "max": "6h"} and branch on $event.data.ok /
+$event.data.output. Settled deals: {"do": "agree", "reference": "HL-3100", "terms": {"rate_cents": 320000}}.
 An email event carries its claims inline: $event.data.claims, e.g. [{"type": "load_offer", "reference": "HL-3100",
 "rate_cents": 320000, ...}], plus from, subject, category; use ["pick", "$event.data.claims", "reference", "HL-3100"].
 {"find": {"type": T, "from": "@handle", "where": {field: value | [op, value]}, "pick": "newest", "last": N}}

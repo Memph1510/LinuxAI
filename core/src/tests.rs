@@ -1078,3 +1078,49 @@ fn a_plan_that_waits_for_someones_reply_rests_on_outside_information() {
     let plan = json!({"plan": "on plug", "assess": assess, "steps": [{"wait": "power.plugged"}, {"do": "set", "what": "power.profile", "to": "performance"}]});
     assert!(!engine::check(&plan, &mem, "ai", 0.8).outside);
 }
+
+#[derive(Clone, Default)]
+struct Programs;
+
+impl Organs for Programs {
+    fn invoke(&self, verb: &str, args: &Value) -> Result<Value, String> {
+        assert_eq!(verb, "run");
+        std::thread::sleep(std::time::Duration::from_millis(150)); // long work
+        match args["args"][0].as_str() {
+            Some("ok") => Ok(json!({"code": 0, "output": "upgraded 212 packages"})),
+            _ => Ok(json!({"code": 1, "output": "error: failed to commit transaction (conflicting files)\nlinux-firmware: /usr/lib/firmware/x exists"})),
+        }
+    }
+}
+
+#[test]
+fn long_work_runs_in_the_background_and_its_outcome_was_decided_ahead() {
+    let c = Arc::new(Core::new(Memory::in_memory(), Box::new(Programs)));
+    let plan = |name: &str, how: &str| json!({"plan": name, "steps": [
+        {"do": "run", "program": "pacman", "args": [how], "background": true, "as": "job"},
+        {"wait": "job.finished", "where": ["=", "$event.data.job", "$job.job"], "max": "6h", "about": "the system update"},
+        {"if": "$event.data.ok", "then": [{"tell": "{$plan_name} done: {$event.data.output}"}],
+         "else": [{"if": ["has", "$event.data.output", "conflicting files"],
+                   "then": [{"tell": "{$plan_name}: conflicting files; the known fix applies"}],
+                   "else": [{"think": "the update failed in a way I didn't plan for: {$event.data.output}"}]}]}],
+        "with": {"plan_name": name}});
+    let a = c.submit(&plan("update A", "ok"), "human");
+    let b = c.submit(&plan("update B", "conflict"), "human");
+    // Both wait at once: starting the work didn't hold anything up.
+    for r in [&a, &b] {
+        assert_eq!(r["result"]["status"], "waiting:event", "{r}");
+    }
+    let status = |r: &Value| c.handle(&json!({"op": "plan", "plan_id": r["result"]["plan_id"]}))["plan"]["status"].as_str().unwrap_or("").to_string();
+    for _ in 0..100 {
+        c.tick();
+        if status(&a) == "done" && status(&b) == "done" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let tells: Vec<String> = c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+        .filter(|e| e["kind"] == "ai.tell").map(|e| e["data"]["text"].as_str().unwrap().to_string()).collect();
+    assert!(tells.contains(&"update A done: upgraded 212 packages".to_string()), "{tells:?}");
+    assert!(tells.contains(&"update B: conflicting files; the known fix applies".to_string()), "each plan took its own job's result: {tells:?}");
+    assert_eq!(tells.len(), 2, "no model involved: {tells:?}");
+}

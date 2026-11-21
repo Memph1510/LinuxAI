@@ -25,6 +25,27 @@ from typing import Any, Callable
 URGENT_MAIL = {"load_offer", "rate_confirmation", "payment", "calendar"}
 
 
+def _value(field: str, v) -> str:
+    if field.endswith("_cents") and isinstance(v, (int, float)):
+        return f"${v / 100:,.2f}".replace(".00", "")
+    return str(v)
+
+
+def agreement_lines(checked: list[dict]) -> str:
+    """How a document compares with what was agreed, in words."""
+    out = []
+    for c in checked:
+        if c.get("matches"):
+            out.append(f"{c['reference']}: matches what was agreed ({', '.join(c.get('compared') or [])}).")
+        elif c.get("differences"):
+            out.append(f"{c['reference']}: DIFFERS from what was agreed: " + "; ".join(
+                f"{d['field']} agreed {_value(d['field'], d['agreed'])}, the document says {_value(d['field'], d['claimed'])}"
+                for d in c["differences"]) + ".")
+        else:
+            out.append(f"{c['reference']}: has an agreement, but the document states none of its terms.")
+    return " ".join(out)
+
+
 class Mind:
     def __init__(self, agent: Any, core: Any, strategy: str | None = None, clock: Callable[[], float] = time.time,
                  batch_secs: float | None = None):
@@ -189,6 +210,20 @@ class Mind:
             return
         if d.get("category") == "newsletter":
             return
+        checked = d.get("agreements") or []
+        if checked and self.strategy != "full":
+            cited = {c.get("reference") for c in d.get("claims") or [] if c.get("reference")}
+            if all(c.get("matches") for c in checked) and cited <= {c["reference"] for c in checked} \
+                    and not d.get("issues") and not d.get("corrected"):
+                # Exactly what was agreed: filed with the agreement, no model needed.
+                terms = "; ".join(", ".join(f"{k} {_value(k, v)}" for k, v in (c.get("terms") or {}).items()) for c in checked)
+                self.core.request("tell", text=f"The {str(d.get('category') or 'document').replace('_', ' ')} from {d.get('from')} for "
+                                               f"{', '.join(sorted(cited))} matches what was agreed ({terms}). Filed with the agreement.",
+                                  **{"from": "mind"})
+                return
+            if any(c.get("differences") for c in checked):
+                self._mail_batch([d], effort="medium")  # a difference from what was agreed can't wait
+                return
         if self.strategy == "full":
             extra = ""
             if d.get("issues"):
@@ -213,7 +248,8 @@ class Mind:
         for d in items:
             who = f"{d.get('from')} ({'sender verified' if d.get('authenticated') else 'sender NOT verified'})"
             flags = (f" Checks flagged: {'; '.join(d['issues'])}." if d.get("issues") else "") + \
-                    (f" It corrects earlier facts: {', '.join(d['corrected'])}." if d.get("corrected") else "")
+                    (f" It corrects earlier facts: {', '.join(d['corrected'])}." if d.get("corrected") else "") + \
+                    (f" Checked against what was agreed: {agreement_lines(d['agreements'])}" if d.get("agreements") else "")
             parts.append(f"- From {who}: \"{d.get('subject')}\" [{d.get('category')}] message {d.get('message')}.{flags}\n"
                          f"  claims: {json.dumps(d['claims'], default=str) if d.get('claims') else self._facts(d.get('facts') or [])}\n"
                          f"  sender's profile ({d.get('contact')}):\n{self._playbooks(d.get('contact'))}")

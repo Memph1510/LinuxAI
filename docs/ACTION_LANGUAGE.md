@@ -116,6 +116,31 @@ what each foreseeable answer means. The reply is then handled when it arrives, w
 - `{"op": "threads"}` lists open exchanges with where each stands and which plan handles the next reply; the AI
   sees them in its context.
 
+### Long work, decided ahead
+
+Updates, builds, renders and big downloads run in the background, and the plan decides now what each outcome
+means. Nobody checks on the job while it runs, and the model isn't involved unless the outcome is a surprise:
+
+```json
+{"plan": "system update", "steps": [
+  {"do": "run", "program": "pacman", "args": ["-Syu", "--noconfirm"], "background": true, "as": "job"},
+  {"wait": "job.finished", "where": ["=", "$event.data.job", "$job.job"], "max": "6h", "about": "the system update"},
+  {"if": "$event.data.ok", "then": [{"tell": "Updated: {$event.data.output}"}],
+   "else": [{"if": ["has", "$event.data.output", "conflicting files"],
+     "then": [{"call": "fix pacman file conflicts"}],
+     "else": [{"think": "The update failed in a way I didn't plan for: {$event.data.output}"}]}]}]}
+```
+
+`job.finished` carries the job's id, program, exit code, `ok`, the end of its output and how long it took. If the
+core restarts while a job runs, its result is lost; the wait's `max` covers that.
+
+### What was agreed, checked when documents come in
+
+When a deal is settled, the plan records it: `{"do": "agree", "reference": "HL-3100", "terms": {"rate_cents":
+320000}}`. A rate confirmation or invoice that cites HL-3100 is then compared with it by the core as it arrives:
+a match is filed with the agreement and you're told in a line, with no model; only a difference reaches the AI,
+spelled out ("rate agreed $3,200, the document says $3,000"). `{"op": "agreements"}` lists them.
+
 ## 3. Verbs
 
 Every verb is declared by an organ with a typed signature:
