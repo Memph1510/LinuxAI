@@ -4,6 +4,7 @@ An operating system where the AI is the system. You turn the computer on, log in
 talk to it in plain English, it runs the machine, and you're the intent and the guardrail. Linux is used only as
 the hardware-driver layer; everything above it is LinuxAI.
 
+- **[docs/HANDOFF.md](docs/HANDOFF.md)**: start here: the whole project in one place, its honest status and what to do next
 - **[docs/SCOPE.md](docs/SCOPE.md)**: what we're building and in what order
 - **[docs/CHECKLIST.md](docs/CHECKLIST.md)**: what's done and what's next (core first, then install, the Workspace screen, the Android app)
 - **[docs/SYSTEM_INTERFACE.md](docs/SYSTEM_INTERFACE.md)**: objects, events, actions and views (the foundation)
