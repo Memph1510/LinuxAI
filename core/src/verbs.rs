@@ -57,6 +57,12 @@ pub const VERBS: &[VerbSpec] = &[
               an invoice) are checked against it by the core: a match is filed without you, only a difference is \
               brought up. reference: what the documents will cite (\"HL-3100\"); terms: {rate_cents: 320000, ...} \
               using the same field names as email claims." },
+    VerbSpec { name: "send_email", organ: "mail",
+        args: &[("to", true), ("subject", true), ("text", true), ("in_reply_to", false)],
+        effect: Effect::External, target: "to", explain: "email {to}: \"{subject}\"\n{text}",
+        doc: "Send an email (plain text). to: one address or a list; in_reply_to: the id of a stored message, so it \
+              threads under it. It acts on the outside world: the human is asked first (with the whole message in \
+              front of them) until they answer \"always\" for that recipient. Every message sent is kept." },
     VerbSpec { name: "store", organ: "core", args: &[("type", true), ("fields", true), ("handle", false)],
         effect: Effect::Internal, target: "type", explain: "store a {type} in memory",
         doc: "Create a memory object of a type (bill, person, preference, ...) with fields." },

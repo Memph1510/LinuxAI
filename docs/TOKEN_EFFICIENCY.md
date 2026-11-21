@@ -52,7 +52,7 @@ Uncached, the prefix costs about **$0.05 per request**. Read from the cache, it 
 
 The biggest lever isn't the size of a request but how many the AI needs to run the machine. See
 [THINKING.md](THINKING.md): reflexes, habits, watches, expectations (replies decided ahead), briefs, batches and effort by stakes. On a
-simulated day the same work costs 13% of what it did, with 36 model requests instead of 192, measured with
+simulated day the same work costs about 13% of what it did, with 36 to 40 model requests instead of 192, measured with
 `tests/thinking_bench.py`.
 
 ## Next, once there are measurements

@@ -23,12 +23,15 @@ Each situation goes to the cheapest level that can handle it:
 ### Habits, precisely
 
 - **Opting in.** A rule's `think` step can name its situation: `"habit": "service.failed:{$event.data.unit}"`.
-- **Learning.** When the AI answers that situation and the plan **finishes successfully**, the answer becomes a
-  habit. `LINUXAI_HABIT_AFTER` sets how many successes are needed; the default is one.
+- **Learning.** When the AI answers that situation, the answer becomes a habit only once it **held**: finishing
+  isn't working. A fix that checks its own result (an `expect` step) counts at once; otherwise it counts when the
+  same situation stays away for `LINUXAI_HABIT_HOLD` (15 minutes). If it comes back sooner, the fix didn't work and
+  isn't learned. `LINUXAI_HABIT_AFTER` sets how many fixes that held are needed; the default is one.
 - **Replaying.** Next time, the core replays the habit **through the same path the AI's answer takes**. It's
   checked again, and trust, approval and the assessment apply as usual. If the check now objects (for example,
   outside information is involved), the AI is woken instead.
-- **Retiring.** If a replay **fails**, the habit is retired and the AI thinks about that situation fresh.
+- **Retiring.** If a replay **fails**, or the situation comes back within the hold window after it, the habit is
+  retired and the AI thinks about that situation fresh.
 - **Asking only when needed.** The mind checks a situation still needs a decision before thinking about it, so a
   habit, you, or a duplicate event never cause a second conversation.
 - **Yours to manage.** `{"op":"habits"}` lists them. Only you can forget one (`habit_forget`, `source: human`).
@@ -59,8 +62,8 @@ note, so one short decision is enough.
 treated as resting on outside information from the start, so anything it would do to the outside world needs
 your OK, the same as before. Checked by the test `a_plan_that_waits_for_someones_reply_rests_on_outside_information`.
 
-Outgoing email doesn't exist yet, so "counter at $3,500" and "take $3,200" reach you as messages and questions
-with the AI's lean. Once LinuxAI can send email, the same plans can send the counter, with your OK.
+The counter goes out with `send_email`, with your OK (you see the whole message), until you say "always" for that
+broker. Then the same plan waits for the reply.
 
 ### Long work and documents, decided ahead
 
@@ -128,13 +131,16 @@ board is checked every 30 minutes; with the ladder, it's watched.
 |---|---:|---:|---:|---:|---:|
 | Before (old prompts and cache) | 192 | 0 | 0 of 2 | 178,000 | $7.39 |
 | Old prompts, new cache | 192 | 0 | 0 of 2 | 178,000 | $4.53 |
-| **The ladder** | **36** | 6 of 9 | 2 of 2 | **18,000** | **$0.96** (13%) |
+| **The ladder** | **36–40** | 6 of 9 | 2 of 2 | **18,000–20,000** | **$0.91–$0.99** (about 13%) |
 
 Three days: **$2.83 instead of $22.29 (13%)**, with 90 requests instead of 576. Habits handled 24 of the 27
 situations, all 6 negotiation replies were expected, all 3 rate confirmations were checked against the agreement with no model,
 and all 9 new loads were reported. In every run the work done
 was identical: nothing left unhandled, every service failure restarted, every reply and every new matching load
 brought to you.
+
+The ladder's numbers vary a little from run to run (36 to 40 requests in a day): plans run on the core's own threads,
+so routine work sometimes lands in one more batch. The work done never varies.
 
 One scenario alone:
 - **Negotiations** (`--only negotiation`): 6 requests instead of 23. A foreseen reply takes no model request at all
@@ -169,7 +175,8 @@ lifecycle.
 |---|---|---|
 | `LINUXAI_MIND` | `ladder` | `full` restores one fresh conversation per event |
 | `LINUXAI_MIND_BATCH` | `600` | the most seconds routine work waits to be batched |
-| `LINUXAI_HABIT_AFTER` | `1` | successes before a solution is replayed without the model |
+| `LINUXAI_HABIT_AFTER` | `1` | fixes that held before a solution is replayed without the model |
+| `LINUXAI_HABIT_HOLD` | `900` | seconds a situation must stay away after a fix for it to count (the benchmark sets 0: its hours pass in seconds) |
 | `LINUXAI_REHEARSAL` | off | `1`: actions are recorded, not performed (benchmarks, trying plans safely) |
 | `LINUXAI_RULE_MAX_PER_MINUTE` | `10` | the loop guard on rules |
 

@@ -84,8 +84,28 @@ LINUXAI_IMAP_HOST=imap.example.com
 LINUXAI_IMAP_USER=you@example.com
 LINUXAI_IMAP_PASSWORD=app-password
 LINUXAI_AUTHSERV_ID=mx.example.com     # your provider's Authentication-Results id
+# Sending (the core reads these too):
+LINUXAI_SMTP_URL=smtps://smtp.example.com:465
+LINUXAI_SMTP_USER=you@example.com
+LINUXAI_SMTP_PASSWORD=app-password
+LINUXAI_MAIL_FROM=you@example.com
 ```
 
 Testing without a mailbox: `linuxai-core mail ingest message.eml`.
 
-Not built yet: sending replies (an outgoing mail verb), and reading the mailbox's history in bulk.
+Not built yet: reading the mailbox's history in bulk.
+
+## Sending
+
+Plans send with the `send_email` verb (`to`, `subject`, `text`, and `in_reply_to`: a stored message's id, so the
+reply threads under it).
+
+- **It acts on the outside world**, so you're asked first, with the whole message in front of you, until you answer
+  "always" for that recipient. A message that answers something a stranger wrote rests on outside information, and
+  needs your separate OK for that.
+- **"No" means nothing is sent.**
+- **Nothing can be smuggled into it**: one plain address per recipient (no names, lists or line breaks), a one-line
+  subject, and the body encoded so its content can't end the message early.
+- **TLS is required**, and the password goes to curl on stdin, never on its command line.
+- **Every message sent is kept** (`sent_message`), and `message.sent` is an event a plan can wait on.
+- In rehearsal mode (`LINUXAI_REHEARSAL=1`) it's recorded, not sent.

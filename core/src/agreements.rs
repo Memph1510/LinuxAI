@@ -41,12 +41,27 @@ pub fn check(mem: &Memory, claims: &[Value], document: &Value) -> Vec<Value> {
             }
         }
         let matches = !compared.is_empty() && differences.is_empty();
+        let human = a["confirmed_by_human"] != false; // records from before this field existed were the human's
         let mut docs = a["documents"].as_array().cloned().unwrap_or_default();
         docs.push(json!({"document": document, "claim": c["id"], "matches": matches}));
-        let status = if matches { "confirmed" } else if differences.is_empty() { a["status"].as_str().unwrap_or("agreed") } else { "disputed" };
+        // A proposed agreement isn't confirmed by a document agreeing with it: the document may be where it came from.
+        let status = if !differences.is_empty() { "disputed" } else if matches && human { "confirmed" } else { a["status"].as_str().unwrap_or("agreed") };
         mem.patch_object(&aid, &json!({"documents": docs, "status": status}));
         out.push(json!({"agreement": aid, "reference": reference, "with": a["with"], "terms": terms, "compared": compared,
-                        "differences": differences, "matches": matches, "claim": c["id"]}));
+                        "differences": differences, "matches": matches, "confirmed_by_human": human, "claim": c["id"]}));
     }
     out
+}
+
+/// The human confirming (or correcting) a proposed agreement.
+pub fn confirm(mem: &Memory, reference: &str, terms: Option<&Value>) -> Value {
+    let aid = id(reference);
+    if mem.object(&aid).is_none() {
+        return json!({"ok": false, "error": format!("no agreement on {reference}")});
+    }
+    let mut patch = json!({"confirmed_by_human": true, "status": "agreed", "confirmed": crate::memory::now()});
+    if let Some(t) = terms.filter(|t| t.is_object()) {
+        patch["terms"] = t.clone();
+    }
+    json!({"ok": mem.patch_object(&aid, &patch), "agreement": aid})
 }

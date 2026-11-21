@@ -72,7 +72,7 @@ ShellRoot {
 
     Process { id: answer }
     function reply(planId, text) {
-        answer.command = ["/usr/local/bin/linuxai-core", "ctl", JSON.stringify({ op: "answer", plan_id: planId, text: text })]
+        answer.command = ["/usr/local/bin/linuxai-core", "ctl", JSON.stringify({ op: "answer", plan_id: planId, text: text, source: "human" })]
         answer.running = true
         root.questions = root.questions.filter(q => q.plan_id !== planId)
     }

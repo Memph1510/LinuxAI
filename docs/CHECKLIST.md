@@ -33,7 +33,7 @@ within each stage.
       standing permission to act on the outside world, and show provenance from the core's records
 - [x] Email organ, headless ([MAIL.md](MAIL.md)): code-decided provenance and authentication, sanitized body
       (hidden text removed), tool-less extractor into typed facts, raw mail kept out of the AI's reach.
-      Not yet: sending replies
+      Sending (`send_email`): with your OK, the whole message shown, until "always" for that recipient
 - [x] Reasoning modules in plans (facts, rules applied, chain, decision, downstream), shown in approvals
 - [x] OS parts in Rust: the reach service and the whole email organ moved from Python into the core binary
       (`linuxai-core reach`, `linuxai-core mail`). Python is left only where the AI model is called (the mind,
@@ -98,6 +98,23 @@ Each flaw was first shown by a failing test, then fixed:
 Verified by: 21 core tests, including 200 plans with answers and events running concurrently from 8 threads,
 and 32 Python tests, including **killing the real daemon with `kill -9` in the middle of a plan and restarting
 it**. Then the rebuilt ISO is boot-tested in QEMU.
+
+## Review fixes (2026-11-21)
+
+From an objective review of everything built so far. Each was first shown by a failing or new test.
+
+| Gap | Fix |
+|---|---|
+| The AI could answer any plan's question, including an approval, so it could grant itself trust ("always") | The core records who answered. Approvals come only from the human directly (screen, text, prompt); the AI can relay an ordinary answer, and the plan knows it did |
+| The picture tool let the AI send `approved: true` itself, skipping the monthly budget question | The AI's `approved` is dropped; only the human's own yes sets it |
+| An agreement could be recorded from an email with no human involved, and a matching invoice was then filed automatically | Agreements the human didn't make are only proposed; matches against them aren't filed until the human confirms |
+| A habit was learned when a plan merely finished, worked or not | Learned only once the fix held: its own check passed, or the situation stayed away 15 minutes |
+| A background job's result was lost on a restart, and its plan waited out its time limit | Jobs are on record; after a restart, ones cut off are reported as lost at once |
+| A cut-off or malformed tool input could run | Inputs are checked against each tool's definition first; nothing runs if they don't fit |
+| No outgoing email: negotiations and agreements couldn't finish | `send_email`, with the human's OK and the whole message shown, until "always" for that recipient |
+
+Also added: a fuzz test (3,000 random and malformed plans through the checker and the core, and plans at the
+socket's maximum depth). Nothing crashed.
 
 ## Next pieces (decided 2026-11-18; any order; install to disk waits until you're at the laptop)
 

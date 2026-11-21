@@ -415,7 +415,8 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     os.environ["LINUXAI_HOME"] = str(tmp / "home")
     sock = tmp / "core.sock"
     # Days compressed into a minute: lift the per-minute loop guard on rules, which would otherwise drop events.
-    env = {**os.environ, "LINUXAI_REHEARSAL": "1", "LINUXAI_RULE_MAX_PER_MINUTE": "100000"}
+    # Hours pass in seconds here: a fix "staying away" is judged in simulated time, so the hold window is off.
+    env = {**os.environ, "LINUXAI_REHEARSAL": "1", "LINUXAI_RULE_MAX_PER_MINUTE": "100000", "LINUXAI_HABIT_HOLD": "0"}
     if strategy.startswith("full"):
         env["LINUXAI_HABIT_AFTER"] = "1000000"  # before the ladder: no habits
     proc = subprocess.Popen([str(CORE_BIN), "daemon", "--socket", str(sock), "--db", str(tmp / "core.db"),

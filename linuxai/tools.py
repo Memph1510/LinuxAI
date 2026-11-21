@@ -175,6 +175,31 @@ def summarize(text: str) -> str:
     return "(shape: " + shape(v) + ")"
 
 
+_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "object": dict, "array": list}
+
+
+def check_input(schema: dict, args: dict) -> str | None:
+    """What's wrong with a tool's input against its definition (missing, unknown, wrong type, not allowed), or None."""
+    props = schema.get("properties") or {}
+    for k in schema.get("required") or []:
+        if k not in args:
+            return f"is missing {k!r}"
+    for k, v in args.items():
+        p = props.get(k)
+        if p is None:
+            if schema.get("additionalProperties") is False:
+                return f"has {k!r}, which it doesn't take"
+            continue
+        want = p.get("type")
+        if want in _TYPES and v is not None:
+            ok = isinstance(v, _TYPES[want]) and not (want in ("integer", "number") and isinstance(v, bool))
+            if not ok:
+                return f"has {k!r} as {type(v).__name__}, expected {want}"
+        if "enum" in p and v not in p["enum"]:
+            return f"has {k!r} = {v!r}, expected one of {p['enum']}"
+    return None
+
+
 def _str(v: Any) -> bool:
     return isinstance(v, str)
 
@@ -274,7 +299,9 @@ CORE_TOOLS = [
           "involved. Only add rules the human has agreed to.",
           {"rule": {"type": "object"}}, ["rule"]),
     _tool("answer_plan",
-          "Pass the human's answer to a plan that is waiting on a question (see <waiting_plans>).",
+          "Pass the human's answer to a plan that is waiting on a question (see <waiting_plans>). The plan knows you "
+          "passed it on. Approvals can't be passed on: the human answers those directly (on screen, by text, or by "
+          "typing yes / no / always at the prompt).",
           {"plan_id": {"type": "string"}, "text": {"type": "string"}}, ["plan_id", "text"]),
     _tool("resolve_thought",
           "A plan stopped at `think` (a blocker, a failure, something unexpected) and needs your judgment. Give it "
@@ -385,15 +412,15 @@ IMAGE_TOOLS = [
           "[{\"crop\": \"800x600+0+0\"}, {\"resize\": \"50%\"}, {\"rotate\": 90}, {\"flip\": \"horizontal\"}, "
           "{\"brightness\": 10, \"contrast\": 5}, {\"grayscale\": true}, {\"sharpen\": 1}, {\"blur\": 2}, "
           "{\"text\": \"SALE\", \"gravity\": \"south\", \"size\": 48, \"color\": \"white\"}, {\"strip\": true}]; "
-          "generate {prompt, size?, inputs?, backend?, approved?}: make a picture from a description, or change "
+          "generate {prompt, size?, inputs?, backend?}: make a picture from a description, or change "
           "pictures (inputs) as described; it picks the best backend here (local graphics card, paid service within "
-          "budget, CPU). Past the monthly budget it says so: ask the human, then send approved: true. "
+          "budget, CPU). Past the monthly budget the human is asked right then (behind the scenes, it stops and says so). "
           "You see the result; check it against what was asked before calling it done.",
           {"op": {"type": "string", "enum": ["caps", "info", "edit", "generate"]}, "input": {"type": "string"},
            "ops": {"type": "array", "items": {"type": "object"}}, "format": {"type": "string"}, "name": {"type": "string"},
            "prompt": {"type": "string"}, "size": {"type": "string", "description": "e.g. 1024x1024"},
            "inputs": {"type": "array", "items": {"type": "string"}},
-           "backend": {"type": "string", "enum": ["local_gpu", "paid", "local_cpu"]}, "approved": {"type": "boolean"}},
+           "backend": {"type": "string", "enum": ["local_gpu", "paid", "local_cpu"]}},
           ["op"]),
 ]
 
@@ -593,8 +620,14 @@ class Toolbox:
         if not isinstance(args, dict):
             return "Error: tool input must be a JSON object.", True
         handler = getattr(self, f"t_{name}", None)
-        if name not in {t["name"] for t in self.tools()} or handler is None:
+        spec = next((t for t in self.tools() if t["name"] == name), None)
+        if spec is None or handler is None:
             return f"Error: unknown tool {name}", True
+        # Inputs stream in, so one that was cut off could still parse: check it against the tool's definition
+        # before anything runs, and say exactly what's wrong so it can be sent again.
+        problem = check_input(spec.get("input_schema") or {}, args)
+        if problem:
+            return f"Error: {name} input {problem}. Nothing was run; send it again.", True
         try:
             self._seen_key, self._want_full = None, bool(args.get("full"))
             out = handler(**{k: v for k, v in args.items() if k != "full"})
@@ -1149,9 +1182,12 @@ class Toolbox:
             ui.out("\n" + ui.magenta("◆ ") + text)
         return "Sent."
 
-    def t_image(self, op: str, **kw: Any) -> Any:
+    def t_image(self, op: str, _human_ok: bool = False, **kw: Any) -> Any:
         binary = core_binary()
-        req = {"op": op, **{k: v for k, v in kw.items() if v is not None}}
+        # Going over the budget takes the human's own yes (asked below), never the AI's say-so.
+        req = {"op": op, **{k: v for k, v in kw.items() if v is not None and k != "approved"}}
+        if _human_ok:
+            req["approved"] = True
         for k in ("input",):
             if isinstance(req.get(k), str):
                 req[k] = str(self._path(req[k]))
@@ -1166,7 +1202,7 @@ class Toolbox:
         if r.get("needs_ok") and not self.mind:
             # Past the budget. In the session the human is right here: ask them now.
             if self.asker(r["error"].split(" Ask the human")[0] + " Go ahead?", ["yes", "no"]).strip().lower() in ("yes", "y"):
-                return self.t_image(op, **{**kw, "approved": True})
+                return self.t_image(op, _human_ok=True, **kw)
             return "The human said no to going over this month's picture budget."
         if not r.get("ok"):
             return f"Error: {r.get('error')}" + (f" (tried: {json.dumps(r['tried'])})" if r.get("tried") else "")
