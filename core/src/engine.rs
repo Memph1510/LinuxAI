@@ -781,7 +781,7 @@ fn persist(exec: &Exec, ctx: &Ctx) {
 }
 
 /// Feed the human's answer to a plan waiting on `ask` (or on approval).
-pub fn answer(exec: &mut Exec, text: &str, ctx: &Ctx) {
+pub fn answer(exec: &mut Exec, text: &str, by: &str, ctx: &Ctx) {
     if exec.status != "waiting:answer" {
         return;
     }
@@ -814,6 +814,7 @@ pub fn answer(exec: &mut Exec, text: &str, ctx: &Ctx) {
     let var = exec.wait.get("as").and_then(Value::as_str).unwrap_or("answer").to_string();
     exec.vars.insert(var, json!(text));
     exec.vars.insert("answer".into(), json!(text));
+    exec.vars.insert("answered_by".into(), json!(by));
     exec.status = "running".into();
     exec.wait = Value::Null;
     run(exec, ctx);
@@ -920,8 +921,7 @@ pub fn on_tick(exec: &mut Exec, t: f64, ctx: &Ctx) {
                 let q = display(&exec.wait["question"]);
                 ctx.bus.emit(ctx.mem, "ai.tell", json!({"plan": exec.name, "plan_id": exec.id,
                     "text": format!("I didn't hear back on \"{q}\" in time, so I went with \"{fb}\" as planned. Tell me if you want it changed.")}));
-                exec.vars.insert("answered_by".into(), json!("fallback"));
-                answer(exec, &fb, ctx);
+                answer(exec, &fb, "fallback", ctx);
                 return;
             }
         }
@@ -1186,10 +1186,21 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
             let a = args.as_object().unwrap();
             let reference = str_arg(a, "reference");
             let id = crate::agreements::id(&reference);
+            // It's an agreement only if the human made it: their own plan, or their own answer in this one. Otherwise
+            // (the AI's reading of an email, say) it's proposed: documents are still compared with it, but a match
+            // isn't filed on its strength until the human confirms it.
+            let by_human = exec.source == "human" || exec.vars.get("answered_by") == Some(&json!("human"));
+            let status = if by_human { "agreed" } else { "proposed" };
             let fields = json!({"reference": reference, "terms": a.get("terms").cloned().unwrap_or(json!({})), "with": a.get("with"),
-                "about": a.get("about"), "thread": a.get("thread"), "status": "agreed", "documents": [], "by_plan": exec.name, "agreed": now()});
+                "about": a.get("about"), "thread": a.get("thread"), "status": status, "confirmed_by_human": by_human,
+                "documents": [], "by_plan": exec.name, "agreed": now()});
             ctx.mem.put_object_with_id(&id, "agreement", &fields);
-            ctx.bus.emit(ctx.mem, "agreement.made", json!({"id": id, "reference": reference, "terms": fields["terms"]}));
+            ctx.bus.emit(ctx.mem, if by_human { "agreement.made" } else { "agreement.proposed" },
+                         json!({"id": id, "reference": reference, "terms": fields["terms"]}));
+            if !by_human {
+                ctx.bus.emit(ctx.mem, "ai.tell", json!({"plan": exec.name, "plan_id": exec.id, "text": format!(
+                    "I noted what I believe was agreed on {reference}: {}. It counts once you confirm it.", display(&fields["terms"]))}));
+            }
             return Ok(json!(id));
         }
         "enable_rule" => {
@@ -1234,6 +1245,11 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
     };
     match result {
         Ok(v) => {
+            if let Some(job) = v["job"].as_str().filter(|_| verb == "run" && args["background"] == true) {
+                // Kept on record, so a restart while it runs is noticed and reported, not silently lost.
+                ctx.mem.put_object_with_id(&format!("obj:job/{job}"), "job", &json!({"job": job, "status": "running",
+                    "program": args["program"], "args": args["args"], "plan": exec.name, "plan_id": exec.id, "started": now()}));
+            }
             ctx.mem.journal_end(jid, "done", &v.to_string());
             ctx.bus.emit(ctx.mem, "action.done", json!({"plan": exec.name, "plan_id": exec.id, "explain": text, "result": v}));
             Ok(v)

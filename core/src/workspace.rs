@@ -148,8 +148,8 @@ impl Workspace {
                 if let Value::Object(m) = &mut fields {
                     m.remove("op");
                     // The Workspace is the human's own surface (only this page has the bridge): a change to the
-                    // model table made here is theirs.
-                    if op == "models_set" {
+                    // model table made here, or an answer given here, is theirs.
+                    if op == "models_set" || op == "answer" {
                         m.insert("source".into(), json!("human"));
                     }
                 }

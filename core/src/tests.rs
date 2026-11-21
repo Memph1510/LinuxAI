@@ -26,6 +26,13 @@ fn core() -> (Arc<Core>, Fake) {
     (Arc::new(Core::new(Memory::in_memory(), Box::new(fake.clone()))), fake)
 }
 
+fn core_holding(hold: f64) -> (Arc<Core>, Fake) {
+    let fake = Fake::default();
+    let mut c = Core::new(Memory::in_memory(), Box::new(fake.clone()));
+    c.habit_hold = hold;
+    (Arc::new(c), fake)
+}
+
 fn calls(f: &Fake) -> Vec<String> {
     f.calls.lock().unwrap().iter().map(|(v, a)| format!("{v} {} {}", a["what"].as_str().unwrap_or(""), a["to"].as_str().unwrap_or(""))).collect()
 }
@@ -59,7 +66,7 @@ fn trust_is_learned_from_conversation() {
     assert!(r["result"]["wait"]["question"].as_str().unwrap().contains("set power.profile to power-saver"));
     assert!(calls(&fake).is_empty());
     let id = r["result"]["plan_id"].as_str().unwrap().to_string();
-    let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes, always"}));
+    let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "yes, always"}));
     assert_eq!(r["result"]["status"], "done", "{r}");
     assert_eq!(calls(&fake), vec!["set power.profile power-saver"]);
     // Now it's trusted for that kind of action.
@@ -75,7 +82,7 @@ fn no_means_no() {
     let (c, fake) = core();
     let plan = json!({"plan": "p", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}, "steps": [{"do": "restart", "unit": "x.service"}]});
     let id = c.submit(&plan, "ai")["result"]["plan_id"].as_str().unwrap().to_string();
-    let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "no, not now"}));
+    let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "no, not now"}));
     assert_eq!(r["result"]["status"], "stopped");
     assert!(calls(&fake).is_empty());
 }
@@ -103,7 +110,7 @@ fn bill_anomaly_plan_asks_then_resumes_durably() {
     assert_eq!(r["result"]["wait"]["question"], "Verizon is $112.40, usual is $82. Pay it?");
     // The plan lives in the database, not in memory: resume purely from the stored state.
     let id = r["result"]["plan_id"].as_str().unwrap().to_string();
-    let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "pay"}));
+    let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "pay"}));
     assert_eq!(r["result"]["status"], "done", "{r}");
     let notes = c.mem.objects_of("note", 10);
     assert_eq!(notes[0]["text"], "Verizon bill 112.40 approved");
@@ -153,7 +160,7 @@ fn think_hands_back_to_the_ai() {
     assert!(p["wait"]["note"].as_str().unwrap().contains("nginx.service"));
     let r = c.handle(&json!({"op": "resolve", "plan_id": p["plan_id"], "steps": [{"do": "restart", "unit": "nginx.service"}], "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}}));
     assert_eq!(r["result"]["status"], "waiting:answer", "restarting needs the human's ok first: {r}");
-    let r = c.handle(&json!({"op": "answer", "plan_id": p["plan_id"], "text": "yes"}));
+    let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": p["plan_id"], "text": "yes"}));
     assert_eq!(r["result"]["status"], "done", "{r}");
     assert_eq!(fake.calls.lock().unwrap()[0].0, "restart");
 }
@@ -260,7 +267,7 @@ fn no_not_always_is_a_no() {
         let (c, fake) = core();
         let r = c.submit(&json!({"plan": "p", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}, "steps": [{"do": "restart", "unit": "x.service"}]}), "ai");
         let id = r["result"]["plan_id"].as_str().unwrap().to_string();
-        let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": reply}));
+        let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": reply}));
         assert_eq!(r["result"]["status"], "stopped", "reply {reply:?} was taken as a yes: {r}");
         assert!(calls(&fake).is_empty());
         assert!(c.handle(&json!({"op": "mandates"}))["mandates"].as_array().unwrap().is_empty(), "{reply:?} granted trust");
@@ -280,7 +287,7 @@ fn steps_added_by_the_ai_later_are_checked_and_gated() {
     let r = c.handle(&json!({"op": "resolve", "plan_id": id, "steps": [{"do": "stop", "unit": "caddy.service"}], "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"], "outcomes": [{"if": "it misbehaves", "then": "set it back"}]}}));
     assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
     assert!(calls(&fake).is_empty(), "ran before the human approved: {:?}", calls(&fake));
-    c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "yes"}));
     assert_eq!(calls(&fake).len(), 1);
 }
 
@@ -295,7 +302,7 @@ fn rules_from_the_ai_need_the_humans_ok() {
     assert_eq!(ours["enabled"], false, "an AI-made rule ran without the human's ok");
     let w = c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().clone();
     let ask = w.iter().find(|p| p["wait"]["approval"] == true).expect("the human should be asked");
-    c.handle(&json!({"op": "answer", "plan_id": ask["plan_id"], "text": "yes"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": ask["plan_id"], "text": "yes"}));
     c.emit("service.failed", json!({"unit": "nginx.service"}));
     assert!(calls(&fake).iter().any(|c| c.starts_with("restart")), "{:?}", calls(&fake));
 }
@@ -350,7 +357,7 @@ fn many_plans_at_once_all_finish() {
                     {"ask": "go?", "as": "a"}, {"do": "set", "what": "power.profile", "to": format!("{t}-{i}")}]}), "human");
                 let id = r["result"]["plan_id"].as_str().unwrap().to_string();
                 if i % 5 == 0 { c.emit("power.unplugged", json!({})); }
-                let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "go"}));
+                let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "go"}));
                 assert_eq!(r["result"]["status"], "done", "{r}");
             }
         })
@@ -426,11 +433,11 @@ fn a_macro_task_runs_its_subtasks_in_order_and_coordinates_the_human() {
     let pick = waiting_task(&c, "Which load?");
     let w = c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().iter().find(|p| p["plan_id"] == pick["plan_id"]).cloned().unwrap();
     assert_eq!(w["wait"]["why"], "Under your floor but gets the truck home");
-    c.handle(&json!({"op": "answer", "plan_id": pick["plan_id"], "text": "Hollis $1,780"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": pick["plan_id"], "text": "Hollis $1,780"}));
     let sign = waiting_task(&c, "Sign the rate confirmation");
     assert!(c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().iter()
         .any(|p| p["plan_id"] == sign["plan_id"] && p["wait"]["question"].as_str().unwrap().contains("Tell me when it's done")));
-    c.handle(&json!({"op": "answer", "plan_id": sign["plan_id"], "text": "done"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": sign["plan_id"], "text": "done"}));
     let tree = c.handle(&json!({"op": "task", "task": root}))["tree"].clone();
     assert_eq!(tree["status"], "done", "{tree:#}");
     assert_eq!(tree["result"]["pick"]["answer"], "Hollis $1,780");
@@ -530,7 +537,7 @@ fn an_ai_task_with_an_untrusted_action_waits_on_the_human() {
     assert_eq!(r["tree"]["status"], "waiting", "{r}");
     assert!(calls(&fake).is_empty());
     let t = waiting_task(&c, "Quiet the fans");
-    c.handle(&json!({"op": "answer", "plan_id": t["plan_id"], "text": "yes"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": t["plan_id"], "text": "yes"}));
     assert_eq!(c.handle(&json!({"op": "task", "task": r["task"]}))["tree"]["status"], "done");
 }
 
@@ -587,7 +594,7 @@ fn unknowns_or_low_confidence_get_a_second_look_even_when_trusted() {
         assert!(calls(&fake).is_empty());
         // "always" here does not make unknowns go away next time: it only trusts actions, not situations.
         let id = r["result"]["plan_id"].as_str().unwrap().to_string();
-        assert_eq!(c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes"}))["result"]["status"], "done");
+        assert_eq!(c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "yes"}))["result"]["status"], "done");
     }
 }
 
@@ -777,7 +784,7 @@ fn ai_edits_must_be_checked_against_past_cases() {
     assert!(r["held"][0].as_str().unwrap().contains("worse"));
     assert!(c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"].as_array().unwrap().is_empty());
     // The human says no: nothing changes. A clean validation goes straight in.
-    c.handle(&json!({"op": "answer", "plan_id": r["plan_id"], "text": "no"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": r["plan_id"], "text": "no"}));
     assert!(c.handle(&json!({"op": "playbook_entries", "category": "freight/negotiate"}))["entries"].as_array().unwrap().is_empty());
     let r = pb_edit(&c, json!([{"op": "add", "section": "What matters", "text": "Weekend home time for the driver."}]), v, "ai");
     assert_eq!(r["applied"], true, "{r}");
@@ -793,7 +800,7 @@ fn held_changes_apply_when_the_human_agrees() {
     assert_eq!(r["applied"], false, "{r}");
     assert!(r["held"][0].as_str().unwrap().contains("points you wrote"));
     assert!(pb_file(&dir).contains("Never haul for Acme"));
-    c.handle(&json!({"op": "answer", "plan_id": r["plan_id"], "text": "yes"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": r["plan_id"], "text": "yes"}));
     assert!(!pb_file(&dir).contains("Never haul for Acme"), "{}", pb_file(&dir));
 }
 
@@ -883,7 +890,7 @@ fn ordinary_trust_does_not_cover_acting_on_outside_information() {
     assert!(r["result"]["wait"]["why"].as_str().unwrap().contains("information from outside"));
     assert!(calls(&fake).is_empty());
     // "always" gives standing permission for this kind of action based on outside information.
-    c.handle(&json!({"op": "answer", "plan_id": r["result"]["plan_id"], "text": "always"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": r["result"]["plan_id"], "text": "always"}));
     assert_eq!(calls(&fake).len(), 1);
     let id2 = offer(&c, true);
     assert_eq!(c.submit(&outside_plan(json!([id2])), "ai")["result"]["status"], "done");
@@ -969,7 +976,7 @@ fn the_prompt_library_lists_fills_counts_and_holds_ai_changes() {
     let r = c.handle(&json!({"op": "prompt_suggest", "name": "freight/counter-offer", "text": better, "reason": "brokers respond better to thanks"}));
     assert_eq!(r["held"], true, "{r}");
     assert!(!std::fs::read_to_string(dir.join("prompts/freight/counter-offer.md")).unwrap().contains("Thank"));
-    c.handle(&json!({"op": "answer", "plan_id": r["plan_id"], "text": "yes"}));
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": r["plan_id"], "text": "yes"}));
     assert!(std::fs::read_to_string(dir.join("prompts/freight/counter-offer.md")).unwrap().contains("Thank"));
     assert_eq!(c.handle(&json!({"op": "prompt_put", "name": "../etc/x", "text": "---\ntitle: x\n---\ny"}))["ok"], false);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1023,7 +1030,7 @@ fn finished_work_says_what_was_checked_and_what_wasnt() {
 
 #[test]
 fn a_solved_situation_becomes_a_habit_replayed_without_the_model_until_it_fails() {
-    let (c, fake) = core();
+    let (c, fake) = core_holding(0.0); // the situation staying away is tested on its own below
     trust_set(&c);
     let thinking = |c: &Arc<Core>| -> Vec<Value> {
         c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().iter().filter(|p| p["status"] == "needs_thought").cloned().collect()
@@ -1042,10 +1049,11 @@ fn a_solved_situation_becomes_a_habit_replayed_without_the_model_until_it_fails(
     assert_eq!(w[0]["wait"]["habit"], "memory.pressure");
     let r = c.handle(&json!({"op": "resolve", "plan_id": w[0]["plan_id"], "steps": fix, "assess": assess}));
     assert_eq!(r["ok"], true, "{r}");
-    assert!(kinds(&c).contains(&"habit.learned".to_string()), "it worked, so it's remembered");
+    assert!(!kinds(&c).contains(&"habit.learned".to_string()), "finishing isn't working: it counts once the situation stays away");
 
     // Next time: the same situation is handled with no model at all, through the usual checks.
     c.emit("memory.pressure", json!({"available_mb": 110, "target": "page-cache"}));
+    assert!(kinds(&c).contains(&"habit.learned".to_string()), "it stayed away long enough, so it's remembered");
     assert!(thinking(&c).is_empty(), "the AI isn't woken");
     assert!(kinds(&c).contains(&"habit.used".to_string()));
     assert_eq!(calls(&fake).iter().filter(|x| x.contains("page-cache dropped")).count(), 2);
@@ -1123,4 +1131,183 @@ fn long_work_runs_in_the_background_and_its_outcome_was_decided_ahead() {
     assert!(tells.contains(&"update A done: upgraded 212 packages".to_string()), "{tells:?}");
     assert!(tells.contains(&"update B: conflicting files; the known fix applies".to_string()), "each plan took its own job's result: {tells:?}");
     assert_eq!(tells.len(), 2, "no model involved: {tells:?}");
+}
+
+#[test]
+fn a_fix_that_doesnt_hold_isnt_learned_and_one_that_checks_itself_is() {
+    let (c, _fake) = core_holding(600.0);
+    trust_set(&c);
+    let kinds = |c: &Arc<Core>| -> Vec<String> {
+        c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+            .map(|e| e["kind"].as_str().unwrap_or("").to_string()).collect()
+    };
+    let thinking = |c: &Arc<Core>| -> Vec<Value> {
+        c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().iter().filter(|p| p["status"] == "needs_thought").cloned().collect()
+    };
+    let assess = json!({"confidence": 0.9, "consequences": ["the cache is dropped"], "outcomes": ["memory frees up"]});
+    // The plan finished, but the pressure is back a moment later: that fix didn't work, and isn't learned.
+    c.emit("memory.pressure", json!({"available_mb": 120, "target": "page-cache"}));
+    let w = thinking(&c);
+    c.handle(&json!({"op": "resolve", "plan_id": w[0]["plan_id"], "steps": [{"do": "set", "what": "{$event.data.target}", "to": "dropped"}], "assess": assess}));
+    c.emit("memory.pressure", json!({"available_mb": 110, "target": "page-cache"}));
+    assert!(kinds(&c).contains(&"habit.didnt_hold".to_string()));
+    let w = thinking(&c);
+    assert_eq!(w.len(), 1, "the AI thinks again");
+    // A fix that checks its own result counts at once: the next time it's replayed with no model.
+    let fix = json!([{"do": "set", "what": "{$event.data.target}", "to": "dropped"},
+                     {"expect": ["<", 1, 2], "else": "think"}]);
+    c.handle(&json!({"op": "resolve", "plan_id": w[0]["plan_id"], "steps": fix, "assess": assess}));
+    assert!(kinds(&c).contains(&"habit.learned".to_string()));
+    c.emit("memory.pressure", json!({"available_mb": 100, "target": "page-cache"}));
+    assert!(thinking(&c).is_empty() && kinds(&c).contains(&"habit.used".to_string()));
+}
+
+#[test]
+fn only_the_human_gives_approvals_and_makes_agreements() {
+    let (c, _fake) = core();
+    let assess = json!({"confidence": 0.9, "consequences": ["a setting changes"], "outcomes": ["fine"]});
+    // An AI plan that needs approval: the AI can't approve it, not even "passing on" the human's answer.
+    let r = c.submit(&json!({"plan": "change", "assess": assess, "steps": [{"do": "set", "what": "power.profile", "to": "performance"}]}), "ai");
+    let id = r["result"]["plan_id"].clone();
+    assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
+    let r = c.handle(&json!({"op": "answer", "plan_id": id, "text": "always"}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(c.mem.mandates().is_empty(), "no trust granted");
+    assert_eq!(c.handle(&json!({"op": "answer", "plan_id": id, "text": "yes", "source": "human"}))["result"]["status"], "done");
+
+    // Terms the AI records on its own are only proposed; the human's answer in the plan makes them agreed.
+    let agree = |name: &str, how: Value| json!({"plan": name, "steps": [how,
+        {"do": "agree", "reference": name, "terms": {"rate_cents": 320000}}]});
+    c.submit(&agree("HL-1", json!({"tell": "noting what the email says"})), "ai");
+    let a = c.handle(&json!({"op": "object", "id": "obj:agreement/hl-1"}))["object"].clone();
+    assert_eq!((a["status"].as_str(), a["confirmed_by_human"].as_bool()), (Some("proposed"), Some(false)), "{a}");
+    // A document matching it doesn't confirm it (the document may be where it came from).
+    let chk = crate::agreements::check(&c.mem, &[json!({"reference": "HL-1", "rate_cents": 320000})], &json!("doc"));
+    assert_eq!((chk[0]["matches"].as_bool(), chk[0]["confirmed_by_human"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(c.handle(&json!({"op": "object", "id": "obj:agreement/hl-1"}))["object"]["status"], "proposed");
+    // Only the human confirms it.
+    assert_eq!(c.handle(&json!({"op": "agreement_confirm", "reference": "HL-1"}))["ok"], false);
+    assert_eq!(c.handle(&json!({"op": "agreement_confirm", "reference": "HL-1", "source": "human"}))["ok"], true);
+    assert_eq!(c.handle(&json!({"op": "object", "id": "obj:agreement/hl-1"}))["object"]["confirmed_by_human"], true);
+
+    let r = c.submit(&agree("HL-2", json!({"ask": "Take $3,200?", "opts": ["take", "pass"], "as": "choice"})), "ai");
+    let id = r["result"]["plan_id"].clone();
+    c.handle(&json!({"op": "answer", "plan_id": id, "text": "take"})); // passed on by the AI
+    assert_eq!(c.handle(&json!({"op": "object", "id": "obj:agreement/hl-2"}))["object"]["status"], "proposed");
+    let r = c.submit(&agree("HL-3", json!({"ask": "Take $3,200?", "opts": ["take", "pass"], "as": "choice"})), "ai");
+    c.handle(&json!({"op": "answer", "plan_id": r["result"]["plan_id"], "text": "take", "source": "human"}));
+    assert_eq!(c.handle(&json!({"op": "object", "id": "obj:agreement/hl-3"}))["object"]["status"], "agreed");
+}
+
+#[test]
+fn a_job_cut_off_by_a_restart_is_reported_not_waited_out() {
+    let dir = std::env::temp_dir().join(format!("lx-jobs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("core.db");
+    let plan = json!({"plan": "build", "steps": [
+        {"do": "run", "program": "make", "args": ["slow"], "background": true, "as": "job"},
+        {"wait": "job.finished", "where": ["=", "$event.data.job", "$job.job"], "max": "6h"},
+        {"if": "$event.data.lost", "then": [{"tell": "The build was cut off by a restart; starting it again."}],
+         "else": [{"tell": "built"}]}]});
+    let id = {
+        let c = Arc::new(Core::new(Memory::open(&db).unwrap(), Box::new(Programs)));
+        let r = c.submit(&plan, "human");
+        assert_eq!(r["result"]["status"], "waiting:event");
+        r["result"]["plan_id"].clone()
+        // the core stops here, with the job still running
+    };
+    let c = Arc::new(Core::new(Memory::open(&db).unwrap(), Box::new(Programs)));
+    c.recover();
+    let p = c.handle(&json!({"op": "plan", "plan_id": id}))["plan"].clone();
+    assert_eq!(p["status"], "done", "{p}");
+    let tells: Vec<String> = c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+        .filter(|e| e["kind"] == "ai.tell").map(|e| e["data"]["text"].as_str().unwrap().to_string()).collect();
+    assert!(tells.iter().any(|t| t.contains("cut off by a restart")), "{tells:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Random and malformed plans, thousands of them: the checker and the core must never panic or hang, and the core
+/// must still answer afterwards. (A small fuzzer with a fixed seed, so a failure reproduces.)
+#[test]
+fn malformed_plans_never_crash_the_core() {
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
+            &xs[(self.next() % xs.len() as u64) as usize]
+        }
+    }
+    const WORDS: &[&str] = &["let", "do", "if", "each", "expect", "try", "ask", "tell", "wait", "think", "call", "then", "else",
+        "as", "steps", "calc", "value", "find", "where", "max", "about", "habit", "opts", "deadline", "fallback", "remind", "with"];
+    const VERBS: &[&str] = &["set", "restart", "run", "tell", "remember", "track", "agree", "store", "schedule", "pay", "fly", ""];
+    const OPS: &[&str] = &["=", "!=", ">", "<", "+", "-", "*", "/", "avg", "sum", "count", "pct", "has", "exists", "first", "get", "pick", "and", "or", "not", "nope"];
+    const STRS: &[&str] = &["$x", "$event.data.a", "{$x}", "{$", "$", "", "1h", "-5m", "0s", "99999999d", "message.received", "*",
+        "power.plugged", "{$event.data.claims}", "ünïcødé ✓", "\u{0}", "$nobody.deep.path"];
+    fn val(r: &mut Rng, depth: u32) -> Value {
+        match r.next() % if depth > 4 { 5 } else { 9 } {
+            0 => json!(r.pick(STRS)),
+            1 => json!((r.next() % 1000) as i64 - 500),
+            2 => json!(f64::from_bits(r.next() & 0x7FEF_FFFF_FFFF_FFFF)),
+            3 => json!(r.next() % 2 == 0),
+            4 => Value::Null,
+            5 => { let n = r.next() % 4; let mut a = vec![json!(r.pick(OPS))]; for _ in 0..n { a.push(val(r, depth + 1)); } json!(a) }
+            6 => json!((0..r.next() % 4).map(|_| val(r, depth + 1)).collect::<Vec<_>>()),
+            7 if depth < 6 => json!((0..r.next() % 3).map(|_| step(r, depth + 1)).collect::<Vec<_>>()),
+            7 => Value::Null,
+            _ => { let mut m = serde_json::Map::new(); for _ in 0..r.next() % 4 { m.insert(r.pick(WORDS).to_string(), val(r, depth + 1)); } Value::Object(m) }
+        }
+    }
+    fn step(r: &mut Rng, depth: u32) -> Value {
+        let mut m = serde_json::Map::new();
+        let kw = *r.pick(WORDS);
+        m.insert(kw.into(), if kw == "do" { json!(r.pick(VERBS)) } else { val(r, depth + 1) });
+        for _ in 0..r.next() % 4 {
+            let k = *r.pick(WORDS);
+            m.insert(k.into(), if depth < 6 && r.next() % 3 == 0 { json!((0..2).map(|_| step(r, depth + 2)).collect::<Vec<_>>()) } else { val(r, depth + 1) });
+        }
+        for k in ["what", "to", "unit", "text", "program", "thread", "reference", "terms"] {
+            if r.next() % 4 == 0 { m.insert(k.into(), val(r, depth + 1)); }
+        }
+        Value::Object(m)
+    }
+    let (c, _fake) = core();
+    let mut r = Rng(0x9E37_79B9_7F4A_7C15);
+    for i in 0..3000 {
+        let steps: Vec<Value> = (0..1 + r.next() % 5).map(|_| step(&mut r, 0)).collect();
+        let plan = if i.is_multiple_of(50) { val(&mut r, 0) } else { json!({"plan": format!("fuzz {i}"), "steps": steps, "with": {"x": val(&mut r, 3)}}) };
+        let _ = engine::check(&plan, &c.mem, if i.is_multiple_of(2) { "ai" } else { "human" }, 0.8);
+        let _ = c.submit(&plan, if i.is_multiple_of(3) { "ai" } else { "human" });
+        if i.is_multiple_of(7) {
+            c.emit(r.pick(STRS), val(&mut r, 2));
+        }
+    }
+    assert_eq!(c.handle(&json!({"op": "ping"}))["ok"], true, "still answering");
+}
+
+#[test]
+fn the_deepest_plan_the_socket_accepts_doesnt_crash_the_core() {
+    // serde_json refuses input nested deeper than 128 levels; anything up to that must be handled.
+    let (c, _fake) = core();
+    let mut steps = json!([{"tell": "deep"}]);
+    for _ in 0..60 {
+        steps = json!([{"if": true, "then": steps}]);
+    }
+    let mut expr = json!(1);
+    for _ in 0..120 {
+        expr = json!(["+", expr, 1]);
+    }
+    for plan in [json!({"plan": "deep steps", "steps": steps}),
+                 json!({"plan": "deep expr", "steps": [{"let": "x", "calc": expr}, {"tell": "{$x}"}]})] {
+        let text = plan.to_string();
+        let parsed: Value = serde_json::from_str(&text).expect("within the parser's limit");
+        let r = c.submit(&parsed, "human");
+        assert!(r.is_object(), "{r}");
+    }
+    assert_eq!(c.handle(&json!({"op": "ping"}))["ok"], true);
 }

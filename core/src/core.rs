@@ -11,9 +11,20 @@ use std::sync::{Arc, Mutex};
 
 /// Rules LinuxAI ships with. They are the starting reflexes for running the machine; the AI adds
 /// its own as it learns, and any of them can be switched off.
-/// How many times a solution must have worked before it's replayed without the model (LINUXAI_HABIT_AFTER, default 1).
+/// How many times a solution must have held before it's replayed without the model (LINUXAI_HABIT_AFTER, default 1).
 fn habit_after() -> u64 {
     std::env::var("LINUXAI_HABIT_AFTER").ok().and_then(|v| v.parse().ok()).unwrap_or(1)
+}
+
+/// How long the same situation must stay away after a fix before the fix counts as having worked
+/// (LINUXAI_HABIT_HOLD, seconds, default 900). A fix that checks its own result (an `expect` step) counts at once.
+fn habit_hold_default() -> f64 {
+    std::env::var("LINUXAI_HABIT_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(900.0)
+}
+
+fn verifies(steps: &Value) -> bool {
+    steps.as_array().map(|a| a.iter().any(|s| s.get("expect").is_some()
+        || ["then", "else", "steps", "try"].iter().any(|k| s.get(*k).map(verifies).unwrap_or(false)))).unwrap_or(false)
 }
 
 pub fn default_rules() -> Vec<Value> {
@@ -69,6 +80,8 @@ pub struct Core {
     habit_runs: Mutex<HashMap<String, String>>,
     /// The AI's answers to a named situation, waiting to see if they work (plan id -> situation, steps, assessment).
     habit_candidates: Mutex<HashMap<String, (String, Value, Value)>>,
+    /// Seconds the situation must stay away after a fix for it to count (see habit_hold_default).
+    pub habit_hold: f64,
 }
 
 /// A rule that fires more often than this in a minute is stopping itself from looping (LINUXAI_RULE_MAX_PER_MINUTE).
@@ -97,6 +110,7 @@ impl Core {
             prompt_dir: std::env::var("LINUXAI_PROMPTS").map(Into::into).unwrap_or_else(|_| "prompts".into()),
             habit_runs: Mutex::new(HashMap::new()),
             habit_candidates: Mutex::new(HashMap::new()),
+            habit_hold: habit_hold_default(),
         }
     }
 
@@ -282,11 +296,22 @@ impl Core {
         self.settle();
         self.task_recover();
         self.settle();
+        // Background jobs that were running when the core stopped: their result can't be known. Say so, so the plans
+        // waiting for them decide now rather than wait out their time limit.
+        for j in self.mem.objects_of("job", 1000).into_iter().filter(|j| j["status"] == "running") {
+            let id = j["job"].as_str().unwrap_or("").to_string();
+            self.mem.patch_object(&format!("obj:job/{id}"), &json!({"status": "lost", "finished": now()}));
+            self.emit("job.finished", json!({"job": id, "program": j["program"], "args": j["args"], "ok": false, "code": null,
+                "lost": true, "output": "", "error": "LinuxAI restarted while this was running, so its result is unknown"}));
+        }
     }
 
     pub fn tick(self: &Arc<Self>) {
         // Background jobs that finished: the plans waiting for them pick them up from here.
         for j in self.organs.take_finished() {
+            if let Some(id) = j["job"].as_str() {
+                self.mem.patch_object(&format!("obj:job/{id}"), &json!({"status": "finished", "ok": j["ok"], "code": j["code"], "finished": now()}));
+            }
             self.emit("job.finished", j);
         }
         let t = now();
@@ -353,7 +378,17 @@ impl Core {
             "submit" => self.submit(&req["plan"], req["source"].as_str().unwrap_or("ai")),
             "answer" => {
                 let text = req["text"].as_str().unwrap_or("").to_string();
-                self.resume(req, |ex, ctx| engine::answer(ex, &text, ctx))
+                // Who answered is recorded. Approvals (which grant trust, "always" included) come only from the human
+                // directly: on screen, by text, or typed at the prompt. The AI may relay an answer to an ordinary
+                // question, and the plan knows it was relayed ($answered_by).
+                let by = if req["source"] == "human" { "human" } else { "ai" };
+                let approval = self.mem.load_plan(req["plan_id"].as_str().unwrap_or(""))
+                    .map(|p| p["wait"]["approval"] == true).unwrap_or(false);
+                if approval && by != "human" {
+                    return json!({"ok": false, "error": "approvals come from the human directly (on screen, by text, or typed at \
+                        the prompt); the AI can't give one, even passing theirs on"});
+                }
+                self.resume(req, |ex, ctx| engine::answer(ex, &text, by, ctx))
             }
             "resolve" => self.resolve(req),
             "plan" => match self.mem.load_plan(req["plan_id"].as_str().unwrap_or("")) {
@@ -443,6 +478,12 @@ impl Core {
             "agreements_check" => {
                 let claims = req["claims"].as_array().cloned().unwrap_or_default();
                 json!({"ok": true, "checked": crate::agreements::check(&self.mem, &claims, &req["document"])})
+            }
+            "agreement_confirm" => {
+                if req["source"] != "human" {
+                    return json!({"ok": false, "error": "only the human confirms what they agreed to"});
+                }
+                crate::agreements::confirm(&self.mem, req["reference"].as_str().unwrap_or(""), req.get("terms"))
             }
             "agreements" => {
                 let all = req["all"].as_bool().unwrap_or(false);
@@ -577,7 +618,30 @@ impl Core {
 
     fn try_habit(self: &Arc<Self>, plan: &Value) -> bool {
         let Some(key) = plan["wait"]["habit"].as_str() else { return false };
-        let Some(h) = self.mem.object(&Self::habit_id(key)) else { return false };
+        let hid = Self::habit_id(key);
+        let Some(mut h) = self.mem.object(&hid) else { return false };
+        // The situation is back. Did the last fix hold? Only now can that be known.
+        if let Some(at) = h["pending"]["at"].as_f64() {
+            let replay = h["pending"]["replay"] == true;
+            if now() - at >= self.habit_hold {
+                let successes = h["successes"].as_u64().unwrap_or(0) + 1;
+                self.mem.patch_object(&hid, &json!({"successes": successes, "pending": null}));
+                if !replay && successes >= habit_after() {
+                    self.emit("habit.learned", json!({"habit": key, "successes": successes}));
+                }
+            } else {
+                let mins = ((now() - at) / 60.0).ceil();
+                let why = format!("the same situation came back {mins} min after the fix: it didn't hold");
+                if replay {
+                    self.mem.patch_object(&hid, &json!({"pending": null, "retired": true, "retired_because": why}));
+                    self.emit("habit.retired", json!({"habit": key, "why": why}));
+                } else {
+                    self.mem.patch_object(&hid, &json!({"pending": null}));
+                    self.emit("habit.didnt_hold", json!({"habit": key, "why": why}));
+                }
+            }
+            h = self.mem.object(&hid).unwrap_or(h);
+        }
         if h["retired"] == true || h["successes"].as_u64().unwrap_or(0) < habit_after() {
             return false;
         }
@@ -600,8 +664,11 @@ impl Core {
         if let Some(key) = self.habit_runs.lock().unwrap().remove(id) {
             let hid = Self::habit_id(&key);
             if let Some(h) = self.mem.object(&hid) {
-                if ok {
+                if ok && verifies(&h["steps"]) {
                     self.mem.patch_object(&hid, &json!({"successes": h["successes"].as_u64().unwrap_or(0) + 1}));
+                } else if ok {
+                    // It finished; whether it worked shows when (or if) the situation comes back.
+                    self.mem.patch_object(&hid, &json!({"pending": {"at": now(), "replay": true}}));
                 } else {
                     // It didn't work this time: the AI thinks about this situation fresh from now on.
                     self.mem.patch_object(&hid, &json!({"retired": true, "retired_because": plan["error"]}));
@@ -614,17 +681,24 @@ impl Core {
                 let hid = Self::habit_id(&key);
                 let prev = self.mem.object(&hid);
                 let same = prev.as_ref().map(|p| p["steps"] == steps && p["retired"] != true).unwrap_or(false);
-                let successes = if same { prev.unwrap()["successes"].as_u64().unwrap_or(0) + 1 } else { 1 };
+                let before = if same { prev.unwrap()["successes"].as_u64().unwrap_or(0) } else { 0 };
+                // Finishing isn't working. A fix that checked its own result counts now; otherwise it counts once the
+                // situation has stayed away long enough (checked when it next comes up).
+                let checked = verifies(&steps);
+                let successes = before + u64::from(checked);
                 self.mem.put_object_with_id(&hid, "habit", &json!({"key": key, "steps": steps, "assess": assess,
-                    "successes": successes, "uses": 0, "retired": false, "learned": now()}));
-                self.emit("habit.learned", json!({"habit": key, "successes": successes}));
+                    "successes": successes, "uses": 0, "retired": false, "learned": now(),
+                    "pending": if checked { Value::Null } else { json!({"at": now(), "replay": false}) }}));
+                if checked && successes >= habit_after() {
+                    self.emit("habit.learned", json!({"habit": key, "successes": successes}));
+                }
             }
         }
     }
 
     fn habit_op(self: &Arc<Self>, op: &str, req: &Value) -> Value {
         match op {
-            "habits" => json!({"ok": true, "after": habit_after(), "habits": self.mem.objects_of("habit", 500)}),
+            "habits" => json!({"ok": true, "after": habit_after(), "hold_seconds": self.habit_hold, "habits": self.mem.objects_of("habit", 500)}),
             "habit_forget" => {
                 if req["source"] != "human" {
                     return json!({"ok": false, "error": "forgetting a habit is the human's call; the AI can suggest it"});

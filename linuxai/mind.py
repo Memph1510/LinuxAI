@@ -35,7 +35,10 @@ def agreement_lines(checked: list[dict]) -> str:
     """How a document compares with what was agreed, in words."""
     out = []
     for c in checked:
-        if c.get("matches"):
+        if c.get("matches") and c.get("confirmed_by_human", True) is False:
+            out.append(f"{c['reference']}: matches terms you noted, which the human hasn't confirmed yet: ask them before "
+                       f"treating it as agreed.")
+        elif c.get("matches"):
             out.append(f"{c['reference']}: matches what was agreed ({', '.join(c.get('compared') or [])}).")
         elif c.get("differences"):
             out.append(f"{c['reference']}: DIFFERS from what was agreed: " + "; ".join(
@@ -213,8 +216,8 @@ class Mind:
         checked = d.get("agreements") or []
         if checked and self.strategy != "full":
             cited = {c.get("reference") for c in d.get("claims") or [] if c.get("reference")}
-            if all(c.get("matches") for c in checked) and cited <= {c["reference"] for c in checked} \
-                    and not d.get("issues") and not d.get("corrected"):
+            if all(c.get("matches") and c.get("confirmed_by_human", True) for c in checked) \
+                    and cited <= {c["reference"] for c in checked} and not d.get("issues") and not d.get("corrected"):
                 # Exactly what was agreed: filed with the agreement, no model needed.
                 terms = "; ".join(", ".join(f"{k} {_value(k, v)}" for k, v in (c.get("terms") or {}).items()) for c in checked)
                 self.core.request("tell", text=f"The {str(d.get('category') or 'document').replace('_', ' ')} from {d.get('from')} for "

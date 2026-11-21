@@ -172,7 +172,7 @@ class Soak:
                 text = random.choice(w["opts"])
             else:
                 text = "looks fine"
-            if self.call("answer", plan_id=p["plan_id"], text=text):
+            if self.call("answer", plan_id=p["plan_id"], text=text, source="human"):
                 self.counts["answers"] += 1
 
     def playbook(self):

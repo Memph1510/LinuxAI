@@ -227,7 +227,7 @@ def route_answer(core, pending: dict, line: str) -> bool:
         answer = wait["opts"][int(low) - 1]
     if answer is None:
         return False
-    core.request("answer", plan_id=plan_id, text=answer)
+    core.request("answer", plan_id=plan_id, text=answer, source="human")  # typed by the human, not passed on by the AI
     pending.pop(plan_id, None)
     return True
 

@@ -340,7 +340,7 @@ def test_ai_plans_a_task_from_its_playbook_then_learns(env, live_core, tmp_path)
     tree = live_core.request("task", task=task_id)["tree"]
     assert tree["status"] == "waiting"
     plan_id = tree["plan_id"]
-    assert live_core.request("answer", plan_id=plan_id, text="yes")["result"]["status"] == "done"
+    assert live_core.request("answer", plan_id=plan_id, text="yes", source="human")["result"]["status"] == "done"
     assert live_core.request("task", task=task_id)["tree"]["status"] == "done"
     agent.reset()
     # Fill in the validation the scripted model gives once it has been told which case to check.
@@ -810,7 +810,7 @@ def test_blender_tool_shows_previews_and_asks_before_python(env, live_core, monk
     out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}]})
     assert out == "The human said no." and "print(42)" in asked[0]
     tb.asker = lambda q, o: "yes"
-    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}], "approved": True})
+    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "print(42)"}]})
     assert isinstance(out, list), out
     # Behind the scenes nobody is there to say yes: it doesn't happen.
     tb.mind = True
@@ -818,15 +818,15 @@ def test_blender_tool_shows_previews_and_asks_before_python(env, live_core, monk
     assert "aren't here" in out
     # The model can't approve for the human.
     tb.mind, tb.asker = False, (lambda q, o: asked.append(q) or "no")
-    out, _ = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "x"}], "approved": True})
-    assert out == "The human said no."
+    out, err = tb.execute("blender", {"op": "new", "ops": [{"op": "python", "code": "x"}], "approved": True})
+    assert err and "doesn't take" in out, "an 'approved' from the model is refused before anything runs"
 
 
 def test_long_results_come_in_pages_and_nothing_is_lost(env):
     cfg, mem, tb, tmp = env
     lines = [f"line {i}: " + "x" * 60 for i in range(1500)]
     (tmp / "big.txt").write_text("\n".join(lines))
-    out, err = tb.execute("run_command", {"command": f"cat {tmp / 'big.txt'}"})
+    out, err = tb.execute("run_command", {"command": f"cat {tmp / 'big.txt'}", "why": "read it"})
     assert not err and out.startswith("[result r1:") and "page 1 of" in out and "lines)" in out
     pages = int(out.split(" of ")[1].split(";")[0])
     text = out.split("\n", 2)[2]
@@ -896,7 +896,9 @@ def test_craft_tool_shows_pictures_marks_outside_and_asks_before_replacing(env, 
     assert tb.outside_seen, "what comes back from a document is outside information"
     asked = []
     tb.asker = lambda q, o: asked.append(q) or "no"
-    out, _ = tb.execute("craft", {"op": "replace", "staged": "a.ai-1.png", "approved": True})
+    out, err = tb.execute("craft", {"op": "replace", "staged": "a.ai-1.png", "approved": True})
+    assert err and "doesn't take" in out, "an 'approved' from the model is refused before anything runs"
+    out, _ = tb.execute("craft", {"op": "replace", "staged": "a.ai-1.png"})
     assert out == "The human said no." and "replaces a.png" in asked[0]
     assert not any(r.get("approved") for r in sent), "the model can't approve for the human"
     tb.mind = True
@@ -1137,6 +1139,26 @@ def test_a_document_that_matches_what_was_agreed_needs_no_model():
     mind.on_event({"kind": "message.received", "data": {**base, "category": "invoice_or_bill", "agreements": [bad]}})
     assert len(turns) == 1 and turns[0][0] == "medium", "a difference can't wait for the routine batch"
     assert "DIFFERS from what was agreed: rate_cents agreed $3,200, the document says $3,000" in turns[0][1], turns[0][1]
+    # Terms the AI noted on its own (not confirmed by the human): a match isn't filed on their strength.
+    unconfirmed = {**ok, "confirmed_by_human": False}
+    mind.on_event({"kind": "message.received", "data": {**base, "category": "rate_confirmation", "agreements": [unconfirmed]}})
+    assert len(turns) == 2 and "hasn't confirmed" in turns[1][1] and len(told) == 1
     # A document citing something nobody agreed on goes the usual way (routine mail waits for the batch).
     mind.on_event({"kind": "message.received", "data": {**base, "category": "invoice_or_bill", "agreements": []}})
-    assert len(turns) == 1 and len(mind.mail_queue) == 1
+    assert len(turns) == 2 and len(mind.mail_queue) == 1
+
+
+def test_tool_inputs_are_checked_before_anything_runs(env):
+    """Inputs stream in; one cut off or malformed is refused with what's wrong, and nothing runs."""
+    _, _, tb, _ = env
+    ran = []
+    tb._spawn = lambda c, t: ran.append(c) or (0, "", tb.cwd)
+    for args, want in [({"why": "x"}, "missing 'command'"), ({"command": 5, "why": "x"}, "expected string"),
+                       ({"command": "ls", "why": "x", "timeout": "soon"}, "expected integer"),
+                       ({"command": "ls", "why": "x", "timeout": True}, "expected integer"),
+                       ({"command": "ls", "why": "x", "sudo": True}, "doesn't take")]:
+        out, err = tb.execute("run_command", args)
+        assert err and want in out and "Nothing was run" in out, (args, out)
+    assert ran == []
+    out, err = tb.execute("run_command", {"command": "ls", "why": "x", "timeout": 5})
+    assert not err and ran == ["ls"]
