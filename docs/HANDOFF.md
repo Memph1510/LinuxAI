@@ -4,7 +4,8 @@ For the next session (and any agent) picking up LinuxAI. Read this first, then t
 State as of **2026-11-21**, main at `c081b08` (PR #11 merged). Everything below is either in the repository or
 linked from it; nothing depends on the previous conversation.
 
-Project continuity on Google Drive: **/50_Projects/LinuxAI/**
+Project continuity on Google Drive (session record, lessons, SkillOpt captures: see its `session-notes/`):
+**/50_Projects/LinuxAI/**
 (<https://drive.google.com/drive/folders/1v4pQVyr57lDcCpeOIl8yFKoryBtyOsf8>), laid out per the Drive-root
 `AGENTS.md` (v3.2): `consolidated_summary.md`, `session_summary.md`, `lessons.md`, `handoff.md`, `60_Review/`,
 `session-notes/`. Git owns code and history; Drive holds the cross-session record.
@@ -200,6 +201,8 @@ No live mailbox or real broker records for those tests.
   - The 256 MB overlay of the live ISO fills fast (Chromium profiles): `cow_spacesize=50%`, failed writes are reported.
   - Running downloaded binaries on the host is blocked by policy: run third-party apps inside the Arch container.
   - The Docker daemon can be gone after the container is recycled: start it before building.
+  - Rerun the tests after lint fixes, before committing: a clippy autofix applied after the last test run broke the
+    test build once (CI run 44863232113); caught by CI before merge.
 
 ## 9. Docs to read, by need
 
