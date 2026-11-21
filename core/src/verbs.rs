@@ -50,6 +50,13 @@ pub const VERBS: &[VerbSpec] = &[
               understood without rereading anything. thread: a stable key (\"load:L-88213\"); with: who; about: what; \
               state: where it stands now (\"we countered $3,500; their offer $3,000\"); waiting_for: what we expect next; \
               status: open (default) or closed. Fields not given are kept." },
+    VerbSpec { name: "agree", organ: "core",
+        args: &[("reference", true), ("terms", true), ("with", false), ("about", false), ("thread", false)],
+        effect: Effect::Internal, target: "reference", explain: "note what was agreed on {reference}: {terms}",
+        doc: "Record what was agreed (a rate, an amount, dates), so documents that come in later (a rate confirmation, \
+              an invoice) are checked against it by the core: a match is filed without you, only a difference is \
+              brought up. reference: what the documents will cite (\"HL-3100\"); terms: {rate_cents: 320000, ...} \
+              using the same field names as email claims." },
     VerbSpec { name: "store", organ: "core", args: &[("type", true), ("fields", true), ("handle", false)],
         effect: Effect::Internal, target: "type", explain: "store a {type} in memory",
         doc: "Create a memory object of a type (bill, person, preference, ...) with fields." },
@@ -84,10 +91,11 @@ pub const VERBS: &[VerbSpec] = &[
         explain: "stop {unit}", doc: "Stop a systemd unit." },
     VerbSpec { name: "restart", organ: "host", args: &[("unit", true)], effect: Effect::Local, target: "unit",
         explain: "restart {unit}", doc: "Restart a systemd unit." },
-    VerbSpec { name: "run", organ: "programs", args: &[("program", true), ("args", false), ("timeout", false)],
+    VerbSpec { name: "run", organ: "programs", args: &[("program", true), ("args", false), ("timeout", false), ("background", false)],
         effect: Effect::Local, target: "program", explain: "run {program}",
         doc: "Escape hatch: run any program with an argument list (no shell unless program is \"sh\"). \
-              Returns {code, output}." },
+              Returns {code, output}. Long work (updates, builds, renders, downloads): background: true returns {job} \
+              at once; wait for job.finished where its job matches, and branch on its ok, code and output." },
 ];
 
 pub fn find(name: &str) -> Option<&'static VerbSpec> {

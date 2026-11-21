@@ -465,7 +465,7 @@ impl Core {
             }
             "find" => {
                 let state = self.state.lock().unwrap().clone();
-                let ctx = engine::Ctx { mem: &self.mem, organs: self.organs.as_ref(), bus: &self.bus, state: &state };
+                let ctx = engine::Ctx { mem: &self.mem, organs: &self.organs, bus: &self.bus, state: &state };
                 match engine::eval(&json!({"find": req["spec"]}), &Map::new(), &ctx) {
                     Ok(v) => json!({"ok": true, "found": v}),
                     Err(e) => json!({"ok": false, "error": e}),

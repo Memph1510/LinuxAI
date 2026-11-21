@@ -61,6 +61,20 @@ says is treated as **claims** to weigh:
   skeptical of a broker's numbers, generous with family) and *How I respond*. The AI reads it before judging
   their messages and keeps it current with the same protected small edits as any playbook. You can edit it too.
 
+## Checked against what was agreed
+
+When a deal is settled, the AI records what was agreed (the `agree` verb: the reference, and terms such as
+`rate_cents`). Every email's claims that cite that reference are compared with it as the email comes in, and the
+result rides on the `message.received` event (`agreements`):
+
+- **A match** (the rate confirmation says $3,200, as agreed): filed with the agreement, which becomes *confirmed*.
+  You're told in one line. No model.
+- **A difference** (the invoice bills $3,000): the agreement becomes *disputed*, and the AI gets the email at
+  once, with the difference spelled out, even if it's routine mail that would otherwise wait for the batch.
+- Invoices can cite a reference too (the load or order number), so a bill is checked the same way. An amount is
+  compared with an agreed rate.
+- It's still outside information: a match only means the document says what was agreed.
+
 ## Setting it up
 
 `/etc/linuxai/mail.env`:

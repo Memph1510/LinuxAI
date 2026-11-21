@@ -16,7 +16,8 @@ Each situation goes to the cheapest level that can handle it:
 | 2. **Briefs** | The core gathers what the AI would have looked up (the playbook, similar past cases, the facts) into one message. The AI decides in one step, at medium effort, and can still investigate when the brief isn't enough. | 1 to 2 requests | `linuxai/mind.py` |
 | 3. **Batches** | What can wait (routine email, reflecting on finished work) is handled together, at most 10 minutes later, in one conversation, at low effort. | 1 request per batch | `linuxai/mind.py` |
 | 1½. **Watches** | A page the AI keeps an eye on is checked by the browser on its own; only new rows that match reach the AI, as just those rows. | none until a match | browser: `watch` |
-| 2½. **Expectations** | A reply the AI already planned for (the broker's answer to its counter) is matched by the plan waiting for it and handled by the branch decided in advance. | none | core: `wait` with `where`, `track` |
+| 2½. **Expectations: work and documents** | Long work runs in the background and its outcomes are decided when it starts; documents are checked by the core against what was agreed. | none unless it's a surprise | core: `run` background, `agree` |
+| 2½. **Expectations: replies** | A reply the AI already planned for (the broker's answer to its counter) is matched by the plan waiting for it and handled by the branch decided in advance. | none | core: `wait` with `where`, `track` |
 | 4. **Deliberation** | New, unclear or high-stakes work: everything you asked for, and anything the checks flag (first time, low confidence, outside information). High effort and the full toolset. | as needed | as before |
 
 ### Habits, precisely
@@ -61,6 +62,21 @@ your OK, the same as before. Checked by the test `a_plan_that_waits_for_someones
 Outgoing email doesn't exist yet, so "counter at $3,500" and "take $3,200" reach you as messages and questions
 with the AI's lean. Once LinuxAI can send email, the same plans can send the counter, with your OK.
 
+### Long work and documents, decided ahead
+
+The same idea as the negotiation, in two more places:
+
+- **Long work** (an update, a build, a render): the plan starts it in the background (`run` with `background`),
+  waits for `job.finished`, and branches on what it already decided: finished cleanly, a known error and its fix,
+  or `think` for anything else. Nobody checks on it while it runs, and a clean finish needs no model. Checked by
+  `long_work_runs_in_the_background_and_its_outcome_was_decided_ahead`.
+- **Documents against agreements**: when a deal is settled, the plan records what was agreed (`agree`). A rate
+  confirmation or invoice citing it is compared by the core as it arrives: a match is filed with no model and you're
+  told in a line; only a difference reaches the AI, spelled out. Before, the AI read the document, the sender's
+  profile and the earlier messages to work out what had been agreed: 5 requests for each rate confirmation, now
+  none. Checked by `a_document_is_checked_against_what_was_agreed` and
+  `test_a_document_that_matches_what_was_agreed_needs_no_model`.
+
 ### Looking again costs only what changed
 
 - **In one conversation**, reading the same file, read-only command or page again gives only the differences, or
@@ -102,26 +118,28 @@ the new loads that match, with just those rows.
 
 `--real` runs the same day against the real model, which replaces all three assumptions.
 
-The day: 9 situations (cups fails three times, nginx twice, memory pressure four times), 11 emails (two
-negotiations with a broker, each an offer and a reply; a newsletter, a phishing attempt, 5 routine), 3 tasks you
+The day: 9 situations (cups fails three times, nginx twice, memory pressure four times), 12 emails (two
+negotiations with a broker, each an offer and a reply, and the rate confirmation for the one settled; a newsletter, a phishing attempt, 5 routine), 3 tasks you
 asked for, and keeping an eye on a load board for Dallas to Atlanta loads at $2,500 or more (three new ones appear),
 over 10 hours. In one negotiation the broker answers $3,200 (foreseen); in the other, $2,800 (not). Before, the
 board is checked every 30 minutes; with the ladder, it's watched.
 
 | Strategy | Requests | Handled by habit | Replies expected | Output incl. thinking | Est. cost (Opus 5.5) |
 |---|---:|---:|---:|---:|---:|
-| Before (old prompts and cache) | 187 | 0 | 0 of 2 | 174,000 | $7.10 |
-| Old prompts, new cache | 187 | 0 | 0 of 2 | 174,000 | $4.40 |
-| **The ladder** | **36** | 6 of 9 | 2 of 2 | **18,000** | **$0.94** (13%) |
+| Before (old prompts and cache) | 192 | 0 | 0 of 2 | 178,000 | $7.39 |
+| Old prompts, new cache | 192 | 0 | 0 of 2 | 178,000 | $4.53 |
+| **The ladder** | **36** | 6 of 9 | 2 of 2 | **18,000** | **$0.96** (13%) |
 
-Three days: **$2.77 instead of $21.42 (13%)**, with 90 requests instead of 561. Habits handled 24 of the 27
-situations, all 6 negotiation replies were expected, and all 9 new loads were reported. In every run the work done
+Three days: **$2.83 instead of $22.29 (13%)**, with 90 requests instead of 576. Habits handled 24 of the 27
+situations, all 6 negotiation replies were expected, all 3 rate confirmations were checked against the agreement with no model,
+and all 9 new loads were reported. In every run the work done
 was identical: nothing left unhandled, every service failure restarted, every reply and every new matching load
 brought to you.
 
 One scenario alone:
-- **Negotiations** (`--only negotiation`): 6 requests instead of 18. A foreseen reply takes no model request at all
-  (before: 5, rereading the exchange); an unforeseen one takes 2, with the state handed over.
+- **Negotiations** (`--only negotiation`): 6 requests instead of 23. A foreseen reply takes no model request at all
+  (before: 5, rereading the exchange); an unforeseen one takes 2, with the state handed over; the rate
+  confirmation that follows takes none (before: 5).
 - **The load board** (`--only board`): 9 requests instead of 100: one to set the watch, two per new load. Before,
   the AI also had to remember on its own which loads it had already told you about.
 

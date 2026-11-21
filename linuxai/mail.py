@@ -34,6 +34,7 @@ class Money(BaseModel):
     currency: str = "USD"
     direction: Literal["offered_to_us", "we_owe", "quote", "paid", "unknown"]
     what: str
+    reference: Optional[str] = Field(None, description="The load, order or invoice reference it's for, if stated")
 
 
 class Load(BaseModel):

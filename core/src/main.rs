@@ -15,6 +15,7 @@
 //!   linuxai-core calendar import FILE.ics | calendar watch           subscribed calendars and invitations in
 
 mod browser;
+mod agreements;
 mod blender;
 mod calendar;
 mod client;
@@ -23,6 +24,7 @@ mod craft;
 mod core;
 mod engine;
 mod host;
+mod jobs;
 mod images;
 mod mail;
 mod memory;

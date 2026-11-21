@@ -1103,3 +1103,40 @@ def test_a_watched_page_wakes_the_ai_only_with_new_matching_rows():
     mind.on_event({"kind": "web.matched", "data": {"items": rows, "expected_by": [{"plan_id": "p1"}]}})
     mind.on_event({"kind": "web.watch_problem", "data": {"url": "https://board.example", "problem": "the page had rows before and has none now"}})
     assert len(turns) == 1 and told and "log in" in told[0]
+
+
+def test_a_document_that_matches_what_was_agreed_needs_no_model():
+    from linuxai.mind import Mind
+    turns, told = [], []
+
+    class FakeAgent:
+        config = NS(effort="high")
+        toolbox = NS(outside_seen=False)
+
+        def reset(self):
+            pass
+
+        def turn(self, text):
+            turns.append((self.config.effort, text))
+
+    class FakeCore:
+        def request(self, op, **kw):
+            if op == "tell":
+                told.append(kw["text"])
+            return {"ok": True, "chain": [], "found": []}
+    mind = Mind(FakeAgent(), FakeCore(), strategy="ladder")
+    claim = {"id": "obj:load_offer/1", "type": "load_offer", "reference": "HL-3100", "rate_cents": 320000}
+    base = {"from": "dana@hollis-logistics.com", "authenticated": True, "subject": "Rate con HL-3100", "message": "obj:message/1",
+            "contact": "contacts/hollis/dana", "claims": [claim]}
+    ok = {"agreement": "obj:agreement/hl-3100", "reference": "HL-3100", "terms": {"rate_cents": 320000}, "compared": ["rate_cents"],
+          "differences": [], "matches": True}
+    mind.on_event({"kind": "message.received", "data": {**base, "category": "rate_confirmation", "agreements": [ok]}})
+    assert turns == [] and told and "matches what was agreed (rate_cents $3,200)" in told[0], told
+    # The invoice bills $3,000: the AI hears about it now, with the difference spelled out.
+    bad = {**ok, "matches": False, "differences": [{"field": "rate_cents", "agreed": 320000, "claimed": 300000}]}
+    mind.on_event({"kind": "message.received", "data": {**base, "category": "invoice_or_bill", "agreements": [bad]}})
+    assert len(turns) == 1 and turns[0][0] == "medium", "a difference can't wait for the routine batch"
+    assert "DIFFERS from what was agreed: rate_cents agreed $3,200, the document says $3,000" in turns[0][1], turns[0][1]
+    # A document citing something nobody agreed on goes the usual way (routine mail waits for the batch).
+    mind.on_event({"kind": "message.received", "data": {**base, "category": "invoice_or_bill", "agreements": []}})
+    assert len(turns) == 1 and len(mind.mail_queue) == 1

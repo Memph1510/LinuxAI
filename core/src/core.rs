@@ -47,7 +47,7 @@ pub fn default_rules() -> Vec<Value> {
 
 pub struct Core {
     pub mem: Memory,
-    pub organs: Box<dyn Organs>,
+    pub organs: crate::jobs::Jobs,
     pub bus: Bus,
     pub state: Mutex<Value>,
     pub subscribers: Mutex<Vec<Sender<Value>>>,
@@ -83,7 +83,7 @@ impl Core {
         }
         Core {
             mem,
-            organs,
+            organs: crate::jobs::Jobs::new(organs),
             bus: Bus::default(),
             state: Mutex::new(Value::Null),
             subscribers: Mutex::new(Vec::new()),
@@ -102,7 +102,7 @@ impl Core {
 
     fn with_ctx<T>(&self, f: impl FnOnce(&Ctx) -> T) -> T {
         let state = self.state.lock().unwrap().clone();
-        let ctx = Ctx { mem: &self.mem, organs: self.organs.as_ref(), bus: &self.bus, state: &state };
+        let ctx = Ctx { mem: &self.mem, organs: &self.organs, bus: &self.bus, state: &state };
         f(&ctx)
     }
 
@@ -285,6 +285,10 @@ impl Core {
     }
 
     pub fn tick(self: &Arc<Self>) {
+        // Background jobs that finished: the plans waiting for them pick them up from here.
+        for j in self.organs.take_finished() {
+            self.emit("job.finished", j);
+        }
         let t = now();
         let lead: f64 = std::env::var("LINUXAI_CALENDAR_LEAD").ok().and_then(|v| v.parse().ok()).unwrap_or(30.0);
         crate::calendar::remind(&self.mem, &self.bus, lead);
@@ -436,6 +440,16 @@ impl Core {
             "object_put" | "find" => self.object_op(op, req),
             "models" => crate::models::table(&self.mem),
             "habits" | "habit_forget" => self.habit_op(op, req),
+            "agreements_check" => {
+                let claims = req["claims"].as_array().cloned().unwrap_or_default();
+                json!({"ok": true, "checked": crate::agreements::check(&self.mem, &claims, &req["document"])})
+            }
+            "agreements" => {
+                let all = req["all"].as_bool().unwrap_or(false);
+                let list: Vec<Value> = self.mem.objects_of("agreement", 100).into_iter()
+                    .filter(|a| all || a["status"] != "closed").collect();
+                json!({"ok": true, "agreements": list})
+            }
             // Exchanges in progress, with where each stands and the plans waiting on their next reply.
             "threads" => {
                 let all = req["all"].as_bool().unwrap_or(false);
