@@ -38,6 +38,7 @@ def main() -> int:
     ap.add_argument("--strategies", default="ladder")
     ap.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "linuxai-vm-bench"))
     ap.add_argument("--boot-timeout", type=float, default=1500)
+    ap.add_argument("--ca", help="extra CA certificates (PEM) the VM should trust, for a network that re-terminates TLS")
     args = ap.parse_args()
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
@@ -76,10 +77,17 @@ def main() -> int:
         # Use the address this host uses for the API (some hosts pin it in /etc/hosts and refuse others).
         api_ip = socket.gethostbyname("api.anthropic.com")
         con.run(f"echo '{api_ip} api.anthropic.com' >> /etc/hosts", 30)
-        reach = con.run("curl -s -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/models", 60)
+        if args.ca:
+            # Trusted by this shell only: the VM's own store is combined with the extra CAs in a copy.
+            tb.copy_in(con, Path(args.ca), "/tmp/bench/extra-ca.pem")
+            con.run("cat /etc/ssl/certs/ca-certificates.crt /tmp/bench/extra-ca.pem > /tmp/bench/ca.pem;"
+                    " export SSL_CERT_FILE=/tmp/bench/ca.pem CURL_CA_BUNDLE=/tmp/bench/ca.pem", 30)
+        reach = con.run("curl -s -o /dev/null -w '%{http_code}\\n' https://api.anthropic.com/v1/models", 60)
         code = reach.strip()[-3:]
-        print(f"API reachable from the VM: HTTP {code}", flush=True)
-        if code not in ("200", "401"):
+        py = con.run("python3 -c 'import httpx; print(httpx.get(\"https://api.anthropic.com/v1/models\").status_code)' 2>&1 | tail -1", 60)
+        py_code = py.strip()[-3:]
+        print(f"API reachable from the VM: curl HTTP {code}, python HTTP {py_code}", flush=True)
+        if code not in ("200", "401") or py_code not in ("200", "401"):
             print("the VM can't reach the API; stopping before any spend")
             return 1
         # The key: typed with echo off, kept only in this shell's environment.
