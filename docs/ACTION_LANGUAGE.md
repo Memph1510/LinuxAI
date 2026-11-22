@@ -71,6 +71,7 @@ If you ask what it did, you get:
 | time | ISO dates/times, or relative forms the engine resolves at check time: `"today"`, `"+3d"`, `"-6mo"`, `"next fri 9:00"` |
 | references | `"@verizon"` (handle), `"#denver-trip"` (tag/project), `"budget:bills"`, `"obj:bill/01JDQ8K3..."` |
 | variables | `"$name"`, `"$name.field"` |
+| text | `"{$path}"` inside a string puts a value in; a field ending in `_cents` reads as dollars (`"{$offer.rate_cents}"` → "$3,200", a "cents" written after it is dropped) and a record reads "rate $3,200, miles 781". Numbers used in expressions stay numbers. |
 | expressions | prefix lists: `[">", "$a", 10]`, `["*", "$usual", 1.2]`, `["avg", "amount", <list>]`, `["get", obj, "field"]`, `["pick", list, "field", value]` (first item whose field equals value) |
 
 ## 2. Step kinds

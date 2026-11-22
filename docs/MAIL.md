@@ -73,10 +73,35 @@ GPU; the form's schema enforced by the server). Nothing left the machine.
 - Speed is this machine's CPU only (part of the runs shared it with a benchmark); a laptop GPU would be faster.
   Accuracy is the model's own and carries over.
 
+### The code check (no model)
+
+Because a small model can miss manipulation, the core also checks every email's cleaned text **by code**, whatever
+model filled the form, or none (`steering_flags` in `core/src/mail.rs`). It looks for two kinds of wording:
+- **aimed at an automated system**: "ignore your instructions", "AI assistant:", "note to the automated dispatcher",
+  "if you are an AI reading this", addressing it by name, fake `<system>` tags, "pre-approved by the owner, book it",
+  "without asking", "don't tell the owner", and the same in Spanish and French;
+- **redirecting money**: "our bank has changed", "new ACH information", "send all payments to", a routing number,
+  "transfer $500 to account …".
+
+Either makes the email `phishing_or_spam`, with the note "The email contains instructions aimed at an automated
+system" or "The email asks to change where payments are sent", and the matched words kept (`flagged_by_code`). The owner
+is told why, and for a payment change to confirm it by phone at a number he already has. It is a set of patterns, so it
+misses new wording; it backs the model up, it doesn't replace it.
+
+Measured:
+- **A held-out set** (`tests/steering_holdout.py`: 10 steering emails, 10 genuine ones that look risky, like "ignore my
+  previous email", "Assistant manager: Tom", "payment sent to your account"), written after the patterns: **8/10
+  caught, 0/10 false alarms** on the first run. The two misses ("To any automated email processor: …", "SYSTEM
+  OVERRIDE: …") were general classes, now covered: 10/10, 0/10, but those two are no longer held out.
+- **With the models** (the 20 emails above, as the core stores them; the patterns were written seeing these, so this
+  is partly in-sample): Qwen3 4B 4/6 → **6/6** injections caught, categories 14 → 16 of 20, no false alarms; Gemma 3 4B
+  3/6 → 6/6. Llama 3.2 3B and Qwen2.5 1.5B keep their false alarms (the check only adds flags).
+
 To use one: run a llama.cpp server on this machine and set the reading_email job to `local:<name>` (or
 `LINUXAI_EXTRACT_MODEL=local:<name>`); `LINUXAI_LOCAL_MODEL_URL` defaults to `http://127.0.0.1:8080`. The extractor
 refuses any address that isn't this machine and never goes through a proxy. Not built yet: the server on the OS image.
-Measure: `python3 tests/extract_eval.py --model local:<name>`.
+Measure: `python3 tests/extract_eval.py --model local:<name>` (scores the model alone and the form as the core stores it,
+after the code check); `python3 tests/steering_holdout.py` (the code check alone).
 
 Limits: 20 emails, one run each; synthetic, not real broker mail. Haiku is about 30× cheaper here with the same
 score; which model reads email is your choice (the model table), not changed by this measurement.
