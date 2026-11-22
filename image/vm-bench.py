@@ -86,7 +86,12 @@ def main() -> int:
         con.run("export PYTHONPATH=/opt/linuxai/lib", 30)
         reach = con.run("curl -s -o /dev/null -w '%{http_code}\\n' https://api.anthropic.com/v1/models", 60)
         code = reach.strip()[-3:]
-        py = con.run("python3 -c 'import httpx; print(httpx.get(\"https://api.anthropic.com/v1/models\").status_code)' 2>&1 | tail -1", 60)
+        # The benchmark's own client, with a dummy key: a 401 means it reached the API and trusted its certificate.
+        probe = ("import anthropic\ntry:\n    anthropic.Anthropic(api_key=\"probe\", max_retries=0).models.list()\n    print(200)\n"
+                 "except anthropic.APIStatusError as e:\n    print(e.status_code)\nexcept Exception as e:\n    print(type(e).__name__)\n")
+        (tmp / "probe.py").write_text(probe)
+        tb.copy_in(con, tmp / "probe.py", "/tmp/bench/probe.py")
+        py = con.run("python3 /tmp/bench/probe.py 2>&1 | tail -1", 60)
         py_code = py.strip()[-3:]
         print(f"API reachable from the VM: curl HTTP {code}, python HTTP {py_code}", flush=True)
         if code not in ("200", "401") or py_code not in ("200", "401"):
