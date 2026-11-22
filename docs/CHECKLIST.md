@@ -116,6 +116,22 @@ From an objective review of everything built so far. Each was first shown by a f
 Also added: a fuzz test (3,000 random and malformed plans through the checker and the core, and plans at the
 socket's maximum depth). Nothing crashed.
 
+### Independent review (2026-11-21, issue #22) and the owner's decision
+
+The review found ways around approvals. The owner's operating model (HANDOFF §1: LinuxAI has its own dedicated
+accounts, logins and temporary card; broker deals confirmed by phone; capability first) puts them at medium. Fixed,
+adding no new questions for the human:
+
+| Review | Gap | Fix |
+|---|---|---|
+| H1 | "Always" on a plan whose target was a variable (`$p`, `$broker`) covered any later value | "Always" is recorded only for a literal target, the value the human saw; variable/pattern mandates are ignored |
+| H2 | A plan could set `answered_by: "human"` and make its agreement look like the human's | Only the core records that the human answered (`Exec.human_answered`, set in `answer`) |
+| H3 | A plan could `store` a record with forged provenance ("sender verified") and cite it as an outside fact | `store` can't write provenance or system records; only records labelled outside by the core can be cited |
+| H5 | The Workspace's answer-as-human bridge could be put on a page someone names | It serves only the configured Workspace page |
+
+Deferred by the owner (capability first; fix blockers as met): C1 (sandbox for "read-only" commands, separate AI
+user, peer-authenticated socket), H4 (approvals on browser actions), M1–M5, L1–L4. Tracked in issue #22.
+
 ### Crashes and dependencies (2026-11-21, from "how are bugs, crashes and security handled?")
 
 | Gap | Fix |

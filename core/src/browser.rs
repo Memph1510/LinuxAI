@@ -486,6 +486,8 @@ pub struct Organ {
     pub(crate) workspace: Mutex<Option<Arc<crate::workspace::Workspace>>>,
     /// Pages the browser checks on its own, telling the core only about new rows that match (see watch.rs).
     pub(crate) watches: Mutex<serde_json::Map<String, Value>>,
+    /// The one page that may be the Workspace (it gets the bridge that answers as the human).
+    pub(crate) workspace_url: String,
     pub(crate) watch_tabs: Mutex<std::collections::HashMap<String, String>>,
 }
 
@@ -497,7 +499,7 @@ impl Organ {
     pub fn new(bin: String, profile: PathBuf, headless: bool, core: Option<Client>) -> Organ {
         let watches = Mutex::new(crate::watch::load(&profile));
         Organ { bin, app: None, profile, headless, cdp: Mutex::new(None), core, workspace: Mutex::new(None), watches,
-                watch_tabs: Mutex::new(Default::default()) }
+                watch_tabs: Mutex::new(Default::default()), workspace_url: crate::workspace::default_url() }
     }
 
     /// The running browser, started (or restarted, if it died or the human closed it) as needed.
@@ -573,7 +575,8 @@ impl Organ {
         }
         if op == "workspace" {
             // Open (or bring back) the Workspace: the main screen, a page with a private channel to the OS.
-            let url = req["url"].as_str().map(String::from).unwrap_or_else(crate::workspace::default_url);
+            // Only the Workspace's own page gets the bridge that answers as the human, never a page someone names.
+            let url = self.workspace_url.clone();
             return match crate::workspace::Workspace::open(self, &b, &url) {
                 Ok(tab) => json!({"ok": true, "tab": tab}),
                 Err(e) => err(e),

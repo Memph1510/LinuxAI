@@ -44,6 +44,10 @@ pub struct Exec {
     pub approved: bool,
     pub error: Option<String>,
     pub created: f64,
+    /// The human answered a question in this plan themselves (set only by the core, in `answer`). Plan variables,
+    /// `$answered_by` included, can be set by whoever wrote the plan, so they never prove this.
+    #[serde(default)]
+    pub human_answered: bool,
 }
 
 impl Exec {
@@ -342,8 +346,15 @@ pub struct Report {
     pub explain: Vec<String>,
 }
 
+/// A target the human could actually see and say "always" to: a literal value, not `$var`, `{$var}` or a pattern.
+fn literal_target(t: &str) -> bool {
+    !t.contains('$') && !t.contains('*')
+}
+
 fn covered(mandates: &[(String, String)], verb: &str, target: &str) -> bool {
-    mandates.iter().any(|(v, t)| {
+    // A standing permission names the value the human said yes to. A mandate recorded against a variable (before this
+    // rule) would cover whatever the variable holds later, so it's ignored.
+    mandates.iter().filter(|(_, t)| t == "*" || t == "outside:*" || literal_target(t.trim_end_matches('*'))).any(|(v, t)| {
         (v == verb || v == "*")
             && (t == "*" || t == target || (t.ends_with('*') && target.starts_with(t.trim_end_matches('*'))))
     })
@@ -417,7 +428,9 @@ pub fn check_with(plan: &Value, mem: &Memory, source: &str, threshold: f64, nove
             match f.as_str().and_then(|id| mem.object(id)) {
                 Some(o) if o["superseded_by"].is_string() => r.errors.push(format!(
                     "fact {} was corrected by {}: cite the newer one", display(&f), display(&o["superseded_by"]))),
-                Some(o) => r.outside_facts.push(o),
+                Some(o) if o["trust"] == "outside" => r.outside_facts.push(o),
+                Some(_) => r.errors.push(format!("reasoning.facts: {} isn't a recorded outside fact (cite the facts \
+                    extracted from the message or page)", display(&f))),
                 None => r.errors.push(format!("reasoning.facts: no stored fact {f}")),
             }
         }
@@ -680,6 +693,7 @@ pub fn new_exec(plan: &Value, source: &str) -> Exec {
         approved: !source.eq("ai"),
         error: None,
         created: now(),
+        human_answered: false,
     }
 }
 
@@ -792,6 +806,11 @@ pub fn answer(exec: &mut Exec, text: &str, by: &str, ctx: &Ctx) {
                 // Trust learned from conversation: these kinds of actions no longer need asking.
                 for e in exec.wait["effects"].as_array().cloned().unwrap_or_default() {
                     if e["effect"] != "internal" && e["covered"] == false {
+                        // "Always" covers the value the human saw. A target that's a variable or a pattern ("$broker",
+                        // "s*") could become anything later, so this yes counts for this plan only.
+                        if !literal_target(&display(&e["target"])) {
+                            continue;
+                        }
                         let outside = exec.wait["outside"] == true;
                         let target = if outside { format!("outside:{}", display(&e["target"])) } else { display(&e["target"]) };
                         ctx.mem.add_mandate(e["verb"].as_str().unwrap_or(""), &target, if outside { "human:always:outside" } else { "human:always" });
@@ -816,6 +835,9 @@ pub fn answer(exec: &mut Exec, text: &str, by: &str, ctx: &Ctx) {
     exec.vars.insert(var, json!(text));
     exec.vars.insert("answer".into(), json!(text));
     exec.vars.insert("answered_by".into(), json!(by));
+    if by == "human" {
+        exec.human_answered = true;
+    }
     exec.status = "running".into();
     exec.wait = Value::Null;
     run(exec, ctx);
@@ -1190,7 +1212,7 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
             // It's an agreement only if the human made it: their own plan, or their own answer in this one. Otherwise
             // (the AI's reading of an email, say) it's proposed: documents are still compared with it, but a match
             // isn't filed on its strength until the human confirms it.
-            let by_human = exec.source == "human" || exec.vars.get("answered_by") == Some(&json!("human"));
+            let by_human = exec.source == "human" || exec.human_answered;
             let status = if by_human { "agreed" } else { "proposed" };
             let fields = json!({"reference": reference, "terms": a.get("terms").cloned().unwrap_or(json!({})), "with": a.get("with"),
                 "about": a.get("about"), "thread": a.get("thread"), "status": status, "confirmed_by_human": by_human,
@@ -1215,6 +1237,16 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
         "store" => {
             let a = args.as_object().unwrap();
             let typ = str_arg(a, "type");
+            // Provenance and system records come only from the core's own paths (email ingestion, recorded web facts,
+            // agreements, habits...). Otherwise a plan could store a "fact from dana@..., sender verified" and cite it.
+            const SYSTEM_TYPES: &[&str] = &["agreement", "habit", "job", "thread", "message", "sent_message", "system"];
+            const PROVENANCE: &[&str] = &["source", "trust", "superseded_by", "confirmed_by_human", "reliability", "checks"];
+            if SYSTEM_TYPES.contains(&typ.as_str()) {
+                return Err(format!("'{typ}' records are kept by the core itself; store can't write them"));
+            }
+            if let Some(k) = a.get("fields").and_then(Value::as_object).and_then(|f| f.keys().find(|k| PROVENANCE.contains(&k.as_str()))) {
+                return Err(format!("store can't set '{k}': where a record came from is recorded by the core, not written by a plan"));
+            }
             let handle = a.get("handle").map(display);
             let id = ctx.mem.put_object(&typ, handle.as_deref(), a.get("fields").unwrap_or(&json!({})));
             ctx.bus.emit(ctx.mem, "memory.stored", json!({"id": id, "type": typ}));

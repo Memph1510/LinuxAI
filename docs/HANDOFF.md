@@ -34,6 +34,16 @@ business (freight broker email, load boards, rate confirmations, settlements, in
   through conversation and used when planning, deciding and communicating.
 - **Merges**: the owner authorized merging PRs once CI and the boot test pass.
 
+**The owner's operating model** (rate every finding and every new restriction against this):
+- LinuxAI is like a 24/7 assistant bot (as Claude or other agents already work for him, e.g. his QuickBooks
+  bookkeeping, unattended), moved into its own environment. **Its identity is its own**: a dedicated mailbox,
+  dedicated logins, a temporary card, files that exist only in this OS. None of his personal accounts, logins or
+  cards. Broker deals are confirmed by phone, so a message alone doesn't commit him.
+- **Capability first.** Don't limit what the AI can do or add approvals pre-emptively; fix blockers as they're met.
+  Do fix anything that makes his own settings mean something other than what they say (an "always" broader than
+  what he saw, a record claiming he decided something he didn't, a fact shown as verified that isn't).
+- An OS password comes with install to disk.
+
 **How the owner likes to be talked to**: plain, short, specific; say what was done and how it was checked, what
 wasn't checked, and honest uncertainty. Measured claims, not adjectives. They think in concrete examples
 (their broker negotiation example drove the whole "decided ahead" design: see §4).
@@ -128,9 +138,17 @@ directional until `--real` runs**: I (the agent) wrote the stand-in for both sid
 
 ## 6. Honest status (the objective review of 2026-11-21)
 
-**Solid**: the core's safety model (checked plans, durable, no repeats, learned trust, outside-info separation,
-each proven by a failing test first, incl. `kill -9` mid-plan); the Rust/Python split; real-component tests
-(Chromium, Blender in the VM, all 15 Craft apps, email ingestion, full image boot before each merge).
+**Solid**: durability (checked plans, no repeats, resumed after `kill -9`), crash containment, the Rust/Python
+split, real-component tests (Chromium, Blender in the VM, all 15 Craft apps, email ingestion, full image boot before
+each merge). **The safety model is a set of settings, not a security boundary**: the independent review (issue #22,
+2026-11-21) showed the AI could get around approvals. Under the owner's operating model (§1) that's rated medium,
+not critical. What was fixed after the review (CHECKLIST, "Independent review"): an "always" covers only the literal value the
+human saw; only the core records that the human answered; plans can't write provenance or system records, and only
+recorded outside facts can be cited; the Workspace bridge serves only the Workspace page. **Deferred by the owner's
+decision (capability first)**: sandboxing "read-only" commands, a separate user for the AI, peer-authenticated
+"human" on the core socket, approvals on browser actions (review C1, H4, M1–M5; issues #16, #17). Revisit if a real
+problem shows up, or when connecting anything that can commit money or the business without a phone call (e.g. a
+load board that books loads directly).
 
 **Unproven** (the biggest risks, in order):
 1. **The real Claude model has never run, not once.** Every AI-layer test uses a scripted model. The request uses
