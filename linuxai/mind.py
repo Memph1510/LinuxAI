@@ -25,6 +25,11 @@ from typing import Any, Callable
 URGENT_MAIL = {"load_offer", "rate_confirmation", "payment", "calendar"}
 
 
+def _name(field: str) -> str:
+    """A field as a person says it: rate_cents -> rate."""
+    return field.removesuffix("_cents").replace("_", " ")
+
+
 def _value(field: str, v) -> str:
     if field.endswith("_cents") and isinstance(v, (int, float)):
         return f"${v / 100:,.2f}".replace(".00", "")
@@ -42,7 +47,7 @@ def agreement_lines(checked: list[dict]) -> str:
             out.append(f"{c['reference']}: matches what was agreed ({', '.join(c.get('compared') or [])}).")
         elif c.get("differences"):
             out.append(f"{c['reference']}: DIFFERS from what was agreed: " + "; ".join(
-                f"{d['field']} agreed {_value(d['field'], d['agreed'])}, the document says {_value(d['field'], d['claimed'])}"
+                f"{_name(d['field'])} agreed {_value(d['field'], d['agreed'])}, the document says {_value(d['field'], d['claimed'])}"
                 for d in c["differences"]) + ".")
         else:
             out.append(f"{c['reference']}: has an agreement, but the document states none of its terms.")
@@ -208,7 +213,16 @@ class Mind:
             return
         who = f"{d.get('from')} ({'sender verified' if d.get('authenticated') else 'sender NOT verified'})"
         if d.get("category") == "phishing_or_spam":
-            self.core.request("tell", text=f"An email from {who} looked like spam or an attempt to instruct me. I ignored it.",
+            kinds = {f.get("kind") for f in d.get("flagged_by_code") or []}
+            if "payment" in kinds:
+                why = ("asked to change where payments are sent. I changed nothing; if it's real, confirm it with them by "
+                       "phone at a number you already have")
+            elif "instructions" in kinds:
+                why = "tried to give me instructions. I didn't follow them"
+            else:
+                why = "looked like spam or an attempt to instruct me. I ignored it"
+            subject = f' ("{d["subject"]}")' if d.get("subject") else ""
+            self.core.request("tell", text=f"An email from {who}{subject} {why}.",
                               **{"from": "mind"})
             return
         if d.get("category") == "newsletter":
@@ -219,7 +233,7 @@ class Mind:
             if all(c.get("matches") and c.get("confirmed_by_human", True) for c in checked) \
                     and cited <= {c["reference"] for c in checked} and not d.get("issues") and not d.get("corrected"):
                 # Exactly what was agreed: filed with the agreement, no model needed.
-                terms = "; ".join(", ".join(f"{k} {_value(k, v)}" for k, v in (c.get("terms") or {}).items()) for c in checked)
+                terms = "; ".join(", ".join(f"{_name(k)} {_value(k, v)}" for k, v in (c.get("terms") or {}).items()) for c in checked)
                 self.core.request("tell", text=f"The {str(d.get('category') or 'document').replace('_', ' ')} from {d.get('from')} for "
                                                f"{', '.join(sorted(cited))} matches what was agreed ({terms}). Filed with the agreement.",
                                   **{"from": "mind"})

@@ -518,6 +518,26 @@ def test_a_local_model_reads_email_on_this_machine_only(monkeypatch):
     assert "Offering $1,640." in body["messages"][-1]["content"]
 
 
+def test_steering_and_payment_redirects_are_flagged_by_code_on_held_out_emails():
+    """The core's code check (no model) on emails written after its patterns: steering flagged, look-alikes left alone."""
+    if not CORE_BIN.exists():
+        pytest.skip("build core first")
+    import steering_holdout as H
+    for name, subject, text, should in H.HOLDOUT:
+        got, matched = H.flagged(subject, text)
+        assert got == should, (name, matched)
+
+
+def test_the_owner_is_told_why_an_email_was_set_aside(env, live_core):
+    cfg, _, tb, _ = env
+    from linuxai.mind import Mind
+    mind = Mind(NS(config=cfg, toolbox=tb), live_core)
+    mind.on_mail({"from": "ar@hollis-logistlcs.example", "authenticated": False, "subject": "Updated remittance information",
+                  "category": "phishing_or_spam", "flagged_by_code": [{"kind": "payment", "matched": "send all payments to"}]})
+    told = [e["data"]["text"] for e in live_core.request("events", since=0, limit=200)["events"] if e["kind"] == "ai.tell"]
+    assert told and "change where payments are sent" in told[-1] and "Updated remittance information" in told[-1], told
+
+
 def test_the_extractor_form_fits_the_apis_schema_limits():
     """The live API refused the first form (25 optional fields: "Schema is too complex"). Every form sent must fit."""
     optional, unions = M.schema_complexity(M.MAIL_SCHEMA)
@@ -1192,12 +1212,12 @@ def test_a_document_that_matches_what_was_agreed_needs_no_model():
     ok = {"agreement": "obj:agreement/hl-3100", "reference": "HL-3100", "terms": {"rate_cents": 320000}, "compared": ["rate_cents"],
           "differences": [], "matches": True}
     mind.on_event({"kind": "message.received", "data": {**base, "category": "rate_confirmation", "agreements": [ok]}})
-    assert turns == [] and told and "matches what was agreed (rate_cents $3,200)" in told[0], told
+    assert turns == [] and told and "matches what was agreed (rate $3,200)" in told[0], told
     # The invoice bills $3,000: the AI hears about it now, with the difference spelled out.
     bad = {**ok, "matches": False, "differences": [{"field": "rate_cents", "agreed": 320000, "claimed": 300000}]}
     mind.on_event({"kind": "message.received", "data": {**base, "category": "invoice_or_bill", "agreements": [bad]}})
     assert len(turns) == 1 and turns[0][0] == "medium", "a difference can't wait for the routine batch"
-    assert "DIFFERS from what was agreed: rate_cents agreed $3,200, the document says $3,000" in turns[0][1], turns[0][1]
+    assert "DIFFERS from what was agreed: rate agreed $3,200, the document says $3,000" in turns[0][1], turns[0][1]
     # Terms the AI noted on its own (not confirmed by the human): a match isn't filed on their strength.
     unconfirmed = {**ok, "confirmed_by_human": False}
     mind.on_event({"kind": "message.received", "data": {**base, "category": "rate_confirmation", "agreements": [unconfirmed]}})

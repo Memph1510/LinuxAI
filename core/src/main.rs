@@ -256,6 +256,17 @@ fn mail_cmd(args: &[String]) -> std::io::Result<()> {
             }
             Ok(())
         }
+        Some("check") => {
+            // stdin {"subject", "text", "form"}: the form as the core would store it (the second check by code, then the
+            // code check for steering or payment-redirect wording). For measuring extractors (tests/extract_eval.py).
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+            let v: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
+            let mut form = mail::check_form(&v["form"]);
+            mail::apply_code_check(&mut form, v["subject"].as_str().unwrap_or(""), v["text"].as_str().unwrap_or(""));
+            println!("{form}");
+            Ok(())
+        }
         Some("watch") => {
             client.wait_until_up();
             let every: u64 = std::env::var("LINUXAI_MAIL_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
