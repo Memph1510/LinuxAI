@@ -125,7 +125,10 @@ tool inputs checked against their schemas before anything runs, and a usage ledg
 **Measured** (`tests/thinking_bench.py`, no API key; the real core in rehearsal, the real mind/tools/payloads; the
 model is a scripted stand-in that follows its instructions): a simulated day costs **36–40 requests instead of 192,
 about 13%** ($0.91–$0.99 vs $7.41 est. on Opus 5.5); 3 days $2.83 vs $22.29. Same work in every run. **These are
-directional until `--real` runs**: I (the agent) wrote the stand-in for both sides.
+directional**: an agent wrote the stand-in for both sides. **With the real model** (2026-11-22, ladder only): the
+same day took **110 requests and $1.97**, all work handled. Decided-ahead negotiation replies were not exercised,
+because the workload never gives the real model the exchange's history; the failing services don't exist on the
+test container. See THINKING.md, "The real model".
 
 ## 5. History (merged PRs)
 

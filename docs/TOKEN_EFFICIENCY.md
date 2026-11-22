@@ -65,8 +65,9 @@ Fresh (uncached) input was 2–14 tokens per request.
 
 The biggest lever isn't the size of a request but how many the AI needs to run the machine. See
 [THINKING.md](THINKING.md): reflexes, habits, watches, expectations (replies decided ahead), briefs, batches and effort by stakes. On a
-simulated day the same work costs about 13% of what it did, with 36 to 40 model requests instead of 192, measured with
-`tests/thinking_bench.py`.
+simulated day with a scripted model, the same work costs about 13% of what it did, with 36 to 40 model requests
+instead of 192 (`tests/thinking_bench.py`). With the real model the ladder's day took 110 requests and $1.97; the
+before side wasn't run for real (THINKING.md).
 
 ## What the first real runs cost (2026-11-22)
 

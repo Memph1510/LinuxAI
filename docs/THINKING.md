@@ -142,6 +142,45 @@ brought to you.
 The ladder's numbers vary a little from run to run (36 to 40 requests in a day): plans run on the core's own threads,
 so routine work sometimes lands in one more batch. The work done never varies.
 
+### The real model (2026-11-22, the ladder only)
+
+Run with `--real --strategies ladder` (the owner chose this over the full three-way run, about $10–25, to keep
+the cost down; so the "before" columns above are still the scripted estimate).
+
+| | Scripted model | **Real model (Opus 5.5)** |
+|---|---:|---:|
+| Conversations | 19–20 | 29 |
+| Requests | 36–40 | **110** |
+| Situations by habit (no model) | 6 of 9 | 5 of 9 |
+| Output incl. thinking | 18,000–20,000 | 45,547 |
+| Read from cache / written / fresh input | | 2,709,392 / 103,568 / 278 |
+| Cost | $0.91–$0.99 | **$1.97** (prefix already in the 1-hour cache; a cold start adds about $0.18) |
+| Left unhandled | 0 | 0 |
+| New matching loads told to you | 3 of 3 | 3 of 3 |
+| Negotiation replies already expected | 2 of 2 | 0 of 2 |
+| Rate con checked against the agreement, no model | 1 of 1 | 0 of 1 |
+| Service restarts | 5 of 5 | 0 of 5 |
+
+So a real day of this workload costs about **$2**, twice the scripted estimate, with about 3 times the requests.
+Effort by stakes held: 93 requests at medium, 10 at high, 7 at low. The differences, read from the 27 messages the
+AI sent the human (the benchmark saves them):
+- **Service restarts, 0 of 5: correct for the machine it ran on.** The real AI checked first, found no systemd and
+  no cups or nginx on the test container, and treated the synthetic failure events as false alarms. The stand-in
+  just assumed the restart. Measuring this needs a machine where those services exist (the VM image).
+- **Negotiation replies, 0 of 2 decided ahead: the workload, not the model, as far as this run shows.** The
+  scripted model privately knew the offer and our $3,500 counter. The real model was never given that history, said
+  so ("I have no earlier exchange with Hollis on file"), and asked the human. So the decided-ahead saving is still
+  **unmeasured** with the real model. Next: seed the exchange through the core (`track`, the counter as a sent
+  message) so the real model starts from what it would really know.
+- **The rate confirmation** had no agreement to be checked against for the same reason. The AI asked the human,
+  then filed the agreement once the human confirmed it.
+- **More questions to the human than the stand-in**: the synthetic tasks carry no details ("Weekly fuel report"),
+  and the real AI asked instead of guessing. Each question is a conversation.
+- It also flagged a garbled rate in a synthetic email ("rate $1,6120") instead of acting on it.
+
+The first real run also found a bug: a tool failure (a screenshot reply without a tab) ended the whole background
+AI. Now any tool failure goes back to the AI as an error result (see TESTING.md).
+
 One scenario alone:
 - **Negotiations** (`--only negotiation`): 6 requests instead of 23. A foreseen reply takes no model request at all
   (before: 5, rereading the exchange); an unforeseen one takes 2, with the state handed over; the rate
@@ -154,7 +193,8 @@ python3 tests/thinking_bench.py            # one day
 python3 tests/thinking_bench.py --days 3   # habits pay off more as situations repeat
 python3 tests/thinking_bench.py --only negotiation   # the broker exchange alone
 python3 tests/thinking_bench.py --only board         # keeping an eye on a load board
-python3 tests/thinking_bench.py --real     # the real model (needs ANTHROPIC_API_KEY; costs real money)
+python3 tests/thinking_bench.py --real --strategies ladder   # the real model, the ladder only (about $2)
+python3 tests/thinking_bench.py --real     # all three with the real model (about $10–25)
 ```
 
 The unit test `test_the_mind_spends_thinking_by_level` checks the ladder's decisions on every push:
@@ -184,6 +224,9 @@ lifecycle.
 
 - **Local small model for triage** (level 1.5): classifying mail and events on the machine, no API, before
   anything reaches Claude. Measurable with this benchmark once added.
-- **Effort sweep with the real model**: the benchmark's `--real` run plus the acceptance scenarios, to confirm
-  medium and low effort hold quality on routine work.
+- **Make the benchmark fair to the real model**: seed the negotiation history and agreements through the core,
+  and run it in the VM image, where the failing services exist. Then the full `--real` run (all three strategies)
+  if the owner wants the before/after measured.
+- **Effort sweep with the real model**: email extraction scored the same at low and medium effort (MAIL.md); the
+  mind's routine work still needs the sweep.
 - **More habit-ready rules**: name the situations of the AI's own recurring plans.

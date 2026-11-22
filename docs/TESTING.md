@@ -53,7 +53,9 @@ doesn't pick it up. Pass it to a command explicitly, without printing it:
   stated", a test guards the limit). Then 20/20 categories, 36/36 facts, 6/6 phishing and injection attempts caught, no
   genuine email flagged, on Opus 5.5 (medium and low) and Haiku 5.5. End to end through the Rust mail organ, the
   real form was accepted and hidden-HTML instructions never reached the model. See MAIL.md.
-- **Real-model benchmark (ladder only, at the owner's choice):** see THINKING.md. Its first run found the second
+- **Real-model benchmark (ladder only, at the owner's choice):** one day, 110 requests, $1.97, nothing left
+  unhandled, all 3 new loads reported; the decided-ahead negotiation path wasn't exercised (the workload doesn't
+  give the real model the exchange's history). See THINKING.md. Its first run found the second
   real bug: a tool that raised an unexpected error (a screenshot reply without a tab) ended the whole background AI.
   Now any tool failure comes back to the AI as an error result, and a test checks it.
 - **Lints:** no new findings from this session's changes (ruff baseline unchanged; tests rerun after lint fixes).
