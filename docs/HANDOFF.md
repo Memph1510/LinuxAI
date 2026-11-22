@@ -39,7 +39,11 @@ business (freight broker email, load boards, rate confirmations, settlements, in
   bookkeeping, unattended), moved into its own environment. **Its identity is its own**: a dedicated mailbox,
   dedicated logins, a temporary card, files that exist only in this OS. None of his personal accounts, logins or
   cards. Broker deals are confirmed by phone, so a message alone doesn't commit him.
-- **Capability first.** Don't limit what the AI can do or add approvals pre-emptively; fix blockers as they're met.
+- **Guardrails are learned with him, not preset.** He won't hand the OS a whole job ("go negotiate with this
+  broker") cold: it learns the work from what he does and the questions they settle together (tone, which brokers,
+  how each one reads), and the guardrails come from that. The machinery already works this way: first-time
+  situations go to him or get researched, his answers become playbooks and contact profiles, and trust is granted
+  per action ("always"). So don't add restrictions before there's a task; fix blockers as they're met.
   Do fix anything that makes his own settings mean something other than what they say (an "always" broader than
   what he saw, a record claiming he decided something he didn't, a fact shown as verified that isn't).
 - An OS password comes with install to disk.
