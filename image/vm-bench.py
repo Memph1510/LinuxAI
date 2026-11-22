@@ -91,7 +91,7 @@ def main() -> int:
                  "except anthropic.APIStatusError as e:\n    print(e.status_code)\nexcept Exception as e:\n    print(type(e).__name__)\n")
         (tmp / "probe.py").write_text(probe)
         tb.copy_in(con, tmp / "probe.py", "/tmp/bench/probe.py")
-        py = con.run("python3 /tmp/bench/probe.py 2>&1 | tail -1", 60)
+        py = con.run("python3 /tmp/bench/probe.py 2>&1 | tail -1", 600)  # the first import compiles the SDK (slow without KVM)
         py_code = py.strip()[-3:]
         print(f"API reachable from the VM: curl HTTP {code}, python HTTP {py_code}", flush=True)
         if code not in ("200", "401") or py_code not in ("200", "401"):
