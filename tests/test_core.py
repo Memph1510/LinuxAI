@@ -453,11 +453,12 @@ class FakeExtractorClient:
     """Stands in for the extractor model: no tools, returns whatever form it was scripted to."""
     def __init__(self, facts=None, stop="end_turn"):
         self.facts, self.stop, self.calls = facts, stop, []
-        self.messages = NS(parse=self._parse)
+        self.messages = NS(create=self._create)
 
-    def _parse(self, **kw):
+    def _create(self, **kw):
         self.calls.append(kw)
-        return NS(parsed_output=self.facts, stop_reason=self.stop)
+        content = [NS(type="text", text=self.facts.model_dump_json())] if self.facts else []
+        return NS(content=content, stop_reason=self.stop)
 
 
 def test_the_extractor_has_no_tools_and_reports_failure():
@@ -467,6 +468,27 @@ def test_the_extractor_has_no_tools_and_reports_failure():
     assert "tools" not in client.calls[0] and out["category"] == "load_offer"
     with pytest.raises(RuntimeError):
         M.Extractor(FakeExtractorClient(None, stop="refusal"), "m").extract({"text": "x"})
+
+
+def test_a_broken_tool_is_an_error_for_the_ai_not_a_crash(env):
+    """First real run: a KeyError inside a tool ended the whole mind. Any tool failure must come back as an error result."""
+    _, _, tb, _ = env
+
+    def boom(**kw):
+        raise KeyError("tab")
+    tb.t_read_file = boom
+    out, is_error = tb.execute("read_file", {"path": "/etc/hostname"})
+    assert is_error and "KeyError" in out and "read_file" in out
+
+
+def test_the_extractor_form_fits_the_apis_schema_limits():
+    """The live API refused the first form (25 optional fields: "Schema is too complex"). Every form sent must fit."""
+    optional, unions = M.schema_complexity(M.MAIL_SCHEMA)
+    assert optional == 0, "every field must be required (null for 'not stated')"
+    assert unions <= M.SCHEMA_ACCEPTED_UNIONS, "more nullable fields than the API was measured to accept: test it live"
+    sent = FakeExtractorClient(M.MailFacts(category="other", summary="x"))
+    M.Extractor(sent, "m").extract({"text": "x"})
+    assert sent.calls[0]["output_config"]["format"]["schema"] is M.MAIL_SCHEMA
 
 
 def test_an_injection_email_becomes_claims_and_cannot_make_the_ai_act(env, live_core, tmp_path):

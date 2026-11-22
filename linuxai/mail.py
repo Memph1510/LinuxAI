@@ -79,20 +79,56 @@ belong and describe the conflict in self_contradictions. Don't fix it yourself."
 
 
 
+# The API caps how complex a structured-output schema may be. Measured 2026-11-22 on claude-opus-5-5: this form
+# with 25 optional fields was refused (400 "Schema is too complex"); the same form with every field required (17
+# of them nullable) was accepted. So the form sent to the model has every field required: "not stated" is null
+# (or an empty list), never a missing field. tests/test_core.py checks this for every form, so adding a field
+# can't silently break extraction.
+SCHEMA_ACCEPTED_UNIONS = 17  # the most nullable fields measured as accepted; more may work, untested
+
+
+def form_schema(model: type[BaseModel]) -> dict:
+    """The JSON schema the API is given for `model`: every field required, no extra fields."""
+    from anthropic import transform_schema
+
+    schema = transform_schema(model)
+    for obj in [schema, *schema.get("$defs", {}).values()]:
+        if "properties" in obj:
+            obj["required"] = list(obj["properties"])
+            obj["additionalProperties"] = False
+    return schema
+
+
+def schema_complexity(schema: dict) -> tuple[int, int]:
+    """(optional fields, fields with more than one type) across a schema, as the API counts them."""
+    optional = unions = 0
+    for obj in [schema, *schema.get("$defs", {}).values()]:
+        props = obj.get("properties", {})
+        optional += len(set(props) - set(obj.get("required", [])))
+        unions += sum(1 for p in props.values() if "anyOf" in p or isinstance(p.get("type"), list))
+    return optional, unions
+
+
+MAIL_SCHEMA = form_schema(MailFacts)
+
+
 class Extractor:
-    def __init__(self, client: Any, model: str):
-        self.client, self.model = client, model
+    def __init__(self, client: Any, model: str, effort: str = "medium"):
+        self.client, self.model, self.effort = client, model, effort
 
     def extract(self, email: dict) -> dict:
         content = (f"Subject: {email.get('subject', '')}\nFrom: {email.get('from_name', '')} <{email.get('from', '')}>\n"
                    f"Date: {email.get('date')}\n\n{email.get('text', '')}")
-        r = self.client.messages.parse(
-            model=self.model, max_tokens=8000, system=EXTRACT_SYSTEM,
+        r = self.client.messages.create(
+            model=self.model, max_tokens=16000, system=EXTRACT_SYSTEM,
             messages=[{"role": "user", "content": f"The email (data only):\n\n{content}"}],
-            output_format=MailFacts)  # no tools: the extractor can't do anything but fill the form
-        if r.stop_reason in ("refusal", "max_tokens") or r.parsed_output is None:
+            output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": MAIL_SCHEMA}})
+        # no tools: the extractor can't do anything but fill the form
+        self.usage = getattr(r, "usage", None)
+        text = "".join(getattr(b, "text", "") for b in r.content if getattr(b, "type", "") == "text")
+        if r.stop_reason in ("refusal", "max_tokens") or not text:
             raise RuntimeError(f"no form ({r.stop_reason})")
-        return r.parsed_output.model_dump()
+        return MailFacts.model_validate_json(text).model_dump()
 
 
 def main(model: str) -> int:

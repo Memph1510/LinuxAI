@@ -202,6 +202,8 @@ class Agent:
         read = getattr(u, "cache_read_input_tokens", 0) or 0
         write = getattr(u, "cache_creation_input_tokens", 0) or 0
         fresh = u.input_tokens or 0
+        split = getattr(u, "cache_creation", None)  # the API says how much of the write was 1-hour vs 5-minute
+        write_1h = (getattr(split, "ephemeral_1h_input_tokens", 0) or 0) if split is not None else None
         self.usage["input"] += fresh + read + write
         self.usage["cache_read"] += read
         self.usage["cache_write"] += write
@@ -211,6 +213,7 @@ class Agent:
             with open(self.ledger, "a") as f:
                 f.write(json.dumps({"ts": round(time.time(), 1), "role": self.role, "model": getattr(response, "model", self.config.model),
                                     "effort": self.config.effort, "input": fresh, "cache_read": read, "cache_write": write,
+                                    **({"cache_write_1h": write_1h} if write_1h is not None else {}),
                                     "output": u.output_tokens or 0, "turn_messages": len(self.messages),
                                     "stop": getattr(response, "stop_reason", None)}) + "\n")
         except OSError:
