@@ -153,6 +153,38 @@ CHECKS = [
 ]
 
 
+# Run last (they restart the core): the orchestrator's disposable-VM checks (LX-VM-1). A local SMTP sink over TLS with
+# a certificate this VM trusts; a message the human refuses never leaves, one they approve reaches the sink; an
+# agreement the AI proposes stays unconfirmed until the human confirms it. Scripts: image/vmcheck/.
+VMCHECK = Path(__file__).resolve().parent / "vmcheck"
+LATE_CHECKS = [
+    ("mail sink over TLS, trusted by this VM; the core set up to send to it",
+     "cd /tmp && openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost"
+     " -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout sink.key -out sink.crt 2>/dev/null"
+     " && trust anchor --store sink.crt && update-ca-trust && (nohup python3 /tmp/smtp_sink.py /tmp/sink.crt /tmp/sink.key 4650 /tmp/sink >/tmp/sink.log 2>&1 &);"
+     " printf 'LINUXAI_SMTP_URL=smtps://localhost:4650\\nLINUXAI_SMTP_USER=sink\\nLINUXAI_SMTP_PASSWORD=x\\nLINUXAI_MAIL_FROM=linuxai@example.com\\n'"
+     " >> /etc/linuxai/mail.env && systemctl restart linuxai-core && sleep 4 && linuxai-core ctl '{\"op\":\"ping\"}' | grep -c '\"ok\": true'",
+     r"^1"),
+    ("a message the human refuses never leaves the machine",
+     "python3 /tmp/vmcheck.py refuse /tmp/sink", r"refuse: asked first: True; now stopped; messages at the sink: 0"),
+    ("a message the human approves reaches the mail sink",
+     "python3 /tmp/vmcheck.py approve /tmp/sink", r"approve: asked first: True; now done; messages at the sink: 1; subject ok: True"),
+    ("an agreement the AI proposes stays unconfirmed until the human confirms it",
+     "python3 /tmp/vmcheck.py agreement /tmp/sink",
+     r"proposed by the AI: proposed; AI confirming it: False, still proposed; the human confirms: True, now agreed"),
+]
+
+
+def copy_in(con, src: Path, dest: str) -> None:
+    """A file into the VM over the serial console: base64 in short lines (the console can't take long ones)."""
+    import base64
+    b = base64.b64encode(src.read_bytes()).decode()
+    con.run(f"rm -f {dest}.b64", 30)
+    for i in range(0, len(b), 600):
+        con.run(f"echo '{b[i:i + 600]}' >> {dest}.b64", 30)
+    con.run(f"base64 -d {dest}.b64 > {dest}", 30)
+
+
 class Serial:
     def __init__(self, path: str):
         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -310,6 +342,13 @@ def main() -> int:
         if (tmp / "tty1.ppm").exists():
             ppm_to_png(tmp / "tty1.ppm", shots / "linuxai-tty1.png")
             print(f"  screenshot of the main screen: {shots / 'linuxai-tty1.png'}")
+        copy_in(con, VMCHECK / "smtp_sink.py", "/tmp/smtp_sink.py")
+        copy_in(con, VMCHECK / "mail_and_agreements.py", "/tmp/vmcheck.py")
+        for name, cmd, expect, *limit in LATE_CHECKS:
+            out = con.run(cmd, limit[0] if limit else 180)
+            ok = re.search(expect, out, re.M) is not None
+            failed += not ok
+            print(f"  {'✓' if ok else '✗'} {name}" + ("" if ok else f"\n      got: {out[-300:]!r}"), flush=True)
     finally:
         qemu.terminate()
     print("PASS" if not failed else f"FAIL ({failed} checks)")
