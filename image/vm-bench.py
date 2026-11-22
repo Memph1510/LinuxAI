@@ -16,6 +16,7 @@ import argparse
 import importlib.util
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -72,8 +73,15 @@ def main() -> int:
         print(f"failing units: {' '.join(state.split())}", flush=True)
         con.run("mkdir -p /tmp/bench/tests", 30)
         tb.copy_in(con, ROOT / "tests" / "thinking_bench.py", "/tmp/bench/tests/thinking_bench.py")
+        # Use the address this host uses for the API (some hosts pin it in /etc/hosts and refuse others).
+        api_ip = socket.gethostbyname("api.anthropic.com")
+        con.run(f"echo '{api_ip} api.anthropic.com' >> /etc/hosts", 30)
         reach = con.run("curl -s -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/models", 60)
-        print(f"API reachable from the VM: HTTP {reach.strip()[-3:]}", flush=True)
+        code = reach.strip()[-3:]
+        print(f"API reachable from the VM: HTTP {code}", flush=True)
+        if code not in ("200", "401"):
+            print("the VM can't reach the API; stopping before any spend")
+            return 1
         # The key: typed with echo off, kept only in this shell's environment.
         con.send(f"export ANTHROPIC_API_KEY='{key}'\n")
         time.sleep(1)
