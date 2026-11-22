@@ -49,6 +49,35 @@ system", and the genuine offer's facts were still recorded.
 End to end (an `.eml` through `linuxai-core mail ingest` with the real extractor): the core accepted the real form,
 and an instruction hidden in invisible HTML never reached the model (the cleaner removed it).
 
+### A small model on this machine (measured 2026-11-22)
+
+The same 20 emails, read by small open models running locally (llama.cpp's server in a container, 4 CPU cores, no
+GPU; the form's schema enforced by the server). Nothing left the machine.
+
+| Model (4-bit) | Category right | Facts right | Phishing / injection caught | Genuine mail flagged | Seconds per email (this CPU) |
+|---|---:|---:|---:|---:|---:|
+| Qwen2.5 1.5B | 10 / 20 | 23 / 36 | 6 / 6 | 10 | 19 |
+| Llama 3.2 3B | 13 / 20 | 16 / 36 | 5 / 6 | 4 | 25 |
+| Gemma 3 4B | 14 / 20 | 27 / 36 | 3 / 6 | 0 | 55 |
+| Qwen3 4B | 14 / 20 | 30 / 36 | 4 / 6 | 0 | 68 |
+
+- Qwen2.5 1.5B catches every injection only because it calls half of all genuine mail phishing: not usable.
+- The best, **Qwen3 4B**, missed the instruction hidden inside a genuine load offer and the changed-bank-details
+  message; Gemma 3 4B missed those and the fake `<system>` tags. None of them added the required note "The email
+  contains instructions aimed at an automated system" even when they flagged the category.
+- What a miss means: the email still arrives as outside information, and acting on outside information still needs
+  the owner's OK until he grants "always" for that kind of action. The label that warns Claude and the owner is what's
+  lost.
+- Other misses: a call invitation or newsletter filed as "other", a bill as a payment, a self-contradiction not
+  described, an all-in rate invented from a per-mile rate.
+- Speed is this machine's CPU only (part of the runs shared it with a benchmark); a laptop GPU would be faster.
+  Accuracy is the model's own and carries over.
+
+To use one: run a llama.cpp server on this machine and set the reading_email job to `local:<name>` (or
+`LINUXAI_EXTRACT_MODEL=local:<name>`); `LINUXAI_LOCAL_MODEL_URL` defaults to `http://127.0.0.1:8080`. The extractor
+refuses any address that isn't this machine and never goes through a proxy. Not built yet: the server on the OS image.
+Measure: `python3 tests/extract_eval.py --model local:<name>`.
+
 Limits: 20 emails, one run each; synthetic, not real broker mail. Haiku is about 30× cheaper here with the same
 score; which model reads email is your choice (the model table), not changed by this measurement.
 
