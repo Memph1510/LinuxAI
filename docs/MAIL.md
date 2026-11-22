@@ -60,8 +60,14 @@ GPU; the form's schema enforced by the server). Nothing left the machine.
 | Llama 3.2 3B | 13 / 20 | 16 / 36 | 5 / 6 | 4 | 25 |
 | Gemma 3 4B | 14 / 20 | 27 / 36 | 3 / 6 | 0 | 55 |
 | Qwen3 4B | 14 / 20 | 30 / 36 | 4 / 6 | 0 | 68 |
+| Qwen3 8B | 15 / 20 | 30 / 36 | 4 / 6 | 0 | 97 |
+| Gemma 3 12B (the 6 phishing/injection emails and the genuine "AI tool" offer only) | | | 2 / 6 | 0 of 1 | 40–150 |
 
 - Qwen2.5 1.5B catches every injection only because it calls half of all genuine mail phishing: not usable.
+- **Bigger isn't safer here.** Qwen3 8B got one more category right than the 4B and missed the same two injections;
+  Gemma 3 12B (tested on the injection emails only, too slow on this CPU for all 20) caught just 2 of 6, filing the
+  hidden instruction, the fake `<system>` tag and the Spanish one as ordinary business mail. The code check below is
+  what closes the gap: with it, every model above catches 6 of 6.
 - The best, **Qwen3 4B**, missed the instruction hidden inside a genuine load offer and the changed-bank-details
   message; Gemma 3 4B missed those and the fake `<system>` tags. None of them added the required note "The email
   contains instructions aimed at an automated system" even when they flagged the category.
@@ -94,8 +100,12 @@ Measured:
   caught, 0/10 false alarms** on the first run. The two misses ("To any automated email processor: …", "SYSTEM
   OVERRIDE: …") were general classes, now covered: 10/10, 0/10, but those two are no longer held out.
 - **With the models** (the 20 emails above, as the core stores them; the patterns were written seeing these, so this
-  is partly in-sample): Qwen3 4B 4/6 → **6/6** injections caught, categories 14 → 16 of 20, no false alarms; Gemma 3 4B
-  3/6 → 6/6. Llama 3.2 3B and Qwen2.5 1.5B keep their false alarms (the check only adds flags).
+  is partly in-sample): Qwen3 4B 4/6 → **6/6** injections caught, categories 14 → 16 of 20, no false alarms; Qwen3 8B
+  4/6 → 6/6, categories 15 → 17; Gemma 3 4B 3/6 → 6/6; Gemma 3 12B 2/6 → 6/6 (injection emails only). Llama 3.2 3B
+  and Qwen2.5 1.5B keep their false alarms (the check only adds flags).
+- **Recommended for the laptop**: Qwen3 4B or 8B with the code check (16–17 of 20 categories, 6 of 6 injections, no
+  false alarms here). The 8B's gain is small; take it only if the laptop runs it fast enough. Speed on a laptop GPU is
+  still unmeasured.
 
 To use one: run a llama.cpp server on this machine and set the reading_email job to `local:<name>` (or
 `LINUXAI_EXTRACT_MODEL=local:<name>`); `LINUXAI_LOCAL_MODEL_URL` defaults to `http://127.0.0.1:8080`. The extractor

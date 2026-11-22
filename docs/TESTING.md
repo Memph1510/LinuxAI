@@ -58,8 +58,9 @@ doesn't pick it up. Pass it to a command explicitly, without printing it:
   workload never told the real model the owner's terms, so it couldn't decide replies ahead. With them seeded: 86
   requests, $1.66, nothing left unhandled, 2 of 2 replies decided ahead, the rate con filed by the core, 3 of 3 new
   loads reported. See THINKING.md.
-- **Email on a small local model:** Qwen3 4B, the best of four, got 14/20 categories, 30/36 facts and 4/6
-  injection attempts with no false alarms, at 68 s per email on 4 CPU cores. See MAIL.md. Its first run found the second
+- **Email on a small local model:** Qwen3 4B got 14/20 categories, 30/36 facts and 4/6 injection attempts with no
+  false alarms, at 68 s per email on 4 CPU cores; Qwen3 8B 15/20, 30/36, 4/6; Gemma 3 12B 2/6 injections. With the
+  core's code check, all catch 6/6 (the check alone: 8/10 on held-out emails, then 10/10, no false alarms). See MAIL.md. Its first run found the second
   real bug: a tool that raised an unexpected error (a screenshot reply without a tab) ended the whole background AI.
   Now any tool failure comes back to the AI as an error result, and a test checks it.
 - **Lints:** no new findings from this session's changes (ruff baseline unchanged; tests rerun after lint fixes).
