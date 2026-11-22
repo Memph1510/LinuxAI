@@ -24,6 +24,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -457,6 +458,9 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     seen = core.request("events", since=0, limit=1)["last"]
     stats = {"situations": 0, "to_model": 0, "habit_used": 0, "conversations": 0, "replies": 0, "replies_expected": 0,
              "replies_told": 0, "board_new": 0, "board_told": 0, "ratecons": 0, "ratecons_checked": 0}
+    told: list[dict] = []
+    board_refs: set[str] = set()
+    reply_refs: set[str] = set()
     orig_reset = agent.reset
 
     def counting_reset():
@@ -480,12 +484,20 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
                 said = (d.get("text") or "") if k == "ai.tell" else ((d.get("wait") or {}).get("question") or "") if k == "plan.waiting" else ""
                 if k == "ai.tell" and "matches what was agreed" in (d.get("text") or ""):
                     stats["ratecons_checked"] += 1
-                if k == "ai.tell" and "New load to Atlanta" in (d.get("text") or ""):
-                    stats["board_told"] += (d.get("text") or "").count(" at $")
-                if "Hollis came back at $" in said or "Hollis dropped to $" in said:
-                    stats["replies_told"] += 1  # the human heard the answer, with where the exchange stands
-                if k == "plan.waiting" and "Take it?" in said:
-                    core.request("answer", plan_id=d["plan_id"], text="take", source="human")
+                if said:
+                    told.append({"kind": k, "text": said})
+                # Counted from what reached the human, not from wording (the real model words things its own way):
+                # a new matching load is told once its reference (L-<day>9<n>) reaches the human; a negotiation
+                # reply once its reference (HL-<day>-<n>) and a dollar amount do, outside the core's own
+                # "matches what was agreed" filing.
+                if said:
+                    for ref in re.findall(r"\bL-\d+9\d\b", said):
+                        board_refs.add(ref)
+                    if "matches what was agreed" not in said and "$" in said:
+                        for ref in re.findall(r"\bHL-\d+-\d+\b", said):
+                            reply_refs.add(ref)
+                if k == "plan.waiting" and re.search(r"\bHL-\d+-\d+\b", said) and (d.get("wait") or {}).get("question"):
+                    core.request("answer", plan_id=d["plan_id"], text="take", source="human")  # the human takes the deal
                 if k == "message.received" and d.get("expected_by"):
                     stats["replies_expected"] += 1
                 with contextlib.redirect_stdout(io.StringIO()):
@@ -555,8 +567,19 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     journal = core.request("journal", limit=5000)["journal"]
     restarts = sum(1 for j in journal if "restart" in json.dumps(j))
     proc.terminate()
-    return {"strategy": strategy, **stats, **meter.total, "cost": meter.cost(), "left_unhandled": len(waiting),
-            "restarts": restarts, "requests_per_situation": None}
+    stats["board_told"], stats["replies_told"] = len(board_refs), len(reply_refs)
+    total, cost = meter.total, meter.cost()
+    if real:  # the real API's own usage, from the agent's ledger
+        rows = [json.loads(x) for x in (cfg.home / "usage.jsonl").read_text().splitlines()] if (cfg.home / "usage.jsonl").exists() else []
+        w1 = sum(r.get("cache_write_1h", 0) for r in rows)
+        total = {"requests": len(rows), "input": sum(r["input"] for r in rows), "cache_read": sum(r["cache_read"] for r in rows),
+                 "cache_write_5m": sum(r["cache_write"] for r in rows) - w1, "cache_write_1h": w1,
+                 "output": sum(r["output"] for r in rows)}
+        cost = (total["input"] * PRICE["in"] + total["cache_write_5m"] * PRICE["in"] * 1.25 + total["cache_write_1h"] * PRICE["in"] * 2
+                + total["cache_read"] * PRICE["read"] + total["output"] * PRICE["out"]) / 1e6
+    (tmp / "told.json").write_text(json.dumps(told, indent=1))
+    return {"strategy": strategy, **stats, **total, "cost": cost, "left_unhandled": len(waiting),
+            "restarts": restarts, "requests_per_situation": None, "told_log": str(tmp / "told.json")}
 
 
 def main() -> int:
@@ -565,6 +588,8 @@ def main() -> int:
     ap.add_argument("--real", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--only", choices=["negotiation", "board"], help="run one scenario alone")
+    ap.add_argument("--strategies", default="full-old,full,ladder",
+                    help="which to run, comma-separated (e.g. ladder: the day as it runs now, without the before)")
     args = ap.parse_args()
     if not CORE_BIN.exists():
         print("build the core first: cd core && cargo build --release")
@@ -572,7 +597,11 @@ def main() -> int:
     if args.real and not os.environ.get("ANTHROPIC_API_KEY"):
         print("--real needs ANTHROPIC_API_KEY")
         return 2
-    results = [run(s, args.days, args.real, args.only) for s in ("full-old", "full", "ladder")]
+    chosen = [x.strip() for x in args.strategies.split(",") if x.strip()]
+    if not chosen or any(x not in ("full-old", "full", "ladder") for x in chosen):
+        print("--strategies takes full-old, full and/or ladder")
+        return 2
+    results = [run(x, args.days, args.real, args.only) for x in chosen]
     if args.json:
         print(json.dumps(results, indent=1))
         return 0
@@ -598,11 +627,18 @@ def main() -> int:
           + f"   (rate confirmations: {results[0]['ratecons']})")
     print(f"{'new matching loads told to you':<34}" + "".join(f"{r['board_told']:>33}" for r in results)
           + f"   (new matching loads: {results[0]['board_new']})")
-    base = results[0]["cost"] or 1
-    print(f"\nThe ladder: {results[2]['cost'] / base:.0%} of the cost, {results[2]['requests']} requests instead of "
-          f"{results[0]['requests']}, for the same work.")
-    print("Assumed (see the header): the model follows its instructions; thinking per response by effort; "
-          "~3.5 characters per token. Measured from real code: everything else.")
+    by = {r["strategy"]: r for r in results}
+    if "full-old" in by and "ladder" in by:
+        base = by["full-old"]["cost"] or 1
+        print(f"\nThe ladder: {by['ladder']['cost'] / base:.0%} of the cost, {by['ladder']['requests']} requests instead of "
+              f"{by['full-old']['requests']}, for the same work.")
+    if args.real:
+        print("Measured: the real model, its real token usage (from the agent's ledger, cache writes as the API reported them).")
+    else:
+        print("Assumed (see the header): the model follows its instructions; thinking per response by effort; "
+              "~3.5 characters per token. Measured from real code: everything else.")
+    for r in results:
+        print(f"Everything said to the human ({names[r['strategy']]}): {r['told_log']}")
     return 0
 
 

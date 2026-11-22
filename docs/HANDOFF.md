@@ -158,12 +158,14 @@ problem shows up, or when connecting anything that can commit money or the busin
 load board that books loads directly).
 
 **Unproven** (the biggest risks, in order):
-1. **The real Claude model has never run, not once.** Every AI-layer test uses a scripted model. The request uses
-   adaptive thinking, `output_config.effort`, top-level `cache_control`, the server-side fallback beta and
-   `eager_input_streaming` on tools; none has been accepted by the live API from this code. Expect first-call fixes.
-2. **The email extractor has never run** (it calls the model). Classification, phishing detection and claim
-   extraction quality are unmeasured; tests feed hand-written extractions.
-3. **The benchmark savings depend on the real model behaving like the stand-in** (e.g. writing decided-ahead plans).
+1. ~~The real Claude model has never run.~~ **Ran 2026-11-22** (issue #14): the request shape was accepted as
+   written; a real `cortex` turn, a real background event and all 5 acceptance scenarios passed (TESTING.md).
+   Still thin: a handful of real conversations, not days of use.
+2. ~~The email extractor has never run.~~ **Ran 2026-11-22** (issue #15): its schema was refused by the API and
+   fixed; then 20/20 synthetic emails right, including 6/6 phishing and injection attempts (MAIL.md). Still
+   unmeasured on real broker mail.
+3. **The benchmark savings with the real model**: only the ladder was run for real (the owner's choice, to save
+   cost); the "before" side is still the scripted estimate (THINKING.md).
 4. **Never run on real hardware**: only QEMU TCG with `-cpu SandyBridge`, no GPU. Install-to-disk, dual boot, power
    and sched_ext controls, the screen on a real GPU: untested.
 5. **Nobody has used it** for real days of mail and loads. Soak tests use synthetic events.
@@ -187,13 +189,15 @@ correctness); `chrono`/`chrono-tz` marked unmaintained upstream.
 
 ## 7. What to do next (in order)
 
-**Session 1 with the API key** (the owner adds `ANTHROPIC_API_KEY` as an environment variable in the cloud
-environment's settings; Anthropic hosts can't be network secrets; a new session picks it up):
+**Session 1 with the API key: done 2026-11-22** except as noted (key stored as `LINUXAI_ANTHROPIC_API_KEY` in the
+cloud environment; pass it as `ANTHROPIC_API_KEY="$LINUXAI_ANTHROPIC_API_KEY"` per command, see TESTING.md):
 1. `python3 tests/token_profile.py`: exact prefix and per-tool tokens (free). Fix anything the API rejects.
 2. One real `cortex` turn and one real mind event; fix request-shape errors first (see §6.1).
 3. `python3 tests/uat.py`: the acceptance scenarios with their token cost (a few cents each).
-4. `python3 tests/thinking_bench.py --real`: the benchmark against the real model (costs real money; ask first).
-5. Real email extraction on a handful of real (or realistic, owner-approved) emails: classification, claims, phishing.
+4. `python3 tests/thinking_bench.py --real`: ladder only, by the owner's choice (`--strategies ladder`). The full
+   three-strategy run (about $10–25) is still open, if the owner wants the before/after measured.
+5. Real email extraction: done on 20 realistic synthetic emails (`tests/extract_eval.py`). Real samples only if
+   the owner provides them.
 6. Update `docs/TESTING.md` / `docs/THINKING.md` / `docs/TOKEN_EFFICIENCY.md` with measured numbers, replacing
    assumptions.
 

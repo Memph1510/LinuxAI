@@ -448,19 +448,23 @@ def print_usage(config: Config) -> None:
         except ValueError:
             continue
         key = (datetime.date.fromtimestamp(r["ts"]).isoformat(), r.get("role", "?"), r.get("model", "?"))
-        d = days.setdefault(key, {"requests": 0, "input": 0, "cache_read": 0, "cache_write": 0, "output": 0})
+        d = days.setdefault(key, {"requests": 0, "input": 0, "cache_read": 0, "cache_write": 0, "cache_write_1h": 0, "output": 0})
         d["requests"] += 1
         for k in ("input", "cache_read", "cache_write", "output"):
             d[k] += r.get(k, 0)
+        d["cache_write_1h"] += r.get("cache_write_1h", r.get("cache_write", 0))  # older rows: assume 1-hour (upper bound)
     print(f"{'day':<11} {'role':<8} {'model':<18} {'reqs':>5} {'fresh in':>10} {'from cache':>11} {'to cache':>9} {'out':>8} {'cost':>8}  cached")
     for (day, role, model), d in sorted(days.items()):
         p_in, p_out, p_read = PRICES.get(model, (0, 0, 0))
-        cost = (d["input"] * p_in + d["cache_write"] * p_in * 2 + d["cache_read"] * p_read + d["output"] * p_out) / 1e6
+        w1 = min(d["cache_write_1h"], d["cache_write"])
+        cost = (d["input"] * p_in + w1 * p_in * 2 + (d["cache_write"] - w1) * p_in * 1.25 + d["cache_read"] * p_read
+                + d["output"] * p_out) / 1e6
         total_in = d["input"] + d["cache_read"] + d["cache_write"]
         hit = d["cache_read"] / total_in if total_in else 0
         print(f"{day:<11} {role:<8} {model:<18} {d['requests']:>5} {d['input']:>10,} {d['cache_read']:>11,} {d['cache_write']:>9,} "
               f"{d['output']:>8,} {'$' + format(cost, '.2f'):>8}  {hit:.0%}")
-    print("(cost counts cache writes at the 1-hour rate, an upper bound; 'cached' is the share of input read from the cache)")
+    print("(cache writes are priced as the API reported them, 1-hour or 5-minute; rows recorded before that was logged "
+          "count as 1-hour, an upper bound. 'cached' is the share of input read from the cache)")
 
 
 def main(argv: list[str] | None = None) -> None:

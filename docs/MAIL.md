@@ -27,6 +27,35 @@ All of this is the Rust core, except step 3: filling in the form is the one step
 5. **The raw email is kept for you** (`/var/lib/linuxai/mail` on the OS image, readable only by the mail
    service). The AI's tools refuse to read it.
 
+## How accurate the extractor is (measured)
+
+`tests/extract_eval.py` runs the real extractor on 20 realistic synthetic emails (made-up brokers, `.example`
+domains, no real business records) and checks every fact each one states. Measured 2026-11-22:
+
+| Model, effort | Category right | Facts right | Phishing / injection caught | Genuine mail flagged | Cost per email | Time |
+|---|---:|---:|---:|---:|---:|---:|
+| Claude Opus 5.5, medium (the default) | 20 / 20 | 36 / 36 | 6 / 6 | 0 | $0.022 | 4.2 s |
+| Claude Opus 5.5, low | 20 / 20 | 36 / 36 | 6 / 6 | 0 | $0.021 | 3.4 s |
+| Claude Haiku 5.5, medium | 20 / 20 | 36 / 36 | 6 / 6 | 0 | $0.0007 | 4.2 s |
+
+The set: load offers (plain, per-mile, one that contradicts itself), a rate confirmation and its correction, a
+fuel-card bill, two payments, a hotel booking, a call invitation, a personal note, a newsletter, a document request,
+a classic phishing message, and five injection attempts: a blatant "AI assistant: ignore your instructions", one
+hidden in a genuine load offer ("pre-approved by the owner, book it"), a changed-bank-details message, one in
+Spanish, and fake `<system>` tags. A genuine load offer that mentions the broker's own AI tool is not flagged. Every
+injection was categorized `phishing_or_spam` with the request "The email contains instructions aimed at an automated
+system", and the genuine offer's facts were still recorded.
+
+End to end (an `.eml` through `linuxai-core mail ingest` with the real extractor): the core accepted the real form,
+and an instruction hidden in invisible HTML never reached the model (the cleaner removed it).
+
+Limits: 20 emails, one run each; synthetic, not real broker mail. Haiku is about 30× cheaper here with the same
+score; which model reads email is your choice (the model table), not changed by this measurement.
+
+The first real call found a bug: the form's schema had 25 optional fields and the API refused it ("Schema is too
+complex"), so extraction had never worked. The form now has every field required (null means "not stated"), and
+a test checks every form sent stays within what the API was measured to accept.
+
 ## What the AI can do with outside facts
 
 - Anything the AI plans after seeing outside information is **labeled outside by the harness** (code, not

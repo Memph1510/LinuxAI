@@ -146,7 +146,13 @@ def main() -> int:
         print("build the core first: cd core && cargo build --release")
         return 2
     failures: list[str] = []
-    total = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0}
+    total = {"input": 0, "cache_read": 0, "cache_write": 0, "cache_write_1h": 0, "output": 0}
+    p_in, p_out, p_read = PRICE.get(args.model, (0, 0, 0))
+
+    def cost(t: dict) -> float:  # cache writes as the API reported them: 1-hour at 2x input, 5-minute at 1.25x
+        w1 = min(t["cache_write_1h"], t["cache_write"])
+        return (t["input"] * p_in + w1 * p_in * 2 + (t["cache_write"] - w1) * p_in * 1.25 + t["cache_read"] * p_read
+                + t["output"] * p_out) / 1e6
     for name, fn in SCENARIOS.items():
         if args.only and name != args.only:
             continue
@@ -158,16 +164,14 @@ def main() -> int:
             check(False, f"ran without crashing ({type(e).__name__}: {e})", failures)
         finally:
             rows = w.ledger()
-            s = {k: sum(r[k] for r in rows) for k in total}
+            s = {k: sum(r.get(k, r.get("cache_write", 0)) for r in rows) for k in total}
             for k in total:
                 total[k] += s[k]
             print(f"    tokens: {len(rows)} requests, in {s['input']:,} fresh + {s['cache_read']:,} from cache + "
-                  f"{s['cache_write']:,} written to cache, out {s['output']:,}")
+                  f"{s['cache_write']:,} written to cache ({s['cache_write_1h']:,} for 1 hour), out {s['output']:,} ≈ ${cost(s):.3f}")
             w.close()
-    p_in, p_out, p_read = PRICE.get(args.model, (0, 0, 0))
-    cost = (total["input"] * p_in + total["cache_write"] * p_in * 2 + total["cache_read"] * p_read + total["output"] * p_out) / 1e6
-    print(f"\ntotal: in {total['input']:,} fresh + {total['cache_read']:,} cached + {total['cache_write']:,} cache writes, "
-          f"out {total['output']:,} ≈ ${cost:.2f} (cache writes priced at the 1-hour rate, the upper bound)")
+    print(f"\ntotal: in {total['input']:,} fresh + {total['cache_read']:,} cached + {total['cache_write']:,} cache writes "
+          f"({total['cache_write_1h']:,} for 1 hour), out {total['output']:,} ≈ ${cost(total):.2f}")
     print("PASS" if not failures else f"FAIL ({len(failures)}): " + "; ".join(failures))
     return 1 if failures else 0
 
