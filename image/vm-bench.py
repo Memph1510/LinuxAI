@@ -82,6 +82,8 @@ def main() -> int:
             tb.copy_in(con, Path(args.ca), "/tmp/bench/extra-ca.pem")
             con.run("cat /etc/ssl/certs/ca-certificates.crt /tmp/bench/extra-ca.pem > /tmp/bench/ca.pem;"
                     " export SSL_CERT_FILE=/tmp/bench/ca.pem CURL_CA_BUNDLE=/tmp/bench/ca.pem", 30)
+        # The AI layer the image ships (and its packages), as the image's own cortex launcher sets it.
+        con.run("export PYTHONPATH=/opt/linuxai/lib", 30)
         reach = con.run("curl -s -o /dev/null -w '%{http_code}\\n' https://api.anthropic.com/v1/models", 60)
         code = reach.strip()[-3:]
         py = con.run("python3 -c 'import httpx; print(httpx.get(\"https://api.anthropic.com/v1/models\").status_code)' 2>&1 | tail -1", 60)
