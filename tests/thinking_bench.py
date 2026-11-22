@@ -411,6 +411,31 @@ def workload(days: int, only: str | None = None) -> list[tuple[float, str, dict]
     return sorted(out, key=lambda x: x[0])
 
 
+# What the owner has already taught the system about this broker, as he would through his answers: the same for every
+# strategy. Without it a real model has no way to know his terms (the scripted model had them built in), so it can only
+# ask; with it, the real model can counter and decide ahead what each answer means, as the owner's example intends.
+OWNER_KNOWLEDGE = [
+    ("contacts/hollis-logistics/dana", "what_matters",
+     ("Dana Ruiz, broker at Hollis Logistics (dana@hollis-logistics.example). We haul Dallas, TX to Atlanta, GA for her "
+      "regularly. Deals are confirmed by phone; an email alone doesn't commit us.")),
+    ("contacts/hollis-logistics/dana", "how_i_decide",
+     "When Dana offers a Dallas to Atlanta load at $3,000, counter at $3,500 by replying to her email."),
+    ("contacts/hollis-logistics/dana", "how_i_decide",
+     ("Her answer to a $3,500 counter: $3,100 or more, take it (ask me first); under $3,100, bring it to me with where "
+      "the exchange stands.")),
+    ("contacts/hollis-logistics/dana", "how_i_decide",
+     "Once a rate is agreed, record the agreement; her rate confirmation must match it exactly."),
+]
+
+
+def seed_owner_knowledge(core) -> None:
+    for category, section, text in OWNER_KNOWLEDGE:
+        r = core.request("playbook_edit", category=category, edits=[{"op": "add", "section": section, "text": text}],
+                         reason="what the owner has taught about this broker (benchmark seed)", source="human")
+        if not r.get("ok"):
+            raise RuntimeError(f"seeding the playbook failed: {r}")
+
+
 def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
     tmp = Path(tempfile.mkdtemp(prefix=f"linuxai-bench-{strategy}-"))
     os.environ["LINUXAI_HOME"] = str(tmp / "home")
@@ -444,6 +469,7 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
         "[board-watch] Keep an eye on the load board for Dallas to Atlanta loads at $2,500 or more: " + BOARD_URL
     core.request("add_rule", source="human", rule={"rule": "load-board", "when": "board.check" if old else "board.watch",
                                                    "steps": [{"think": note}]})
+    seed_owner_knowledge(core)
     model = None
     if real:
         import anthropic
@@ -479,6 +505,8 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
                 k, d = ev["kind"], ev.get("data") or {}
                 if k == "habit.used":
                     stats["habit_used"] += 1
+                if k == "agreement.proposed" and d.get("reference"):
+                    core.request("agreement_confirm", reference=d["reference"], source="human")  # the human: yes, that's what we agreed
                 if k == "plan.waiting" and (d.get("wait") or {}).get("approval"):
                     core.request("answer", plan_id=d["plan_id"], text="always", source="human")  # the human: yes, always
                 said = (d.get("text") or "") if k == "ai.tell" else ((d.get("wait") or {}).get("question") or "") if k == "plan.waiting" else ""
@@ -497,7 +525,11 @@ def run(strategy: str, days: int, real: bool, only: str | None = None) -> dict:
                         for ref in re.findall(r"\bHL-\d+-\d+\b", said):
                             reply_refs.add(ref)
                 if k == "plan.waiting" and re.search(r"\bHL-\d+-\d+\b", said) and (d.get("wait") or {}).get("question"):
-                    core.request("answer", plan_id=d["plan_id"], text="take", source="human")  # the human takes the deal
+                    # The human takes the deal, in the words of the question's own options (the real model words them
+                    # its own way; an answer outside the options can read as "no").
+                    opts = [str(o) for o in (d["wait"].get("opts") or [])]
+                    yes = next((o for o in opts if re.search(r"take|accept|yes|agree", o, re.IGNORECASE)), opts[0] if opts else "yes, take it")
+                    core.request("answer", plan_id=d["plan_id"], text=yes, source="human")
                 if k == "message.received" and d.get("expected_by"):
                     stats["replies_expected"] += 1
                 with contextlib.redirect_stdout(io.StringIO()):

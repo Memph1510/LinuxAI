@@ -126,9 +126,9 @@ tool inputs checked against their schemas before anything runs, and a usage ledg
 model is a scripted stand-in that follows its instructions): a simulated day costs **36–40 requests instead of 192,
 about 13%** ($0.91–$0.99 vs $7.41 est. on Opus 5.5); 3 days $2.83 vs $22.29. Same work in every run. **These are
 directional**: an agent wrote the stand-in for both sides. **With the real model** (2026-11-22, ladder only): the
-same day took **110 requests and $1.97**, all work handled. Decided-ahead negotiation replies were not exercised,
-because the workload never gives the real model the exchange's history; the failing services don't exist on the
-test container. See THINKING.md, "The real model".
+same day took **86 requests and $1.66** once the benchmark gave it the owner's terms for the broker: all work
+handled, both negotiation replies handled by plans decided ahead, the rate con filed by the core. The failing
+services don't exist on the test container. See THINKING.md, "The real model".
 
 ## 5. History (merged PRs)
 
