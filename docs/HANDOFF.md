@@ -30,6 +30,9 @@ business (freight broker email, load boards, rate confirmations, settlements, in
 - **The core logic must be sound before features.** (Bent in places: see the review in §6.)
 - **Token efficiency is about how the AI thinks and communicates while running the OS**, and must be measurable
   before an API key exists (it is: `tests/thinking_bench.py`).
+  **But execution comes first**: effective, reliable task completion matters more than the lowest token count. If
+  spending more tokens (more agents, more checking) gets tasks done better, that's the right trade; the owner will
+  pay for more tokens. Cut waste, not capability.
 - **The calendar is the AI's knowledge of the human's time**, not an app the human looks at. Things are added
   through conversation and used when planning, deciding and communicating.
 - **Merges**: the owner authorized merging PRs once CI and the boot test pass.
@@ -193,6 +196,14 @@ environment's settings; Anthropic hosts can't be network secrets; a new session 
 5. Real email extraction on a handful of real (or realistic, owner-approved) emails: classification, claims, phishing.
 6. Update `docs/TESTING.md` / `docs/THINKING.md` / `docs/TOKEN_EFFICIENCY.md` with measured numbers, replacing
    assumptions.
+
+**Later (the owner's direction, 2026-11-22): agents with sub-agents that talk to each other**, like Grok-style
+bots, through the core rather than a shared context, with **a running ledger of everything decided and how**: who
+proposed it, who questioned it, the evidence, the human's say, the outcome, searchable and shown in the Workspace.
+Builds on what exists: plans' reasoning modules, the journal, tasks with subtasks, cases and playbooks. Intended
+benefits: faster, more reliable task completion (parallel specialists with focused context), and separation of
+duties as a security aid (the agent that read a stranger's message isn't the one that approves acting on it; a
+checker agent reviews, as the independent review did by hand). Costs more tokens, which the owner accepts.
 
 **Then**: install on the owner's laptop (Stage 2 in `docs/CHECKLIST.md`) and a multi-day soak on real hardware;
 real SMTP sending with the owner's account (approved messages only); a local small model for triage (level 1.5);

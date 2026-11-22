@@ -77,6 +77,9 @@ steer, subagents included. Security hardening waits until something sensitive is
 - Email (imported mailbox), calendar, files as memory, bills and budgets, the freight-broker workflow
 - Always-on listener (tablet server or small cloud server)
 - Own email domain, local models, hardening
+- Agents with sub-agents that talk through the core, and a running ledger of every decision and how it was made
+  (proposer, objections, evidence, the human's say, outcome); a checker agent for plans resting on outside
+  information. Execution over token cost (see HANDOFF §7)
 
 ---
 
