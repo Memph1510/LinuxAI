@@ -5,3 +5,5 @@ __pycache__/
 core/target/
 out/
 work/
+# Boot test screenshots (image/test-boot.py --shots defaults to the current directory)
+/linuxai-*.png

@@ -107,9 +107,20 @@ Measured:
   false alarms here). The 8B's gain is small; take it only if the laptop runs it fast enough. Speed on a laptop GPU is
   still unmeasured.
 
-To use one: run a llama.cpp server on this machine and set the reading_email job to `local:<name>` (or
-`LINUXAI_EXTRACT_MODEL=local:<name>`); `LINUXAI_LOCAL_MODEL_URL` defaults to `http://127.0.0.1:8080`. The extractor
-refuses any address that isn't this machine and never goes through a proxy. Not built yet: the server on the OS image.
+**On LinuxAI** the local model server is part of the image (Arch's `llama-cpp`, with `ggml-vulkan` for most laptop
+GPUs; `llama-server.service`, listening only on `127.0.0.1:8080`). To read email on this machine:
+
+```sh
+linuxai-core models local                 # the models LinuxAI knows, and which are here
+sudo linuxai-core models fetch qwen3-4b   # 2.5 GB, kept only if it is exactly the pinned file (size and SHA-256)
+```
+
+then set the reading_email job to `local:qwen3-4b` (the Workspace's model table, or
+`LINUXAI_EXTRACT_MODEL=local:qwen3-4b`). The download URL is pinned to a repository revision and the hash to the file
+measured here, so a changed or tampered model is refused. `qwen3-8b` (5 GB) is the other choice. Elsewhere, any
+llama.cpp server on this machine works; `LINUXAI_LOCAL_MODEL_URL` defaults to `http://127.0.0.1:8080`. The extractor
+refuses any address that isn't this machine and never goes through a proxy. A model that isn't installed leaves the
+email stored without claims and the error recorded; the code check still runs.
 Measure: `python3 tests/extract_eval.py --model local:<name>` (scores the model alone and the form as the core stores it,
 after the code check); `python3 tests/steering_holdout.py` (the code check alone).
 

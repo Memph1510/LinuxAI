@@ -72,7 +72,7 @@ wasn't checked, and honest uncertainty. Measured claims, not adjectives. They th
 | `core/src/tests.rs` (+ tests inside modules) | 106 Rust tests |
 | `linuxai/` | Python, model-facing: `agent.py` (session + prompts + context), `mind.py` (behind-the-scenes AI and the thinking ladder), `tools.py` (every tool the model sees), `cli.py` (`cortex`), `mail.py` (extractor schema) |
 | `tests/` | `test_core.py` (58 Python tests), `thinking_bench.py`, `soak.py`, `uat.py`, `token_profile.py` |
-| `image/` | The Arch ISO: `build.sh` (docker), `build-in-arch.sh`, `airootfs/` (services, Workspace page, Quickshell layer), `test-boot.py` (31 checks in QEMU) |
+| `image/` | The Arch ISO: `build.sh` (docker), `build-in-arch.sh`, `airootfs/` (services, Workspace page, Quickshell layer), `test-boot.py` (37 checks in QEMU) |
 | `docs/` | Design and status docs (list in §9) |
 | `library/` | Starter prompt library, image-backend adapters |
 
@@ -216,9 +216,9 @@ checker agent reviews, as the independent review did by hand). Costs more tokens
 real SMTP sending with the owner's account (approved messages only); a local small model for triage (level 1.5);
 browser steps in plans (pages that need clicking before rows show); then features again.
 
-The Drive orchestrator report of 2026-11-21 also suggests disposable-VM checks of the new ISO: approved and refused
-synthetic messages against a local mail sink; a proposed agreement staying unconfirmed until a person confirms it.
-No live mailbox or real broker records for those tests.
+The disposable-VM checks the Drive orchestrator report of 2026-11-21 suggested are part of the boot test since
+2026-11-22: a local TLS mail sink in the VM; a refused message never leaves, an approved one arrives; an AI-proposed
+agreement stays unconfirmed until the human confirms it. Synthetic only; no live mailbox or real broker records.
 
 ## 8. How to work in this repo (process and gotchas)
 
@@ -233,7 +233,7 @@ No live mailbox or real broker records for those tests.
   `python3 tests/soak.py --minutes 5` · `python3 tests/thinking_bench.py [--days 3] [--only negotiation|board]`.
 - **Boot test** (≈1 h): start Docker if needed (`dockerd &`, then wait for `docker info`), build from a clean
   worktree of the exact commit: `EXTRA_CA=/root/.ccr/ca-bundle.crt ./image/build.sh`, then
-  `SERIAL_LOG=<file> python3 -u image/test-boot.py out/linuxai-*.iso` → expect 31 ✓ and `PASS`.
+  `SERIAL_LOG=<file> python3 -u image/test-boot.py out/linuxai-*.iso` → expect 37 ✓ and `PASS`.
 - **Gotchas learned the hard way**:
   - Arch's Blender needs AVX: the VM uses `-cpu SandyBridge`; no Cycles denoiser in TCG; llvmpipe crashes on
     emulated AVX2; don't add softpipe (it starved Hyprland).
@@ -273,3 +273,6 @@ No live mailbox or real broker records for those tests.
 | `LINUXAI_IMAP_*`, `LINUXAI_AUTHSERV_ID` | none | incoming mail (`/etc/linuxai/mail.env`) |
 | `LINUXAI_SMTP_URL/_USER/_PASSWORD`, `LINUXAI_MAIL_FROM` | none | outgoing mail (same file; the core reads it) |
 | `LINUXAI_KEEP_*` | see CHECKLIST | history retention |
+| `LINUXAI_EXTRACT_MODEL` | same as thinking | which model reads email; `local:qwen3-4b` reads it on this machine (MAIL.md) |
+| `LINUXAI_LOCAL_MODEL_URL` | `http://127.0.0.1:8080` | the local model server; loopback addresses only |
+| `LINUXAI_MODELS_DIR` | `/var/lib/linuxai/models` | where `linuxai-core models fetch` keeps local models |

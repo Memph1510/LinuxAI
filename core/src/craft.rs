@@ -84,7 +84,7 @@ fn installed_cli(cfg: &CraftConfig, app: &str, spec: &Value) -> Option<PathBuf> 
     p.is_file().then_some(p)
 }
 
-fn sha256_file(p: &Path) -> Result<String, String> {
+pub fn sha256_file(p: &Path) -> Result<String, String> {
     let mut f = std::fs::File::open(p).map_err(|e| e.to_string())?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
