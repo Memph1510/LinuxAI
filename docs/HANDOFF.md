@@ -246,6 +246,9 @@ No live mailbox or real broker records for those tests.
   - The 256 MB overlay of the live ISO fills fast (Chromium profiles): `cow_spacesize=50%`, failed writes are reported.
   - Running downloaded binaries on the host is blocked by policy: run third-party apps inside the Arch container.
   - The Docker daemon can be gone after the container is recycled: start it before building.
+  - A fresh container may have no QEMU: `apt-get install -y qemu-system-x86` before the boot test.
+  - The cloud environment stores the Claude key as `LINUXAI_ANTHROPIC_API_KEY`: pass it per command as
+    `ANTHROPIC_API_KEY="$LINUXAI_ANTHROPIC_API_KEY"`, never print it.
   - Rerun the tests after lint fixes, before committing: a clippy autofix applied after the last test run broke the
     test build once (CI run 44863232113); caught by CI before merge.
 
