@@ -277,10 +277,11 @@ mod tests {
         std::fs::write(dir.join("ws.html"), WS).unwrap();
         std::fs::write(dir.join("page.html"), PAGE).unwrap();
         fake_core(&dir.join("core.sock"));
-        let organ = Organ::new(bin, dir.join("profile"), true, Some(crate::client::Client::new(dir.join("core.sock"))));
-
+        let mut organ = Organ::new(bin, dir.join("profile"), true, Some(crate::client::Client::new(dir.join("core.sock"))));
         let ws_url = format!("file://{}", dir.join("ws.html").display());
-        let r = organ.handle(&json!({"op": "workspace", "url": ws_url}));
+        organ.workspace_url = ws_url.clone();
+        // Naming another page doesn't make it the Workspace.
+        let r = organ.handle(&json!({"op": "workspace", "url": format!("file://{}", dir.join("page.html").display())}));
         let ws = r["tab"].as_str().expect("workspace opened").to_string();
         let b = organ.browser().unwrap();
         assert!(organ.handle(&json!({"op": "tabs"}))["tabs"].as_array().unwrap().iter().all(|t| t["tab"] != ws.as_str()), "the Workspace isn't one of the pages");

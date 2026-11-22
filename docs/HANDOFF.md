@@ -30,9 +30,26 @@ business (freight broker email, load boards, rate confirmations, settlements, in
 - **The core logic must be sound before features.** (Bent in places: see the review in §6.)
 - **Token efficiency is about how the AI thinks and communicates while running the OS**, and must be measurable
   before an API key exists (it is: `tests/thinking_bench.py`).
+  **But execution comes first**: effective, reliable task completion matters more than the lowest token count. If
+  spending more tokens (more agents, more checking) gets tasks done better, that's the right trade; the owner will
+  pay for more tokens. Cut waste, not capability.
 - **The calendar is the AI's knowledge of the human's time**, not an app the human looks at. Things are added
   through conversation and used when planning, deciding and communicating.
 - **Merges**: the owner authorized merging PRs once CI and the boot test pass.
+
+**The owner's operating model** (rate every finding and every new restriction against this):
+- LinuxAI is like a 24/7 assistant bot (as Claude or other agents already work for him, e.g. his QuickBooks
+  bookkeeping, unattended), moved into its own environment. **Its identity is its own**: a dedicated mailbox,
+  dedicated logins, a temporary card, files that exist only in this OS. None of his personal accounts, logins or
+  cards. Broker deals are confirmed by phone, so a message alone doesn't commit him.
+- **Guardrails are learned with him, not preset.** He won't hand the OS a whole job ("go negotiate with this
+  broker") cold: it learns the work from what he does and the questions they settle together (tone, which brokers,
+  how each one reads), and the guardrails come from that. The machinery already works this way: first-time
+  situations go to him or get researched, his answers become playbooks and contact profiles, and trust is granted
+  per action ("always"). So don't add restrictions before there's a task; fix blockers as they're met.
+  Do fix anything that makes his own settings mean something other than what they say (an "always" broader than
+  what he saw, a record claiming he decided something he didn't, a fact shown as verified that isn't).
+- An OS password comes with install to disk.
 
 **How the owner likes to be talked to**: plain, short, specific; say what was done and how it was checked, what
 wasn't checked, and honest uncertainty. Measured claims, not adjectives. They think in concrete examples
@@ -128,9 +145,17 @@ directional until `--real` runs**: I (the agent) wrote the stand-in for both sid
 
 ## 6. Honest status (the objective review of 2026-11-21)
 
-**Solid**: the core's safety model (checked plans, durable, no repeats, learned trust, outside-info separation,
-each proven by a failing test first, incl. `kill -9` mid-plan); the Rust/Python split; real-component tests
-(Chromium, Blender in the VM, all 15 Craft apps, email ingestion, full image boot before each merge).
+**Solid**: durability (checked plans, no repeats, resumed after `kill -9`), crash containment, the Rust/Python
+split, real-component tests (Chromium, Blender in the VM, all 15 Craft apps, email ingestion, full image boot before
+each merge). **The safety model is a set of settings, not a security boundary**: the independent review (issue #22,
+2026-11-21) showed the AI could get around approvals. Under the owner's operating model (§1) that's rated medium,
+not critical. What was fixed after the review (CHECKLIST, "Independent review"): an "always" covers only the literal value the
+human saw; only the core records that the human answered; plans can't write provenance or system records, and only
+recorded outside facts can be cited; the Workspace bridge serves only the Workspace page. **Deferred by the owner's
+decision (capability first)**: sandboxing "read-only" commands, a separate user for the AI, peer-authenticated
+"human" on the core socket, approvals on browser actions (review C1, H4, M1–M5; issues #16, #17). Revisit if a real
+problem shows up, or when connecting anything that can commit money or the business without a phone call (e.g. a
+load board that books loads directly).
 
 **Unproven** (the biggest risks, in order):
 1. **The real Claude model has never run, not once.** Every AI-layer test uses a scripted model. The request uses
@@ -171,6 +196,14 @@ environment's settings; Anthropic hosts can't be network secrets; a new session 
 5. Real email extraction on a handful of real (or realistic, owner-approved) emails: classification, claims, phishing.
 6. Update `docs/TESTING.md` / `docs/THINKING.md` / `docs/TOKEN_EFFICIENCY.md` with measured numbers, replacing
    assumptions.
+
+**Later (the owner's direction, 2026-11-22): agents with sub-agents that talk to each other**, like Grok-style
+bots, through the core rather than a shared context, with **a running ledger of everything decided and how**: who
+proposed it, who questioned it, the evidence, the human's say, the outcome, searchable and shown in the Workspace.
+Builds on what exists: plans' reasoning modules, the journal, tasks with subtasks, cases and playbooks. Intended
+benefits: faster, more reliable task completion (parallel specialists with focused context), and separation of
+duties as a security aid (the agent that read a stranger's message isn't the one that approves acting on it; a
+checker agent reviews, as the independent review did by hand). Costs more tokens, which the owner accepts.
 
 **Then**: install on the owner's laptop (Stage 2 in `docs/CHECKLIST.md`) and a multi-day soak on real hardware;
 real SMTP sending with the owner's account (approved messages only); a local small model for triage (level 1.5);
