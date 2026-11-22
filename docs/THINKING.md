@@ -178,8 +178,8 @@ What's still different, read from the messages the AI sent the human (the benchm
   needs a machine where those services exist (the VM image).
 - **More conversations than the stand-in**: the synthetic tasks carry no details ("Weekly fuel report") and the
   synthetic routine emails are one line ("rate $1,630"), so the real AI asked instead of guessing.
-- **Money shown in cents to the human** ("320000 cents"): its plans put the raw `rate_cents` value in the question.
-  To fix in the core's text interpolation, not by prompt.
+- **Money was shown in cents to the human** ("320000 cents"): its plans put the raw `rate_cents` value in the question.
+  Fixed in the core: a `_cents` field in text now reads as dollars ("$3,200"), and records read "rate $3,200".
 - In the unseeded run the benchmark's scripted human answered "take" even when the AI offered other options; an
   answer outside the options read as "no", and the AI caught the contradiction and asked again. The scripted human
   now answers with the question's own "accept" option.
@@ -232,7 +232,6 @@ lifecycle.
   anything reaches Claude. Measurable with this benchmark once added.
 - **Run the benchmark in the VM image**, where the failing services exist; then the full `--real` run (all three
   strategies) if the owner wants the before/after measured.
-- **Show money as dollars** when a plan puts a `_cents` value in text for the human.
 - **Effort sweep with the real model**: email extraction scored the same at low and medium effort (MAIL.md); the
   mind's routine work still needs the sweep.
 - **More habit-ready rules**: name the situations of the AI's own recurring plans.

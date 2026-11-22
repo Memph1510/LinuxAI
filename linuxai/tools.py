@@ -565,7 +565,8 @@ Steps (one keyword each):
   {"think": "<note>"}                           hand back to you for judgment
   {"call": "<saved plan name>", "with": {...}}
 Expressions: "$var.path" reads a variable ($state = live machine state, $event = triggering event);
-"{$var}" inside text interpolates; prefix lists compute: ["=", a, b] [">", a, b] ["and", ...] ["+", a, b]
+"{$var}" inside text interpolates (a field ending in _cents reads as dollars: "{$offer.rate_cents}" -> "$3,200"; don't
+add "cents"); prefix lists compute: ["=", a, b] [">", a, b] ["and", ...] ["+", a, b]
 ["*", a, b] ["avg", "field", list] ["sum", list] ["count", list] ["pct", a, b] ["has", a, b] ["exists", a]
 ["get", obj, "field"] ["first", list] ["pick", list, "field", value] (first item whose field equals value).
 Long work: {"do": "run", "program": ..., "args": [...], "background": true, "as": "job"}, then

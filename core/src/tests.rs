@@ -1454,3 +1454,23 @@ fn an_always_covers_what_the_human_saw_and_nobody_can_claim_their_yes() {
     let r = engine::check(&cite, &c.mem, "ai", 0.8);
     assert!(r.errors.iter().any(|e| e.contains("isn't a recorded outside fact")), "{:?}", r.errors);
 }
+
+#[test]
+fn money_in_messages_reads_as_dollars() {
+    assert_eq!(engine::dollars(320000.0), "$3,200");
+    assert_eq!(engine::dollars(12345.0), "$123.45");
+    assert_eq!(engine::dollars(-150000000.0), "-$1,500,000");
+    assert_eq!(engine::human("terms", &json!({"rate_cents": 320000, "miles": 781})), "miles 781, rate $3,200");
+    let (c, _) = core();
+    let r = c.handle(&json!({"op": "add_rule", "source": "human", "rule": {"rule": "m", "when": "test.offer", "steps": [
+        {"tell": "Dana answered with {$event.data.rate_cents} cents; the board pays {$event.data.board.rate_cents}. \
+                  Total {$event.data.count} loads, {$event.data.terms}."}]}}));
+    assert_eq!(r["ok"], true, "{r}");
+    c.emit("test.offer", json!({"rate_cents": 320000, "count": 3, "board": {"rate_cents": 260050},
+                                "terms": {"rate_cents": 280000}}));
+    let ev = c.handle(&json!({"op": "events", "since": 0}));
+    let tells: Vec<String> = ev["events"].as_array().unwrap().iter().filter(|e| e["kind"] == "ai.tell")
+        .map(|e| e["data"]["text"].as_str().unwrap().to_string()).collect();
+    assert_eq!(tells, vec!["Dana answered with $3,200; the board pays $2,600.50. Total 3 loads, rate $2,800.".to_string()],
+               "a cents field in text reads as dollars, and a written-out \"cents\" after it is dropped");
+}

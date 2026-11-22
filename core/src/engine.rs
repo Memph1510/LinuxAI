@@ -134,6 +134,36 @@ pub fn display(v: &Value) -> String {
     }
 }
 
+/// Cents as dollars, the way a person writes money: 320000 -> "$3,200", 12345 -> "$123.45".
+pub fn dollars(cents: f64) -> String {
+    let neg = cents < 0.0;
+    let c = cents.abs().round() as i64;
+    let whole = (c / 100).to_string();
+    let mut grouped = String::new();
+    for (i, ch) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    let frac = if c % 100 == 0 { String::new() } else { format!(".{:02}", c % 100) };
+    format!("{}${grouped}{frac}", if neg { "-" } else { "" })
+}
+
+/// A value as a person reads it in a message: a field named `..._cents` is money and reads as dollars; a record
+/// reads as "rate $3,200, miles 781" rather than JSON. (Comparisons keep using `display`.)
+pub fn human(key: &str, v: &Value) -> String {
+    match v {
+        Value::Number(n) if key.ends_with("_cents") => dollars(n.as_f64().unwrap_or(0.0)),
+        Value::Object(m) => m.iter().map(|(k, x)| {
+            let name = k.strip_suffix("_cents").unwrap_or(k).replace('_', " ");
+            format!("{name} {}", human(k, x))
+        }).collect::<Vec<_>>().join(", "),
+        Value::Array(a) => a.iter().map(|x| human(key, x)).collect::<Vec<_>>().join(", "),
+        other => display(other),
+    }
+}
+
 fn lookup(path: &str, vars: &Map<String, Value>, state: &Value) -> Value {
     let mut parts = path.split('.');
     let root = parts.next().unwrap_or("");
@@ -165,8 +195,20 @@ fn interpolate(s: &str, vars: &Map<String, Value>, state: &Value) -> String {
         match rest[start..].find('}') {
             Some(end) => {
                 let path = &rest[start + 2..start + end];
-                out.push_str(&display(&lookup(path, vars, state)));
+                let field = path.rsplit('.').next().unwrap_or(path);
+                let value = lookup(path, vars, state);
+                out.push_str(&human(field, &value));
                 rest = &rest[start + end + 1..];
+                // "{$x.rate_cents} cents" already reads as dollars: drop the unit written after it.
+                if field.ends_with("_cents") && value.is_number() {
+                    for unit in [" cents", " cent"] {
+                        if rest.len() >= unit.len() && rest[..unit.len()].eq_ignore_ascii_case(unit)
+                            && !rest[unit.len()..].starts_with(|c: char| c.is_alphanumeric()) {
+                            rest = &rest[unit.len()..];
+                            break;
+                        }
+                    }
+                }
             }
             None => {
                 out.push_str(&rest[start..]);
@@ -1222,7 +1264,7 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
                          json!({"id": id, "reference": reference, "terms": fields["terms"]}));
             if !by_human {
                 ctx.bus.emit(ctx.mem, "ai.tell", json!({"plan": exec.name, "plan_id": exec.id, "text": format!(
-                    "I noted what I believe was agreed on {reference}: {}. It counts once you confirm it.", display(&fields["terms"]))}));
+                    "I noted what I believe was agreed on {reference}: {}. It counts once you confirm it.", human("terms", &fields["terms"]))}));
             }
             return Ok(json!(id));
         }
