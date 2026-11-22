@@ -2,6 +2,7 @@
 """How accurately does the email extractor fill its form? Realistic synthetic emails, scored against what they say.
 
   ANTHROPIC_API_KEY=... python3 tests/extract_eval.py [--model claude-opus-5-5] [--effort medium] [--only NAME]
+  python3 tests/extract_eval.py --model local:NAME     # a model on this machine (llama.cpp server on 127.0.0.1:8080)
 
 Each email is synthetic (made-up brokers, .example domains, no real business records) and carries the facts it
 states; the extractor (linuxai/mail.py, the real model) fills the form and every expected fact is checked. Covers
@@ -190,11 +191,14 @@ def main() -> int:
     ap.add_argument("--only")
     ap.add_argument("--out", help="write every form to this JSON file")
     args = ap.parse_args()
-    import anthropic
+    from linuxai.mail import LOCAL_PREFIX, Extractor
 
-    from linuxai.mail import Extractor
-
-    ex = Extractor(anthropic.Anthropic(), args.model, effort=args.effort)
+    if args.model.startswith(LOCAL_PREFIX):
+        client = None  # a model on this machine (LINUXAI_LOCAL_MODEL_URL, loopback only): no API, no cost
+    else:
+        import anthropic
+        client = anthropic.Anthropic()
+    ex = Extractor(client, args.model, effort=args.effort)
     p_in, p_out = PRICE.get(args.model, (0, 0))
     cat_ok = fields_ok = fields_total = 0
     inj_total = inj_caught = 0
@@ -246,7 +250,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    local = any(a.startswith("local:") for a in sys.argv) or "--model=local:" in " ".join(sys.argv)
+    if not local and not os.environ.get("ANTHROPIC_API_KEY"):
         print("needs ANTHROPIC_API_KEY (runs the real extractor; about a cent or two per email)")
         sys.exit(2)
     sys.exit(main())

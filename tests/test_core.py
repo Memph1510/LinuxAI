@@ -481,6 +481,43 @@ def test_a_broken_tool_is_an_error_for_the_ai_not_a_crash(env):
     assert is_error and "KeyError" in out and "read_file" in out
 
 
+def test_a_local_model_reads_email_on_this_machine_only(monkeypatch):
+    """Email read by a local model never leaves the machine: only a loopback address, never through a proxy."""
+    import http.server
+    import threading
+    for bad in ("http://10.0.0.5:8080", "https://127.0.0.1:8080", "http://api.example.com", "http://localhost@evil.example"):
+        monkeypatch.setenv("LINUXAI_LOCAL_MODEL_URL", bad)
+        with pytest.raises(RuntimeError):
+            M.local_url()
+    seen = {}
+    form = M.MailFacts(category="load_offer", summary="An offer.").model_dump_json()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            out = json.dumps({"choices": [{"message": {"content": form}, "finish_reason": "stop"}],
+                              "usage": {"prompt_tokens": 10, "completion_tokens": 5}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("LINUXAI_LOCAL_MODEL_URL", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setenv("HTTP_PROXY", "http://10.9.9.9:3128")  # a proxy setting must not be used
+    try:
+        out = M.Extractor(None, "local:tiny").extract({"subject": "s", "text": "Offering $1,640."})
+    finally:
+        srv.shutdown()
+    assert out["category"] == "load_offer"
+    body = seen["body"]
+    assert "tools" not in body and body["response_format"]["json_schema"]["schema"] is not None
+    assert "Offering $1,640." in body["messages"][-1]["content"]
+
+
 def test_the_extractor_form_fits_the_apis_schema_limits():
     """The live API refused the first form (25 optional fields: "Schema is too complex"). Every form sent must fit."""
     optional, unions = M.schema_complexity(M.MAIL_SCHEMA)

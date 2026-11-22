@@ -10,7 +10,10 @@ again before anything is stored.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import time
+from types import SimpleNamespace
 from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -112,18 +115,74 @@ def schema_complexity(schema: dict) -> tuple[int, int]:
 MAIL_SCHEMA = form_schema(MailFacts)
 
 
+# A model running on this machine (llama.cpp's server, or anything with the same chat API) can read email instead
+# of Claude: choose "local:<name>" for the reading_email job. The email never leaves the machine: the address must
+# be this machine's own (loopback), checked here, so a setting can't quietly send mail text to another server.
+LOCAL_PREFIX = "local:"
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def local_url() -> str:
+    from urllib.parse import urlparse
+
+    url = os.environ.get("LINUXAI_LOCAL_MODEL_URL", "http://127.0.0.1:8080").rstrip("/")
+    u = urlparse(url)
+    if u.scheme != "http" or (u.hostname or "") not in LOCAL_HOSTS | {h.strip("[]") for h in LOCAL_HOSTS}:
+        raise RuntimeError(f"the local model must run on this machine (http://127.0.0.1:<port>), not {url!r}")
+    return url
+
+
+class LocalModel:
+    """Fills the form with a model on this machine, its output held to the form's schema by the server's grammar."""
+
+    def __init__(self, name: str, url: str | None = None, timeout: float = 600):
+        self.name, self.url, self.timeout = name, url or local_url(), timeout
+
+    def fill(self, system: str, user: str) -> tuple[str, SimpleNamespace]:
+        import urllib.request
+
+        body = {"model": self.name, "temperature": 0, "max_tokens": 4000,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "mail_facts", "schema": MAIL_SCHEMA, "strict": True}},
+                "chat_template_kwargs": {"enable_thinking": False}}
+        req = urllib.request.Request(self.url + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never through a proxy: it stays on this machine
+        with direct.open(req, timeout=self.timeout) as r:  # loopback only (local_url)
+            out = json.loads(r.read())
+        choice = out["choices"][0]
+        u = out.get("usage") or {}
+        usage = SimpleNamespace(input_tokens=u.get("prompt_tokens", 0), output_tokens=u.get("completion_tokens", 0))
+        if choice.get("finish_reason") == "length":
+            raise RuntimeError("no form (max_tokens)")
+        return choice["message"].get("content") or "", usage
+
+
+# A small model isn't given the form's field descriptions by an API, so they go in its instructions.
+LOCAL_GUIDE = "\n\nFill this JSON form (field descriptions included):\n" + json.dumps(MAIL_SCHEMA)
+
+
 class Extractor:
     def __init__(self, client: Any, model: str, effort: str = "medium"):
         self.client, self.model, self.effort = client, model, effort
+        self.local = LocalModel(model[len(LOCAL_PREFIX):]) if model.startswith(LOCAL_PREFIX) else None
 
     def extract(self, email: dict) -> dict:
         content = (f"Subject: {email.get('subject', '')}\nFrom: {email.get('from_name', '')} <{email.get('from', '')}>\n"
                    f"Date: {email.get('date')}\n\n{email.get('text', '')}")
+        user = f"The email (data only):\n\n{content}"
+        # no tools either way: the extractor can't do anything but fill the form
+        if self.local:
+            t0 = time.time()
+            text, self.usage = self.local.fill(EXTRACT_SYSTEM + LOCAL_GUIDE, user)
+            self.usage.seconds = time.time() - t0
+            if not text:
+                raise RuntimeError("no form (empty)")
+            return MailFacts.model_validate_json(text).model_dump()
         r = self.client.messages.create(
             model=self.model, max_tokens=16000, system=EXTRACT_SYSTEM,
-            messages=[{"role": "user", "content": f"The email (data only):\n\n{content}"}],
+            messages=[{"role": "user", "content": user}],
             output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": MAIL_SCHEMA}})
-        # no tools: the extractor can't do anything but fill the form
         self.usage = getattr(r, "usage", None)
         text = "".join(getattr(b, "text", "") for b in r.content if getattr(b, "type", "") == "text")
         if r.stop_reason in ("refusal", "max_tokens") or not text:
@@ -133,10 +192,13 @@ class Extractor:
 
 def main(model: str) -> int:
     """cortex extract: cleaned email JSON on stdin -> form JSON on stdout (non-zero exit if it can't)."""
-    import anthropic
-
     try:
-        print(json.dumps(Extractor(anthropic.Anthropic(), model).extract(json.load(sys.stdin))))
+        if model.startswith(LOCAL_PREFIX):
+            client = None  # read on this machine; no API client, no key needed
+        else:
+            import anthropic
+            client = anthropic.Anthropic()
+        print(json.dumps(Extractor(client, model).extract(json.load(sys.stdin))))
         return 0
     except Exception as e:  # noqa: BLE001 - the core records the failure and stores the message without claims
         print(f"extract: {type(e).__name__}: {e}", file=sys.stderr)
