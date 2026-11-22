@@ -330,6 +330,18 @@ fn main() {
         }
         Some("reach") => reach::run(client::Client::new(arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(default_socket))),
         Some("mail") => mail_cmd(&args),
+        Some("models") => {
+            // linuxai-core models local | linuxai-core models fetch <name>: small models that run on this machine.
+            let r = match args.get(2).map(String::as_str) {
+                Some("fetch") => match args.get(3) {
+                    Some(name) => models::fetch_local_model(name, &models::curl_download).unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e})),
+                    None => serde_json::json!({"ok": false, "error": "which model? see: linuxai-core models local"}),
+                },
+                _ => models::local_models(),
+            };
+            println!("{}", serde_json::to_string_pretty(&r).unwrap());
+            Ok(())
+        }
         Some("browser") => browser::run(
             arg(&args, "--socket").map(PathBuf::from).unwrap_or_else(browser::default_socket),
             arg(&args, "--profile").map(PathBuf::from).unwrap_or_else(browser::default_profile),

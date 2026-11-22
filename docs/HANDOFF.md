@@ -273,3 +273,6 @@ No live mailbox or real broker records for those tests.
 | `LINUXAI_IMAP_*`, `LINUXAI_AUTHSERV_ID` | none | incoming mail (`/etc/linuxai/mail.env`) |
 | `LINUXAI_SMTP_URL/_USER/_PASSWORD`, `LINUXAI_MAIL_FROM` | none | outgoing mail (same file; the core reads it) |
 | `LINUXAI_KEEP_*` | see CHECKLIST | history retention |
+| `LINUXAI_EXTRACT_MODEL` | same as thinking | which model reads email; `local:qwen3-4b` reads it on this machine (MAIL.md) |
+| `LINUXAI_LOCAL_MODEL_URL` | `http://127.0.0.1:8080` | the local model server; loopback addresses only |
+| `LINUXAI_MODELS_DIR` | `/var/lib/linuxai/models` | where `linuxai-core models fetch` keeps local models |

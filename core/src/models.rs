@@ -101,6 +101,66 @@ pub fn ask(client: &crate::client::Client, job: &str) -> Option<String> {
     r["jobs"].as_array()?.iter().find(|j| j["job"] == job)?["uses"].as_str().filter(|s| !s.is_empty()).map(String::from)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Local models: small models that run on this machine (llama.cpp's server), for jobs like reading email
+// ---------------------------------------------------------------------------------------------
+
+/// (name, what, URL pinned to a repository revision, SHA-256, bytes). Measured on 20 synthetic emails with the core's
+/// code check: qwen3-4b 16/20 categories, 6/6 injections; qwen3-8b 17/20, 6/6 (docs/MAIL.md).
+pub const LOCAL_MODELS: [(&str, &str, &str, &str, u64); 2] = [
+    ("qwen3-4b", "Qwen3 4B (4-bit), reads email: the smaller, faster choice",
+     "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf",
+     "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5", 2_497_280_256),
+    ("qwen3-8b", "Qwen3 8B (4-bit), reads email: slightly more accurate, twice the size",
+     "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q4_K_M.gguf",
+     "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785", 5_027_783_488),
+];
+
+pub fn local_models_dir() -> std::path::PathBuf {
+    std::env::var("LINUXAI_MODELS_DIR").map(Into::into).unwrap_or_else(|_| "/var/lib/linuxai/models".into())
+}
+
+/// The local models LinuxAI knows, and which are on this machine.
+pub fn local_models() -> Value {
+    let dir = local_models_dir();
+    let list: Vec<Value> = LOCAL_MODELS.iter().map(|(name, what, _, _, bytes)| json!({
+        "name": name, "what": what, "use_as": format!("local:{name}"), "gigabytes": (*bytes as f64 / 1e9 * 10.0).round() / 10.0,
+        "installed": dir.join(format!("{name}.gguf")).exists()})).collect();
+    json!({"ok": true, "dir": dir, "models": list})
+}
+
+/// Download a local model and keep it only if its size and SHA-256 are exactly the pinned ones.
+pub fn fetch_local_model(name: &str, download: &dyn Fn(&str, &std::path::Path) -> Result<(), String>) -> Result<Value, String> {
+    let (_, _, url, sha, bytes) = LOCAL_MODELS.iter().find(|m| m.0 == name)
+        .ok_or_else(|| format!("no local model {name:?}: {}", LOCAL_MODELS.iter().map(|m| m.0).collect::<Vec<_>>().join(", ")))?;
+    let dir = local_models_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let dest = dir.join(format!("{name}.gguf"));
+    if dest.exists() && crate::craft::sha256_file(&dest)? == *sha {
+        return Ok(json!({"ok": true, "model": name, "path": dest, "already": true}));
+    }
+    let part = dir.join(format!("{name}.gguf.part"));
+    download(url, &part)?;
+    let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    let got = crate::craft::sha256_file(&part)?;
+    if size != *bytes || got != *sha {
+        let _ = std::fs::remove_file(&part);
+        return Err(format!("{name}: the download doesn't match the pinned file ({size} bytes, sha256 {got}); not installed"));
+    }
+    std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644));
+    Ok(json!({"ok": true, "model": name, "path": dest, "sha256": got, "use_as": format!("local:{name}")}))
+}
+
+/// curl over HTTPS only, resuming a partial download.
+pub fn curl_download(url: &str, to: &std::path::Path) -> Result<(), String> {
+    let out = std::process::Command::new("curl")
+        .args(["-fL", "--progress-bar", "--proto", "=https", "--retry", "5", "-C", "-", "-o"]).arg(to).arg(url)
+        .status().map_err(|e| format!("curl: {e}"))?;
+    if out.success() { Ok(()) } else { Err(format!("download failed ({out})")) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +197,20 @@ mod tests {
         assert_eq!(c.handle(&json!({"op": "models_set", "source": "human", "job": "pictures", "uses": "local_cpu,paid"}))["ok"], true);
         c.handle(&json!({"op": "models_set", "source": "human", "job": "reading_email", "uses": ""}));
         assert_eq!(job(&c.handle(&json!({"op": "models"})), "reading_email")["from"], "same as thinking");
+    }
+
+    #[test]
+    fn a_local_model_is_kept_only_if_it_is_exactly_the_pinned_file() {
+        let dir = std::env::temp_dir().join(format!("linuxai-models-{}", std::process::id()));
+        std::env::set_var("LINUXAI_MODELS_DIR", &dir);
+        let wrong = |_: &str, to: &std::path::Path| std::fs::write(to, b"not the model").map_err(|e| e.to_string());
+        let r = fetch_local_model("qwen3-4b", &wrong);
+        assert!(r.is_err(), "{r:?}");
+        assert!(!dir.join("qwen3-4b.gguf").exists() && !dir.join("qwen3-4b.gguf.part").exists());
+        assert!(fetch_local_model("gpt-9000", &wrong).is_err());
+        assert_eq!(local_models()["models"][0]["installed"], false);
+        assert!(LOCAL_MODELS.iter().all(|m| m.2.starts_with("https://") && m.2.contains("/resolve/") && !m.2.contains("/main/") && m.3.len() == 64));
+        std::env::remove_var("LINUXAI_MODELS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
