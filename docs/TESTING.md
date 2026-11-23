@@ -75,7 +75,11 @@ doesn't pick it up. Pass it to a command explicitly, without printing it:
 - **Boot test (latest):** 37 of 37, including the disposable-VM mail and agreement checks and the local model server.
   One earlier run timed out before the login prompt (the VM starved for CPU in a recycled container); the rerun on
   the same ISO booted in 289 s, like the others.
-- **Not run this session:** the soak test, the Craft end-to-end, the full three-strategy real benchmark (owner chose
+- **Soak (2026-11-23):** 60 minutes, 11 of 11 checks: 14 `kill -9` restarts, about 157,000 events, 8,655 tasks,
+  6,974 AI plans, 20,812 answers, 1,203 long actions. Response time p50 0.66 ms, p99 5.04 ms (max 333 ms). Memory
+  flat at 17–18 MB, threads and file handles back down, database levelled off with pruning, nothing stuck, no action
+  done twice, no errors.
+- **Not run this session:** the Craft end-to-end, the full three-strategy real benchmark (owner chose
   ladder only), real (non-synthetic) emails.
 - **Found, not fixed:** the image's AI layer is installed without bytecode (`pip --no-compile`), so its first start
   after each boot compiles it: 2.5 minutes in the emulated VM (seconds on real hardware, likely).
