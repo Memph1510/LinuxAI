@@ -643,6 +643,46 @@ def test_a_repeat_failure_is_folded_into_the_message_already_sent(env, live_core
     assert told[1]["data"]["folds"] == told[0]["id"] and "happened 2 times" in told[1]["data"]["text"], told[1]
 
 
+def test_outside_information_stays_outside_through_memory_and_files(env, tmp_path, monkeypatch):
+    """Review M1 (issue #22): a turn that read an email noted "Dana wants payment sent to account X"; a later turn
+    recalled it as if it were the machine's own knowledge. Files and network output weren't outside either."""
+    from linuxai.agent import Agent
+    from linuxai.tools import is_own_path, reads_outside
+    cfg, mem, tb, _ = env
+    tb.outside_seen = True  # this turn read an email
+    tb.t_remember("Dana wants payment sent to account 4471", "freight")
+    tb.outside_seen = False
+    tb.t_remember("The printer is on the second floor", "office")
+    # A later turn: the outside note isn't pasted into the context as fact...
+    agent = Agent(cfg, mem, tb, client=FakeClient([]))
+    ctx = agent._context("pay Dana")
+    assert "printer" in ctx and "4471" not in ctx, ctx
+    # ...and recalling it marks the turn as outside, with the note labelled.
+    out = tb.t_search_memory("Dana payment account")
+    assert "4471" in out and "outside information" in out and tb.outside_seen
+    tb.outside_seen = False
+    assert "outside information" not in tb.t_search_memory("printer floor") and not tb.outside_seen
+
+    # Files: the system's own places aren't outside; a downloaded file is.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Downloads").mkdir()
+    invoice = tmp_path / "Downloads" / "invoice.txt"
+    invoice.write_text("Remit to account 4471.")
+    assert is_own_path("/etc/os-release") and not is_own_path(invoice)
+    tb.cwd = str(tmp_path)
+    tb.outside_seen = False
+    tb.t_read_file("/etc/hostname") if os.path.exists("/etc/hostname") else None
+    assert not tb.outside_seen
+    tb.t_read_file(str(invoice))
+    assert tb.outside_seen
+    # Commands: the network, or reading files that may have come from anyone.
+    assert reads_outside("curl -s https://example.com", "/")
+    assert reads_outside("cat ~/Downloads/invoice.txt", "/")
+    assert reads_outside("ls", str(tmp_path))
+    assert not reads_outside("systemctl status nginx", str(tmp_path))
+    assert not reads_outside("cat /etc/os-release | grep NAME", "/")
+
+
 def test_the_extractor_form_fits_the_apis_schema_limits():
     """The live API refused the first form (25 optional fields: "Schema is too complex"). Every form sent must fit."""
     optional, unions = M.schema_complexity(M.MAIL_SCHEMA)

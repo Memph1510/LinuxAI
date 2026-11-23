@@ -138,6 +138,15 @@ pub fn may_write(peer: Option<u32>, typ: &str, fields: &Value, existing: Option<
     Ok(())
 }
 
+/// The core's own account: root, or `linuxai-core` when it runs as its own user. Only the core may carry out a browser
+/// action the human approved (independent review H4).
+pub const CORE_USER: &str = "linuxai-core";
+
+pub fn is_core(peer: Option<u32>) -> bool {
+    let Some(uid) = peer else { return true };
+    uid == 0 || user_id(CORE_USER) == Some(uid)
+}
+
 /// Where an organ listens: its environment variable, else [`ORGANS_DIR`] when it exists, else the user's runtime
 /// directory.
 pub fn organ_socket(env: &str, file: &str) -> PathBuf {

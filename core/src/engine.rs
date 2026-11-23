@@ -1368,7 +1368,7 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
     // different verb or arguments, and the earlier result isn't this one's (independent review M5). Then stop.
     let key = format!("{}:{}", exec.id, exec.counter);
     if let Some((status, result, was_verb, was_args)) = ctx.mem.journal_status(&key) {
-        if was_verb != verb || was_args != args.to_string() {
+        if was_verb != verb || serde_json::from_str::<Value>(&was_args).ok().as_ref() != Some(&args) {
             return Err(format!("after a restart, this step is now '{verb}' where '{was_verb}' was recorded ({status}); \
                                 not reusing that result or acting blind, so the plan stops here"));
         }

@@ -1668,3 +1668,21 @@ fn only_the_core_writes_system_records_and_where_a_fact_came_from() {
     // The core's own organs (the mail organ, in-process) still write what they must.
     assert_eq!(c.handle(&json!({"op": "object_put", "type": "message", "fields": {"trust": "outside", "source": {"authenticated": true}}}))["ok"], true);
 }
+
+#[test]
+fn acting_on_a_web_page_goes_through_the_humans_trust_per_site() {
+    // Review H4 (issue #22): the browser was an outside channel with no effect level. Now `browse` is an External verb:
+    // the first time per site the human is asked; "always" covers that site, not others.
+    let (c, fake) = core();
+    let assess = json!({"confidence": 0.9, "consequences": ["a search is sent to dat.com"], "outcomes": [{"if": "it fails", "then": "tell the human"}]});
+    let plan = |site: &str| json!({"plan": "search loads", "assess": assess, "steps": [{"do": "browse", "site": site, "op": "click", "tab": "T1", "target": "Search"}]});
+    let r = c.submit(&plan("https://dat.com"), "ai");
+    assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
+    assert!(r["result"]["wait"]["question"].as_str().unwrap().contains("click on https://dat.com"), "{r}");
+    let id = r["result"]["plan_id"].as_str().unwrap().to_string();
+    assert_eq!(c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "yes, always"}))["result"]["status"], "done");
+    assert!(calls(&fake).iter().any(|x| x.starts_with("browse")), "{:?}", calls(&fake));
+    assert!(c.mem.mandates().contains(&("browse".to_string(), "https://dat.com".to_string())), "the site is trusted now");
+    assert_eq!(c.submit(&plan("https://dat.com"), "ai")["result"]["status"], "done");
+    assert_eq!(c.submit(&plan("https://evil.example"), "ai")["result"]["status"], "waiting:answer", "another site still asks");
+}

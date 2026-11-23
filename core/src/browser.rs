@@ -525,6 +525,14 @@ impl Organ {
         }
     }
 
+    /// Has the human given a standing OK for this verb on this site (`outside:` ones when acting on outside
+    /// information, plain ones otherwise, as the core keeps them)?
+    fn trusted(&self, verb: &str, site: &str, outside: bool) -> bool {
+        let Some(c) = &self.core else { return false };
+        let Ok(r) = c.request("mandates", json!({})) else { return false };
+        covers(&r["mandates"], verb, site, outside)
+    }
+
     pub(crate) fn tell_core(&self, kind: &str, data: Value) {
         if let Some(c) = &self.core {
             let _ = c.request("event", json!({"kind": kind, "data": data}));
@@ -595,6 +603,26 @@ impl Organ {
         let acts = matches!(op, "go" | "click" | "type" | "key" | "close");
         if acts && b.owner(&tab) != Some("ai") && req["as"] != "human" {
             return err("that tab is the human's: read it, or open your own (or ask them to give it to you)");
+        }
+        // What reaches a site goes through the human's trust, per site (independent review H4). Clicking, typing or a
+        // key sends something to the page's site; opening a page whose address carries data (a query, a fragment, a
+        // long path) while working on outside information can carry it off. The first time per site needs the human's
+        // OK (a plan with the `browse` verb); "always" lets the AI act there directly after.
+        let page_site = |b: &Cdp| origin(&b.url_of(&tab).unwrap_or_default());
+        let target_site = if matches!(op, "go" | "open") { origin(req["url"].as_str().unwrap_or("about:blank")) } else { page_site(&b) };
+        if let Some(site) = req["approved_origin"].as_str() {
+            if site != target_site {
+                return err(format!("approved for {site}, but this is {target_site}"));
+            }
+        } else if req["_gate"] == true {
+            let outside = req["taint"] == "outside";
+            let sends = matches!(op, "click" | "type" | "key");
+            let leaks = matches!(op, "go" | "open") && outside && carries_data(req["url"].as_str().unwrap_or(""));
+            if (sends || leaks) && !self.trusted("browse", &target_site, outside) {
+                let what = if sends { "acting on" } else { "opening that address on" };
+                return err(format!("{what} {target_site} sends something to that site: the first time it needs the human's OK. \
+                                    Submit a plan with the `browse` verb (site: \"{target_site}\"); if they say always, you can act there directly"));
+            }
         }
         let r: std::io::Result<Value> = (|| match op {
             "tabs" => Ok(json!({"ok": true, "tabs": b.tabs(), "headless": self.headless})),
@@ -754,9 +782,45 @@ pub(crate) fn press(b: &Cdp, s: &str, key: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Does a standing OK cover this verb on this site? Those given for outside information (`outside:` targets) count
+/// only when acting on outside information, and the plain ones only when not, as the core keeps them.
+pub fn covers(mandates: &Value, verb: &str, site: &str, outside: bool) -> bool {
+    mandates.as_array().into_iter().flatten().any(|m| {
+        let v = m["verb"].as_str().unwrap_or("");
+        let t = m["target"].as_str().unwrap_or("");
+        let t = match (t.strip_prefix("outside:"), outside) {
+            (Some(rest), true) => rest,
+            (None, false) => t,
+            _ => return false,
+        };
+        (v == verb || v == "*") && (t == "*" || t == site)
+    })
+}
+
+/// A site: scheme and host (and port), lowercased. `file://` pages are one site.
+pub fn origin(url: &str) -> String {
+    let u = url.trim();
+    match u.split_once("://") {
+        Some((scheme, rest)) => {
+            let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+            format!("{}://{}", scheme.to_lowercase(), host.rsplit('@').next().unwrap_or(host).to_lowercase())
+        }
+        None => u.split([':', '?', '#']).next().unwrap_or("").to_lowercase(),
+    }
+}
+
+/// Could this address carry data to its site: a query, a fragment, or a path segment long enough to hold some?
+pub fn carries_data(url: &str) -> bool {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    rest.contains('?') || rest.split_once('#').map(|(_, f)| !f.is_empty()).unwrap_or(false)
+        || rest.split('/').skip(1).any(|seg| seg.len() > 48)
+}
+
 fn serve(organ: Arc<Organ>, stream: UnixStream) {
     let Ok(mut writer) = stream.try_clone() else { return };
     let from_ai = crate::peer::is_ai(&stream); // the AI's account never acts as the human here either (review C1)
+    // Only the core carries out what the human approved; everyone else's requests are checked against their trust.
+    let from_core = crate::peer::is_core(crate::peer::peer_uid(&stream));
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
         if line.trim().is_empty() {
@@ -766,6 +830,13 @@ fn serve(organ: Arc<Organ>, stream: UnixStream) {
             Ok(mut req) => {
                 if from_ai {
                     crate::peer::as_ai(&mut req);
+                }
+                if let Some(m) = req.as_object_mut() {
+                    m.remove("_gate");
+                    if !from_core {
+                        m.remove("approved_origin");
+                        m.insert("_gate".into(), json!(true));
+                    }
                 }
                 organ.handle(&req)
             }
@@ -839,6 +910,21 @@ mod tests {
     </body></html>"#;
 
     #[test]
+    fn a_site_and_what_an_address_can_carry() {
+        assert_eq!(origin("https://www.DAT.com/loads?x=1"), "https://www.dat.com");
+        assert_eq!(origin("https://user:pw@evil.example:8443/a"), "https://evil.example:8443");
+        assert_eq!(origin("file:///tmp/board.html"), "file://");
+        assert!(carries_data("https://x.example/?k=4471") && carries_data("https://x.example/#4471"));
+        assert!(carries_data(&format!("https://x.example/{}", "a".repeat(60))));
+        assert!(!carries_data("https://www.dat.com/loads/search") && !carries_data("https://x.example/#"));
+        // Standing OKs: per site; those for outside information apart, as the core keeps them.
+        let m = json!([{"verb": "browse", "target": "https://dat.com"}, {"verb": "browse", "target": "outside:https://truckstop.com"}]);
+        assert!(covers(&m, "browse", "https://dat.com", false) && !covers(&m, "browse", "https://dat.com", true));
+        assert!(covers(&m, "browse", "https://truckstop.com", true) && !covers(&m, "browse", "https://truckstop.com", false));
+        assert!(!covers(&m, "browse", "https://evil.example", false));
+    }
+
+    #[test]
     fn shared_browser_reads_acts_and_respects_owners() {
         let Some(bin) = chromium() else {
             eprintln!("no Chromium here; skipping");
@@ -884,6 +970,22 @@ mod tests {
 
         let shot = organ.handle(&json!({"op": "shot", "tab": tab}));
         assert!(shot["data"].as_str().map(|d| d.len() > 1000).unwrap_or(false), "screenshot");
+
+        // Review H4: from anyone but the core, acting on a site the human hasn't trusted is refused, with the way
+        // forward; the core carries out an approved action, but only on the site it was approved for.
+        let r = organ.handle(&json!({"op": "click", "tab": tab, "target": "Search", "_gate": true}));
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap().contains("`browse` verb (site: \"file://\")"), "{r}");
+        assert_eq!(organ.handle(&json!({"op": "type", "tab": tab, "target": "search lanes", "text": "x", "_gate": true}))["ok"], false);
+        let r = organ.handle(&json!({"op": "click", "tab": tab, "target": "Search", "approved_origin": "file://"}));
+        assert!(r["text"].as_str().unwrap_or("").contains("Results for"), "approved by the human: carried out: {r}");
+        let r = organ.handle(&json!({"op": "click", "tab": tab, "target": "Search", "approved_origin": "https://dat.com"}));
+        assert_eq!(r["ok"], false, "approved for another site: {r}");
+        // Plain browsing stays free; on outside information, an address carrying data to an untrusted site waits.
+        let r = organ.handle(&json!({"op": "go", "tab": tab, "url": format!("file://{}", page.display()), "_gate": true, "taint": "outside"}));
+        assert_eq!(r["ok"], true, "{r}");
+        let r = organ.handle(&json!({"op": "go", "tab": tab, "url": "https://example.com/?k=4471", "_gate": true, "taint": "outside"}));
+        assert_eq!(r["ok"], false, "{r}");
 
         // Handing tabs back and forth.
         assert_eq!(organ.handle(&json!({"op": "give", "tab": tab, "to": "human", "note": "log in please"}))["owner"], "human");

@@ -239,11 +239,13 @@ class Agent:
         parts = []
         if not self.messages:
             parts.append("<machine_state>\n" + sysinfo.snapshot() + "\n</machine_state>")
-            notes = self.memory.all_notes()[-60:]
+            # Only what came from the machine and the human goes in by default; what was learned from outside
+            # information comes back through search_memory, which marks the turn as outside (review M1).
+            notes = [n for n in self.memory.all_notes() if n["trust"] != "outside"][-60:]
             if notes:
                 parts.append("<what_you_know>\n" + "\n".join(f"- ({n['category']}) {n['fact']}" for n in notes)
                              + "\n</what_you_know>")
-        sols = self.memory.search_solutions(intent, limit=3)
+        sols = [s for s in self.memory.search_solutions(intent, limit=3) if s["trust"] != "outside"]
         if sols:
             parts.append("<possibly_relevant_solutions>\n" + format_recall(sols, []) +
                          "\n</possibly_relevant_solutions>")

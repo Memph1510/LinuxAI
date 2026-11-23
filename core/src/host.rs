@@ -377,6 +377,23 @@ impl Organs for LinuxHost {
                 let (code, output) = cmd(&program, &refs, Duration::from_secs(timeout))?;
                 Ok(json!({"code": code, "output": output}))
             }
+            // A browser action the human approved (or trusts on this site): the core carries it out, naming the site,
+            // and the browser checks the page is still that site (review H4).
+            "browse" => {
+                let mut req = args.clone();
+                let op = s(args, "op");
+                req["approved_origin"] = json!(s(args, "site"));
+                if let Some(m) = req.as_object_mut() {
+                    m.remove("site");
+                    m.remove("op");
+                }
+                let c = crate::client::Client::new(crate::browser::default_socket());
+                let r = c.request(&op, req).map_err(|e| format!("the browser isn't reachable: {e}"))?;
+                if r["ok"] == false {
+                    return Err(r["error"].as_str().unwrap_or("the browser refused").to_string());
+                }
+                Ok(r)
+            }
             other => Err(format!("the host has no verb '{other}'")),
         }
     }
