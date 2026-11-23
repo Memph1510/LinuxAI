@@ -147,8 +147,23 @@ the interactive `cortex` runs as the human (commands the human approves run as t
 sandbox); the background AI's notes are its own (`/var/lib/linuxai-ai`, readable by the human) rather than shared
 with the interactive session's.
 
-Still deferred by the owner (capability first; fix blockers as met): H4 (approvals on browser actions), M1–M5,
-L1–L3. Tracked in issue #22.
+The rest, fixed 2026-11-23 at the owner's request ("Fix H4 and the other deferred items too"):
+
+| Review | Gap | Fix |
+|---|---|---|
+| H4 | Through the browser the AI could act on a site (submit a form, accept a load) or carry data off in an address, with no approval | Clicking, typing or a key sends something to the page's site: on a site the human hasn't trusted, it needs their OK, through the new External verb `browse` (target: the site). "Always" covers that site, kept apart for outside information as other trust is. Opening an address that carries data (a query, a fragment, a long path) while working on outside information, likewise. Only the core carries out an approved action, and only on the site it was approved for. Plain browsing stays free. |
+| M1 | Outside information lost its label through memory and files | Notes and solutions record whether the turn that wrote them had seen outside information; recalling one marks the turn; only the machine's and the human's own go into every context. Files outside the system's own places (a download, a home folder, /tmp) and network output count as outside. |
+| M2 | Without `LINUXAI_AUTHSERV_ID`, a sender's own Authentication-Results header could mark mail "sender verified" | No authserv-id: nothing is verified, and the mail service refuses to start. |
+| M3 | The AI could record a rating or a fact's verdict as the human's, and change any record's status or a sender's track record | Only the core and its organs (root, its own account, the mail organ) write system records (agreements, messages, senders, habits, jobs) and provenance; an outside fact stays as it came; a verdict (`fact_verdict`) needs evidence that exists, is for outside facts only, and counts once; ratings the AI records are its own ("relayed" when the human said them). |
+| M4 | The core and the mail service ran as root | The core runs as `linuxai-core`, hardened; what needs root (an approved plan's program, services, power and CPU settings) runs as a transient systemd unit, which polkit allows that account only (`/etc/polkit-1/rules.d/50-linuxai-core.rules`): one narrow path, each action in the journal. The mail organ runs as `linuxai-mail`, strictly sandboxed, raw mail in `/var/lib/linuxai-mail/raw`. |
+| M5 | After a restart, a different step could inherit another step's recorded result ("sent" without sending) | A step reuses a journal entry only if it's the same verb and arguments; otherwise the plan stops. |
+| L1 | Any socket client could emit any event (a fake email, a finished job) | The AI's own account emits no events; only the mail organ reports `message.*`, `mail.*`, `invite.*`. |
+| L2 | An AI `agree` overwrote the human's agreed terms | The human's agreement stands; a different reading is kept beside it as a proposed change, which counts once they confirm. |
+| L3 | One email that failed to read stopped the poll and was lost silently (fetching marks it read) | Each email on its own; a failure becomes `mail.failed` and the human is told. |
+| L4 | The key file's mode wasn't set when it already existed | Set explicitly (with C1). |
+
+What stays: the core can still do what root can, but only through that one systemd path, as approved plans need
+(installs, services, power); the human keeps passwordless sudo on the live image until the install (LX-SEC-2).
 
 ### Crashes and dependencies (2026-11-21, from "how are bugs, crashes and security handled?")
 
