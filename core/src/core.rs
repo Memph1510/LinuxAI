@@ -492,7 +492,7 @@ impl Core {
             }
             "tell" => {
                 // The AI (outside a plan) telling the human something.
-                self.emit("ai.tell", json!({"text": req["text"], "from": req["from"]}));
+                self.emit("ai.tell", json!({"text": req["text"], "from": req["from"], "about": req["about"]}));
                 json!({"ok": true})
             }
             "say" => {

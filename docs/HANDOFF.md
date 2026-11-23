@@ -130,7 +130,8 @@ same day took **86 requests and $1.66** once the benchmark gave it the owner's t
 handled, both negotiation replies handled by plans decided ahead, the rate con filed by the core. **Inside the
 image** (2026-11-23, `image/vm-bench.py`, real systemd, cups and nginx really failing): 84 requests, $1.80, the same
 work done; it read the failing units, saw they were stand-ins a restart can't fix, changed nothing and offered the
-real fix. It sends the same notice again when a known failure recurs. See THINKING.md, "The real model".
+real fix. It sent the same notice again when a known failure recurred; repeats are now folded into the earlier
+message (the owner's choice; THINKING.md, "Repeats"). See THINKING.md, "The real model".
 
 ## 5. History (merged PRs)
 
@@ -276,6 +277,7 @@ agreement stays unconfirmed until the human confirms it. Synthetic only; no live
 | `LINUXAI_MIND` | `ladder` | `full` = one fresh conversation per event (the old way) |
 | `LINUXAI_MIND_BATCH` | `600` | seconds routine work waits to be batched |
 | `LINUXAI_HABIT_AFTER` / `LINUXAI_HABIT_HOLD` | `1` / `900` | fixes that held before replay / seconds a situation must stay away |
+| `LINUXAI_FOLD_HOURS` | `24` | a repeat of a situation within this window folds into the earlier message |
 | `LINUXAI_REHEARSAL` | off | `1`: record actions, perform none (incl. sending email) |
 | `LINUXAI_RULE_MAX_PER_MINUTE` | `10` | the rule loop guard |
 | `LINUXAI_IMAP_*`, `LINUXAI_AUTHSERV_ID` | none | incoming mail (`/etc/linuxai/mail.env`) |

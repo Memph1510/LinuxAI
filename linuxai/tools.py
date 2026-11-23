@@ -598,6 +598,9 @@ class Toolbox:
         # Set by the harness (not the model) once information from outside (email facts, web pages, messages)
         # has entered the AI's context. Everything the AI then submits is labeled outside.
         self.outside_seen = False
+        # The named situation being handled ("service.failed:cups"), if any: a repeat of it is folded by the core into
+        # the message already sent about it instead of a new one (set by the mind).
+        self.about: str | None = None
         self.browser = browser    # linuxai.core_client.Core pointed at the shared browser organ, when it runs
         self.screen = screen      # ... at the screen organ (Hyprland), inside a graphical session
         self._results: dict[str, tuple[str, bool]] = {}  # long results by id: (full text, came from outside)
@@ -1181,7 +1184,7 @@ class Toolbox:
 
     def t_tell_human(self, text: str) -> str:
         if self.core and self.mind:
-            self._core("tell", text=text, **{"from": "mind"})
+            self._core("tell", text=text, about=self.about, **{"from": "mind"})
         else:
             ui.out("\n" + ui.magenta("◆ ") + text)
         return "Sent."

@@ -1474,3 +1474,51 @@ fn money_in_messages_reads_as_dollars() {
     assert_eq!(tells, vec!["Dana answered with $3,200; the board pays $2,600.50. Total 3 loads, rate $2,800.".to_string()],
                "a cents field in text reads as dollars, and a written-out \"cents\" after it is dropped");
 }
+
+#[test]
+fn a_repeat_of_a_situation_is_folded_into_the_message_already_sent() {
+    // The owner's choice (2026-11-23): the same failure again updates the earlier message instead of a new one.
+    let (c, _fake) = core_holding(0.0);
+    let tells = |c: &Arc<Core>| -> Vec<Value> {
+        c.handle(&json!({"op": "events", "since": 0, "limit": 1000}))["events"].as_array().unwrap().iter()
+            .filter(|e| e["kind"] == "ai.tell").cloned().collect()
+    };
+
+    // The AI's own message about a named situation: the first goes out as is, a repeat folds into it.
+    c.handle(&json!({"op": "tell", "text": "nginx failed: the unit is a stand-in. I haven't changed anything.",
+                     "from": "mind", "about": "service.failed:nginx"}));
+    c.handle(&json!({"op": "tell", "text": "nginx failed again; same stand-in.", "from": "mind", "about": "service.failed:nginx"}));
+    let t = tells(&c);
+    assert_eq!(t.len(), 2);
+    assert!(t[0]["data"]["folds"].is_null(), "the first message is a new one: {}", t[0]);
+    assert_eq!(t[1]["data"]["folds"], t[0]["id"], "the repeat names the message it folds into: {}", t[1]);
+    assert_eq!(t[1]["data"]["count"], 2);
+    assert!(t[1]["data"]["text"].as_str().unwrap().contains("happened 2 times since"), "{}", t[1]);
+    // On the phone: the first is texted, the repeat isn't (the screen updates the earlier message instead).
+    assert!(crate::reach::message_for(&t[0]).is_some());
+    assert!(crate::reach::message_for(&t[1]).is_none());
+
+    // Another situation, or a message about no situation, is never folded.
+    c.handle(&json!({"op": "tell", "text": "cups failed.", "from": "mind", "about": "service.failed:cups"}));
+    c.handle(&json!({"op": "tell", "text": "Weekly report is ready.", "from": "mind"}));
+    c.handle(&json!({"op": "tell", "text": "Weekly report is ready.", "from": "mind"}));
+    assert!(tells(&c)[2..].iter().all(|e| e["data"]["folds"].is_null()));
+
+    // A plan's message about the situation it was woken for folds the same way (the plan carries the key).
+    trust_set(&c);
+    let assess = json!({"confidence": 0.9, "consequences": ["the human is told"], "outcomes": ["they know"]});
+    c.emit("service.failed", json!({"unit": "cups"}));
+    let w: Vec<Value> = c.handle(&json!({"op": "waiting"}))["plans"].as_array().unwrap().iter()
+        .filter(|p| p["status"] == "needs_thought").cloned().collect();
+    assert_eq!(w[0]["wait"]["habit"], "service.failed:cups");
+    let r = c.handle(&json!({"op": "resolve", "plan_id": w[0]["plan_id"], "assess": assess,
+                             "steps": [{"tell": "cups failed again; it's a stand-in."}]}));
+    assert_eq!(r["ok"], true, "{r}");
+    let last = tells(&c).last().cloned().unwrap();
+    assert_eq!(last["data"]["count"], 2, "folded into the cups message sent above: {last}");
+
+    // Once the earlier message is old (past the window), the situation starts a new message.
+    c.mem.patch_object("obj:notice/service.failed:nginx", &json!({"last": 0.0}));
+    c.handle(&json!({"op": "tell", "text": "nginx failed.", "from": "mind", "about": "service.failed:nginx"}));
+    assert!(tells(&c).last().unwrap()["data"]["folds"].is_null());
+}

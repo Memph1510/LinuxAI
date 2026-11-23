@@ -55,6 +55,8 @@ pub fn message_for(ev: &Value) -> Option<String> {
             lines.push(format!("[{}]", d["plan_id"].as_str().unwrap_or("")));
             Some(lines.join("\n"))
         }
+        // A repeat folded into a message already sent: the screen updates that one; no new text.
+        "ai.tell" if !d["folds"].is_null() => None,
         "ai.tell" => d["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!("LinuxAI: {t}")),
         "task.failed" => Some(format!("LinuxAI: blocked on '{}': {}. I'm looking at what to do next and will check with you before trying anything new.",
                                       d["title"].as_str().unwrap_or(""), d["error"].as_str().unwrap_or("unknown"))),

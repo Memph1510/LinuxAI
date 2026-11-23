@@ -141,6 +141,14 @@ class Mind:
 
     # ---- situations that need judgment ---------------------------------------------------------------
     def judge(self, plan_id: str, name: str, note: str, d: dict | None = None) -> None:
+        # Messages sent while handling a named situation fold into the one already sent about it.
+        self.agent.toolbox.about = ((d or {}).get("wait") or {}).get("habit")
+        try:
+            self._judge(plan_id, name, note, d)
+        finally:
+            self.agent.toolbox.about = None
+
+    def _judge(self, plan_id: str, name: str, note: str, d: dict | None = None) -> None:
         if self.strategy == "full":
             self._run(f"[system] Plan '{name}' ({plan_id}) needs your judgment: {note}\n"
                       f"Investigate if needed, then call resolve_thought for {plan_id} with the steps to run "

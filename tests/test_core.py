@@ -538,6 +538,30 @@ def test_the_owner_is_told_why_an_email_was_set_aside(env, live_core):
     assert told and "change where payments are sent" in told[-1] and "Updated remittance information" in told[-1], told
 
 
+def test_a_repeat_failure_is_folded_into_the_message_already_sent(env, live_core):
+    """The owner's choice (2026-11-23): the same failure again updates the earlier message, it isn't sent again."""
+    cfg, _, tb, _ = env
+    tb.core, tb.mind = live_core, True
+    from linuxai.mind import Mind
+
+    class Speaks:  # the AI's turn: it tells the human about the failure
+        config, toolbox = cfg, tb
+
+        def reset(self):
+            pass
+
+        def turn(self, text):
+            tb.t_tell_human("cups failed: the unit is a stand-in, so a restart won't help. I haven't changed anything.")
+
+    mind = Mind(Speaks(), live_core, strategy="ladder")
+    for _ in range(2):  # the same situation, twice
+        mind.judge("p", "service failed", "cups failed", {"wait": {"habit": "service.failed:cups"}})
+    assert tb.about is None, "the situation is forgotten once the AI is done with it"
+    told = [e for e in live_core.request("events", since=0, limit=200)["events"] if e["kind"] == "ai.tell"]
+    assert len(told) == 2 and told[0]["data"].get("folds") is None, told
+    assert told[1]["data"]["folds"] == told[0]["id"] and "happened 2 times" in told[1]["data"]["text"], told[1]
+
+
 def test_the_extractor_form_fits_the_apis_schema_limits():
     """The live API refused the first form (25 optional fields: "Schema is too complex"). Every form sent must fit."""
     optional, unions = M.schema_complexity(M.MAIL_SCHEMA)

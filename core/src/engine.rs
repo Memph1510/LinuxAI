@@ -65,14 +65,63 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn emit(&self, mem: &Memory, kind: &str, data: Value) {
+    pub fn emit(&self, mem: &Memory, kind: &str, mut data: Value) {
+        let notice = if kind == "ai.tell" { fold_notice(mem, &mut data) } else { None };
         let id = mem.add_event(kind, &data);
+        if let Some((oid, mut fields)) = notice {
+            if fields["first_event"].is_null() {
+                fields["first_event"] = json!(id);
+            }
+            mem.put_object_with_id(&oid, "notice", &fields);
+        }
         let ev = json!({"id": id, "ts": now(), "kind": kind, "data": data});
         self.pending.lk().push((kind.to_string(), ev));
     }
     pub fn drain(&self) -> Vec<(String, Value)> {
         std::mem::take(&mut *self.pending.lk())
     }
+}
+
+/// Hours a message about a situation stays open: the same situation again within it is folded into that message
+/// (the owner's choice, 2026-11-23: "fold that into the earlier message") instead of a new one.
+fn fold_hours() -> f64 {
+    std::env::var("LINUXAI_FOLD_HOURS").ok().and_then(|v| v.parse().ok()).unwrap_or(24.0)
+}
+
+fn notice_id(about: &str) -> String {
+    let k: String = about.chars().map(|c| if c.is_ascii_alphanumeric() || "._:-".contains(c) { c } else { '_' }).take(120).collect();
+    format!("obj:notice/{k}")
+}
+
+fn clock(ts: f64) -> String {
+    use chrono::{Local, TimeZone};
+    match Local.timestamp_opt(ts as i64, 0).single() {
+        Some(t) if t.date_naive() == Local::now().date_naive() => t.format("%-I:%M%P").to_string(),
+        Some(t) => t.format("%a %-I:%M%P").to_string(),
+        None => String::new(),
+    }
+}
+
+/// A message to the human about a named situation (`about`, e.g. "service.failed:cups"). The first one goes out as
+/// it is. A repeat while that one is still open is marked as folding into it (`folds`: the first message's event id,
+/// `count`, `since`) and says how often it has happened; screens update the earlier message, texts aren't resent.
+/// Returns the notice record to store once the event has its id.
+pub fn fold_notice(mem: &Memory, data: &mut Value) -> Option<(String, Value)> {
+    let about = data["about"].as_str().filter(|a| !a.is_empty())?.to_string();
+    let oid = notice_id(&about);
+    let t = now();
+    let open = mem.object(&oid).filter(|o| t - o["last"].as_f64().unwrap_or(0.0) < fold_hours() * 3600.0);
+    let Some(prev) = open else {
+        return Some((oid, json!({"about": about, "count": 1, "first": t, "last": t, "first_event": null})));
+    };
+    let count = prev["count"].as_u64().unwrap_or(1) + 1;
+    let first = prev["first"].as_f64().unwrap_or(t);
+    let text = data["text"].as_str().unwrap_or("").trim_end().to_string();
+    data["text"] = json!(format!("{text} (This has now happened {count} times since {}.)", clock(first)));
+    data["folds"] = prev["first_event"].clone();
+    data["count"] = json!(count);
+    data["since"] = json!(first);
+    Some((oid, json!({"about": about, "count": count, "first": first, "last": t, "first_event": prev["first_event"]})))
 }
 
 pub struct Ctx<'a> {
@@ -1171,7 +1220,7 @@ fn exec_step(exec: &mut Exec, step: &Value, ctx: &Ctx) -> Result<Flow, String> {
     }
     if let Some(t) = m.get("tell") {
         let text = display(&eval(t, &vars, ctx)?);
-        ctx.bus.emit(ctx.mem, "ai.tell", json!({"text": text, "plan": exec.name, "plan_id": exec.id}));
+        ctx.bus.emit(ctx.mem, "ai.tell", json!({"text": text, "plan": exec.name, "plan_id": exec.id, "about": exec.plan["about"]}));
         return Ok(Flow::Next);
     }
     if let Some(w) = m.get("wait") {
@@ -1203,7 +1252,9 @@ fn exec_step(exec: &mut Exec, step: &Value, ctx: &Ctx) -> Result<Flow, String> {
         // A named situation ("service.failed:cups"): once the AI's answer to it has worked, the core replays that
         // answer next time instead of waking the AI (a habit).
         if let Some(h) = m.get("habit") {
-            exec.wait["habit"] = json!(display(&eval(h, &vars, ctx)?));
+            let key = display(&eval(h, &vars, ctx)?);
+            exec.wait["habit"] = json!(key);
+            exec.plan["about"] = json!(key);
         }
         return Ok(Flow::Pause);
     }
@@ -1234,7 +1285,7 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
     match verb {
         "tell" => {
             let text = str_arg(args.as_object().unwrap(), "text");
-            ctx.bus.emit(ctx.mem, "ai.tell", json!({"text": text, "plan": exec.name, "plan_id": exec.id}));
+            ctx.bus.emit(ctx.mem, "ai.tell", json!({"text": text, "plan": exec.name, "plan_id": exec.id, "about": exec.plan["about"]}));
             return Ok(Value::Null);
         }
         "remember" => {

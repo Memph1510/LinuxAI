@@ -174,7 +174,10 @@ def follow_activity(core, pending: dict) -> None:
         try:
             for ev in core.follow():
                 kind, data = ev.get("kind", ""), ev.get("data") or {}
-                if kind == "ai.tell":
+                if kind == "ai.tell" and data.get("folds") is not None:
+                    # A repeat of something already said, marked as such (the text ends with how often and since when).
+                    show(ui.dim("↻ ") + str(data.get("text", "")))
+                elif kind == "ai.tell":
                     show(ui.magenta("◆ ") + str(data.get("text", "")))
                 elif kind in ("plan.waiting", "plan.reminder") and (data.get("wait") or {}).get("question"):
                     w = data["wait"]
