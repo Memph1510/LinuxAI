@@ -6,10 +6,18 @@ Wants=network-online.target
 ConditionPathExists=/etc/linuxai/mail.env
 
 [Service]
+# Its own account (independent review M4): it reads email from strangers, so it has nothing else. systemd reads the
+# settings and the key; the account can open neither file.
+User=linuxai-mail
+Group=linuxai-mail
+SupplementaryGroups=linuxai-core
 EnvironmentFile=/etc/linuxai/mail.env
 EnvironmentFile=-/home/linuxai/.config/linuxai/env
-# Raw email lives where only this service can read it; the AI (user linuxai) only ever gets extracted facts.
-Environment=LINUXAI_MAIL_DIR=/var/lib/linuxai/mail
+Environment=HOME=/var/lib/linuxai-mail
+# Raw email lives where only this service can read it; the AI only ever gets extracted facts.
+Environment=LINUXAI_MAIL_DIR=/var/lib/linuxai-mail/raw
+StateDirectory=linuxai-mail
+StateDirectoryMode=0700
 # Everything is the Rust core except filling in the claims form, the one step that needs the AI model.
 Environment="LINUXAI_EXTRACT_CMD=/usr/local/bin/cortex extract"
 ExecStart=/usr/local/bin/linuxai-core mail watch
@@ -17,6 +25,16 @@ Restart=on-failure
 RestartSec=30
 # Exit 2 means a setting is missing (e.g. LINUXAI_AUTHSERV_ID): retrying won't help; the log says which.
 RestartPreventExitStatus=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 
 [Install]
 WantedBy=multi-user.target

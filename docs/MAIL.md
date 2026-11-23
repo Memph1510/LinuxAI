@@ -24,7 +24,7 @@ All of this is the Rust core, except step 3: filling in the form is the one step
 4. **Facts go into the core, labeled "outside"**, with their provenance: a `message` plus `load_offer`, `bill`,
    `payment` and `appointment` objects. A `message.received` event lets the AI decide, from your playbooks and
    intent, whether anything needs doing.
-5. **The raw email is kept for you** (`/var/lib/linuxai/mail` on the OS image, readable only by the mail
+5. **The raw email is kept for you** (`/var/lib/linuxai-mail/raw` on the OS image, readable only by the mail
    service). The AI's tools refuse to read it.
 
 ## How accurate the extractor is (measured)

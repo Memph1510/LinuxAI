@@ -152,7 +152,7 @@ _sandbox_state: dict[str, Any] = {}
 def sandbox_hidden(mail_dir: Path | None = None) -> list[str]:
     """What the AI's commands never see: LinuxAI's sockets, the session's sockets, LinuxAI's secrets, raw email."""
     # Name lookups too: systemd-resolved (and nscd) answer over local sockets, which reach the network for the asker.
-    out = ["/run/linuxai", "/run/linuxai-organs", "/run/systemd/resolve", "/run/nscd", "/etc/linuxai", "/var/lib/linuxai/mail",
+    out = ["/run/linuxai", "/run/linuxai-organs", "/run/systemd/resolve", "/run/nscd", "/etc/linuxai", "/var/lib/linuxai/mail", "/var/lib/linuxai-mail",
            str(Path.home() / ".config" / "linuxai"), "/home/linuxai/.config/linuxai"]
     if os.environ.get("XDG_RUNTIME_DIR"):
         out.append(os.environ["XDG_RUNTIME_DIR"])

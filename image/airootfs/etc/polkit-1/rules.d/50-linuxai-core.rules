@@ -1,0 +1,8 @@
+// LinuxAI's core runs as its own account, never root (independent review M4). What needs root (an approved plan's
+// program, a service, a power setting) it runs as a transient systemd unit: this rule allows exactly that, for that
+// account only. Each action is its own unit, in the journal.
+polkit.addRule(function (action, subject) {
+    if (subject.user == "linuxai-core" && action.id == "org.freedesktop.systemd1.manage-units") {
+        return polkit.Result.YES;
+    }
+});

@@ -1,6 +1,6 @@
 """VM checks for the independent review's C1 (issue #22): the AI has its own account, can't answer for the human, and
 its commands run in a sandbox. Run as root; each step that is the AI's runs as linuxai-ai.
-Usage: python3 ai_account.py account|socket|sandbox|organs|mind"""
+Usage: python3 ai_account.py account|socket|sandbox|organs|mind|core"""
 import json
 import os
 import re
@@ -93,3 +93,14 @@ elif mode == "mind":
     if made:
         os.remove(key)
     print(f"the mind: runs as {user or 'nothing'}; connected to the core {bool(user)}; its account can read the key file {readable}")
+
+elif mode == "core":
+    # Review M4: the core and the mail organ under their own accounts; what needs root goes through systemd.
+    core_user = sh(["ps", "-o", "user=", "-p", sh(["systemctl", "show", "-p", "MainPID", "--value", "linuxai-core"])])
+    mail_user = sh(["systemctl", "show", "-p", "User", "--value", "linuxai-mail"])
+    plan = {"plan": "m4-check", "steps": [{"do": "run", "program": "id", "args": ["-u"], "as": "r"}, {"tell": "uid {$r.output}"}]}
+    r = ctl({"op": "submit", "plan": plan, "source": "human"})
+    told = [e["data"].get("text", "") for e in ctl({"op": "events", "since": 0, "limit": 2000}).get("events", []) if e["kind"] == "ai.tell"]
+    root_action = any(t == "uid 0" for t in told)
+    print(f"core runs as {core_user}; mail runs as {mail_user}; an approved action still runs as root {root_action} "
+          f"({(r.get('result') or {}).get('status')}; {(r.get('result') or {}).get('error', '')})")
