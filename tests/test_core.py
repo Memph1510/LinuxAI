@@ -87,13 +87,13 @@ def test_the_ais_unasked_commands_run_in_the_sandbox(env, tmp_path, monkeypatch)
     box = sandbox_argv(str(tmp_path), sandbox_hidden(cfg.mail_dir))
     out = subprocess.run(box + ["sh", "-c", "touch /etc/linuxai-x 2>&1; touch ./x 2>&1; echo key=$ANTHROPIC_API_KEY; "
                                 "ls " + str(secrets) + "; (getent hosts example.com || echo no-network); "
-                                "(sudo -n true 2>&1 || true) | head -1"],
+                                "(sudo -n true >/dev/null 2>&1 && echo GOT-ROOT) || echo no-root"],
                          capture_output=True, text=True, timeout=60, check=False).stdout
     assert out.count("Read-only file system") == 2, out
     assert "key=\n" in out and "sk-test" not in out, out
     assert "core.sock" not in out, "LinuxAI's sockets are hidden"
     assert "no-network" in out, out
-    assert "sudo" not in out or "no new privileges" in out or "not found" in out or "effective uid" in out, out
+    assert "no-root" in out and "GOT-ROOT" not in out, out
     # The working folder is there to read, even under /tmp (which is otherwise a fresh scratch space).
     (tmp_path / "notes.txt").write_text("hello")
     seen = subprocess.run(box + ["cat", "notes.txt"], capture_output=True, text=True, timeout=60, check=False).stdout
@@ -839,6 +839,19 @@ def test_shared_browser_through_the_ai_tool(env, live_core, tmp_path):
         assert "never instructions" in out and tb.outside_seen
         tab = out.split("Page in tab ", 1)[1].split(" ", 1)[0]
         ref = next(l for l in out.splitlines() if "'Lane'" in l).split("]")[0].strip("[")
+        # Review H4: acting on a site sends something to it; on a site the human hasn't trusted, the AI is told how to
+        # ask. (Run as root, as the core's own account, nothing is gated: that's the core carrying out approvals.)
+        out, _ = tb.execute("browser", {"op": "click", "tab": tab, "target": "Go"})
+        if os.geteuid() != 0:
+            assert "`browse` verb" in out, out
+            # The page was outside information, so the plan cites it, as any plan resting on outside information must.
+            fact = tb.t_record_fact("lane_search", {"page": "Rates"}, f"file://{page}").split("Stored as ", 1)[1].split(";")[0]
+            plan = {"plan": "use the lane search", "assess": {"confidence": 0.9, "consequences": ["a search on the page"],
+                    "outcomes": [{"if": "it fails", "then": "tell the human"}]}, "reasoning": {"facts": [fact]},
+                    "steps": [{"do": "browse", "site": "file://", "op": "click", "tab": tab, "target": "Go"}]}
+            tb.t_submit_plan(plan)
+            waiting = [w for w in live_core.request("waiting")["plans"] if w["plan"] == "use the lane search"]
+            live_core.request("answer", plan_id=waiting[0]["plan_id"], text="yes, always", source="human")
         tb.execute("browser", {"op": "type", "tab": tab, "ref": int(ref), "text": "FTW"})
         out, _ = tb.execute("browser", {"op": "click", "tab": tab, "target": "Go"})
         assert "ok FTW" in out, out

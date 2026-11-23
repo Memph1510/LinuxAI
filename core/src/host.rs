@@ -64,9 +64,16 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-/// The command line that runs `prog args` as root: itself when the core is root, else through systemd-run.
+/// Through systemd only as the core's own account (the image), for which polkit allows it. Anywhere else (a
+/// developer's machine, CI) the core does what it can as whoever runs it, as before.
+fn via_systemd() -> bool {
+    // SAFETY: geteuid has no preconditions.
+    !is_root() && crate::peer::user_id(crate::peer::CORE_USER) == Some(unsafe { libc::geteuid() })
+}
+
+/// The command line that runs `prog args` as root: through systemd-run as the core's own account, else itself.
 fn root_argv(prog: &str, args: &[&str], timeout: Duration) -> (String, Vec<String>) {
-    if is_root() {
+    if !via_systemd() {
         return (prog.to_string(), args.iter().map(|a| a.to_string()).collect());
     }
     let mut v: Vec<String> = ["--uid=0", "--pipe", "--wait", "--quiet", "--collect", "--service-type=exec"].iter().map(|s| s.to_string()).collect();
@@ -99,7 +106,7 @@ fn root_ok(prog: &str, args: &[&str]) -> Result<Value, String> {
 
 /// Write a system file (sysfs, /proc/sys) as root.
 fn root_write(path: &Path, value: &str) -> Result<(), String> {
-    if is_root() {
+    if !via_systemd() {
         return fs::write(path, value).map_err(|e| format!("{}: {e}", path.display()));
     }
     let p = path.display().to_string();
