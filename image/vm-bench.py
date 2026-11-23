@@ -44,8 +44,8 @@ def run(con, cmd: str, timeout: float) -> str:
 
 
 def status_len(out: str) -> int:
-    """The number a command printed on the last line of its own."""
-    nums = re.findall(r"^\s*(\d+)\s*$", out, re.M)
+    """The number a command printed last, at the end of a line."""
+    nums = re.findall(r"(?:^|# )(\d+)\s*$", out, re.M)  # alone, or after the prompt once the line editor is off
     return int(nums[-1]) if nums else -1
 
 
@@ -132,11 +132,12 @@ def main() -> int:
         con.send(f" export ANTHROPIC_API_KEY='{key}'\n")
         seen = run(con, "echo ${#ANTHROPIC_API_KEY}", 60)  # everything the console printed since, up to a marker
         shown = key in seen or key in con.buf
-        print(f"key set in the VM shell: {'yes' if status_len(seen) == len(key) else 'NO'}", flush=True)
+        key_set = status_len(seen) == len(key)
+        print(f"key set in the VM shell: {'yes' if key_set else 'NO'}", flush=True)
         print(f"key shown on the console: {'YES' if shown else 'no'}", flush=True)
         if args.check_only or shown:
             print("console around the key line (key scrubbed):\n" + (seen + con.buf).replace(key, "<key>")[-600:], flush=True)
-        if shown:
+        if shown or not key_set:
             return 1
         if args.check_only:  # the console path without spending: a stand-in file comes back intact
             run(con, "printf '[{\"kind\": \"ai.tell\", \"text\": \"check\"}]' > /tmp/bench/told.json", 30)
