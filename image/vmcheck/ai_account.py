@@ -52,16 +52,16 @@ elif mode == "sandbox":
     probe = ("import subprocess; from linuxai.tools import sandbox_argv, sandbox_hidden, sandbox_ready;"
              "print('ready', sandbox_ready()[0]);"
              "box = sandbox_argv('/', sandbox_hidden());"
-             "print(subprocess.run(box + ['sh', '-c', 'ls -A /run/linuxai /run/linuxai-organs | wc -w;"
-             " (getent hosts archlinux.org >/dev/null && echo net) || echo no-network;"
-             " grep NoNewPrivs /proc/self/status; touch /etc/x 2>&1 | grep -c Read-only; systemctl is-active linuxai-core'],"
-             " capture_output=True, text=True, check=False).stdout)")
+             "print(subprocess.run(box + ['sh', '-c', 'echo sockets $(ls -A /run/linuxai /run/linuxai-organs 2>/dev/null | grep -c sock);"
+             " (timeout 5 bash -c \"echo > /dev/tcp/1.1.1.1/53\" 2>/dev/null && echo connect yes) || echo connect no;"
+             " (timeout 5 getent hosts archlinux.org >/dev/null && echo lookup yes) || echo lookup no;"
+             " grep NoNewPrivs /proc/self/status; echo readonly $(touch /etc/x 2>&1 | grep -c Read-only);"
+             " echo services $(systemctl is-active linuxai-core)'], capture_output=True, text=True, check=False).stdout)")
     out = sh(["python3", "-c", probe], AI, env={"PYTHONPATH": PY, "HOME": "/tmp"})
-    lines = out.splitlines()
     nnp = re.search(r"NoNewPrivs:\s+1", out) is not None
-    print(f"sandbox: works {'ready True' in out}; core and organ sockets hidden {len(lines) > 1 and lines[1].strip() == '0'}; "
-          f"no network {'no-network' in out}; no new privileges {nnp}; read-only {'1' in lines[4:5]}; "
-          f"still sees services {'active' in lines[-1:]}")
+    print(f"sandbox: works {'ready True' in out}; core and organ sockets hidden {'sockets 0' in out}; "
+          f"no network {'connect no' in out}; no name lookups {'lookup no' in out}; no new privileges {nnp}; "
+          f"read-only {'readonly 1' in out}; still sees services {'services active' in out}")
 
 elif mode == "organs":
     st = os.stat("/run/linuxai-organs")

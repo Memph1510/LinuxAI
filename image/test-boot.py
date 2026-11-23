@@ -180,7 +180,7 @@ LATE_CHECKS = [
      r"asked first True; still waiting True; no standing permission True; claiming to be the human still asks True"),
     ("the AI's commands run in the sandbox: no sockets, no network, no privileges, read-only",
      "python3 /tmp/aicheck.py sandbox",
-     r"works True; core and organ sockets hidden True; no network True; no new privileges True; read-only True; still sees services True"),
+     r"works True; core and organ sockets hidden True; no network True; no name lookups True; no new privileges True; read-only True; still sees services True"),
     ("the shared organs folder: the AI's account reaches the browser", "python3 /tmp/aicheck.py organs",
      r"setgid True; .*the AI's account reaches the browser True"),
     ("the background AI runs as its own account and can't read the key file", "python3 /tmp/aicheck.py mind",
