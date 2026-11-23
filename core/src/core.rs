@@ -483,8 +483,12 @@ impl Core {
             "event" => {
                 // An organ (mail, sms, a test harness...) reporting something that happened.
                 let kind = req["kind"].as_str().unwrap_or("");
+                let peer = req["_peer_uid"].as_u64().map(|u| u as u32);
+                let ai: Vec<u32> = if req["_peer_ai"] == true { peer.into_iter().collect() } else { vec![] };
                 if kind.is_empty() || kind.starts_with("plan.") || kind.starts_with("action.") {
                     json!({"ok": false, "error": "event needs a kind (plan.* and action.* are reserved)"})
+                } else if let Err(e) = crate::peer::may_emit(kind, peer, &ai) {
+                    json!({"ok": false, "error": e})
                 } else {
                     self.emit(kind, req.get("data").cloned().unwrap_or(json!({})));
                     json!({"ok": true})
@@ -565,13 +569,54 @@ impl Core {
                 self.settle();
                 r
             }
-            "object_patch" => json!({"ok": self.mem.patch_object(req["id"].as_str().unwrap_or(""), &req["fields"])}),
+            "object_patch" => {
+                let id = req["id"].as_str().unwrap_or("");
+                let existing = self.mem.object(id).unwrap_or(json!({}));
+                let typ = existing["type"].as_str().unwrap_or("").to_string();
+                let peer = req["_peer_uid"].as_u64().map(|u| u as u32);
+                match crate::peer::may_write(peer, &typ, &req["fields"], Some(&existing)) {
+                    Err(e) => json!({"ok": false, "error": e}),
+                    Ok(()) => json!({"ok": self.mem.patch_object(id, &req["fields"])}),
+                }
+            }
+            // Whether an outside claim proved accurate (review M3): only outside facts, with the evidence that settled
+            // it (a record or a plan), once per fact. The sender's track record is the core's to update.
+            "fact_verdict" => self.fact_verdict(req),
             "object" => match self.mem.object(req["id"].as_str().unwrap_or("")) {
                 Some(o) => json!({"ok": true, "object": o}),
                 None => json!({"ok": false, "error": "no such object"}),
             },
             _ => json!({"ok": false, "error": format!("unknown op '{op}'")}),
         }
+    }
+
+    /// Whether an outside claim proved accurate (independent review M3). Only outside facts; the evidence that settled it
+    /// (a record or a plan) must exist; one verdict per fact; the sender's track record is updated here, by the core.
+    fn fact_verdict(&self, req: &Value) -> Value {
+        let id = req["id"].as_str().unwrap_or("");
+        let verdict = req["verdict"].as_str().unwrap_or("");
+        let evidence = req["evidence"].as_str().unwrap_or("");
+        if verdict != "confirmed" && verdict != "contradicted" {
+            return json!({"ok": false, "error": "verdict is confirmed or contradicted"});
+        }
+        let Some(fact) = self.mem.object(id) else { return json!({"ok": false, "error": "no such fact"}) };
+        if fact["trust"] != "outside" {
+            return json!({"ok": false, "error": "only outside facts get a verdict (this record isn't from outside)"});
+        }
+        if evidence.is_empty() || (self.mem.object(evidence).is_none() && self.mem.load_plan(evidence).is_none()) {
+            return json!({"ok": false, "error": "say what settled it: evidence is the id of the record or plan that shows it"});
+        }
+        if let Some(was) = fact["verdict"].as_str() {
+            return json!({"ok": false, "error": format!("already recorded as {was}")});
+        }
+        self.mem.patch_object(id, &json!({"verdict": verdict, "evidence": evidence, "verdict_note": req["note"], "verdict_at": crate::memory::now()}));
+        if let Some(sender) = fact["source"]["from"].as_str().filter(|s| s.contains('@')) {
+            if let Some(c) = self.mem.objects_of("correspondent", 2000).into_iter().find(|c| c["address"] == sender) {
+                let cid = c["id"].as_str().unwrap_or("").to_string();
+                self.mem.patch_object(&cid, &json!({verdict: c[verdict].as_i64().unwrap_or(0) + 1}));
+            }
+        }
+        json!({"ok": true, "verdict": verdict})
     }
 
     /// A plan for a task that came from outside information carries the outside label, whatever the AI says.

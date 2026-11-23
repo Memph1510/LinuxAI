@@ -98,7 +98,8 @@ fn serve_with(core: Arc<core::Core>, stream: UnixStream, ai: &[u32]) {
         Err(_) => return,
     };
     // The AI's own account never speaks for the human, whatever a request says (review C1).
-    let from_ai = peer::peer_uid(&stream).map(|u| ai.contains(&u)).unwrap_or(false);
+    let peer = peer::peer_uid(&stream);
+    let from_ai = peer.map(|u| ai.contains(&u)).unwrap_or(false);
     let reader = BufReader::new(stream);
     for line in reader.lines() {
         let Ok(line) = line else { return };
@@ -114,6 +115,15 @@ fn serve_with(core: Arc<core::Core>, stream: UnixStream, ai: &[u32]) {
         };
         if from_ai {
             peer::as_ai(&mut req);
+        }
+        // Who connected, as the kernel says: anything the client wrote there is dropped first.
+        if let Some(m) = req.as_object_mut() {
+            m.remove("_peer_uid");
+            m.remove("_peer_ai");
+            if let Some(uid) = peer {
+                m.insert("_peer_uid".into(), json!(uid));
+                m.insert("_peer_ai".into(), json!(from_ai));
+            }
         }
         if req["op"] == "follow" {
             // Stream every event from now on, one JSON object per line.
@@ -276,6 +286,12 @@ fn mail_cmd(args: &[String]) -> std::io::Result<()> {
             Ok(())
         }
         Some("watch") => {
+            // Without our own server's authserv-id no sender can be verified, and a forged header could be taken as
+            // proof (review M2): refuse to run rather than mark mail "sender verified" on the sender's word.
+            if cfg.authserv_id.is_none() {
+                eprintln!("linuxai mail: set LINUXAI_AUTHSERV_ID (your mail server's name in its Authentication-Results headers)");
+                std::process::exit(2);
+            }
             client.wait_until_up();
             let every: u64 = std::env::var("LINUXAI_MAIL_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
             loop {

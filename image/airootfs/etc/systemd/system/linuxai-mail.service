@@ -15,6 +15,8 @@ Environment="LINUXAI_EXTRACT_CMD=/usr/local/bin/cortex extract"
 ExecStart=/usr/local/bin/linuxai-core mail watch
 Restart=on-failure
 RestartSec=30
+# Exit 2 means a setting is missing (e.g. LINUXAI_AUTHSERV_ID): retrying won't help; the log says which.
+RestartPreventExitStatus=2
 
 [Install]
 WantedBy=multi-user.target

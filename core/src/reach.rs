@@ -74,6 +74,8 @@ pub fn message_for(ev: &Value) -> Option<String> {
                                         d["what"].as_str().unwrap_or("?"), d["message"].as_str().unwrap_or("unknown"))),
         // A plan stopped by an internal error is already reported as linuxai.crash.
         "plan.failed" if d["error"].as_str().map(|e| e.starts_with("LinuxAI hit an internal error")).unwrap_or(false) => None,
+        "mail.failed" => Some(format!("LinuxAI: an email in {} couldn't be read ({}). The server already marks it read, so look for it there.",
+                                      d["mailbox"].as_str().unwrap_or("your inbox"), d["error"].as_str().unwrap_or("unknown"))),
         "plan.failed" => Some(format!("LinuxAI: '{}' failed: {}. I'll look into it.", d["plan"].as_str().unwrap_or(""),
                                       d["error"].as_str().unwrap_or("unknown"))),
         _ => None,

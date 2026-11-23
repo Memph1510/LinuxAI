@@ -460,6 +460,10 @@ impl Core {
                 if typ.is_empty() || !req["fields"].is_object() {
                     return json!({"ok": false, "error": "object_put needs a type and a fields object"});
                 }
+                let peer = req["_peer_uid"].as_u64().map(|u| u as u32);
+                if let Err(e) = crate::peer::may_write(peer, typ, &req["fields"], None) {
+                    return json!({"ok": false, "error": e});
+                }
                 let id = self.mem.put_object(typ, req["handle"].as_str(), &req["fields"]);
                 self.emit("memory.stored", json!({"id": id, "type": typ}));
                 json!({"ok": true, "id": id})

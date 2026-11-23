@@ -162,10 +162,14 @@ fn raw_headers(raw: &[u8], name: &str) -> Vec<String> {
 }
 
 /// Did the sender's domain pass DMARC, or DKIM aligned with the From domain? Only the topmost
-/// Authentication-Results header from our own server (by authserv-id) counts.
+/// Authentication-Results header from our own server (by authserv-id) counts. Without an authserv-id no header can be
+/// told from one the sender wrote, so nothing is verified (independent review M2, issue #22).
 pub fn authenticated(raw: &[u8], from_domain: &str, authserv_id: Option<&str>) -> (bool, String) {
+    let Some(id) = authserv_id.filter(|i| !i.trim().is_empty()) else {
+        return (false, "not verified: LINUXAI_AUTHSERV_ID isn't set, so no Authentication-Results header can be trusted".into());
+    };
     let chosen = raw_headers(raw, "Authentication-Results").into_iter()
-        .find(|h| authserv_id.map(|id| h.to_lowercase().starts_with(&id.to_lowercase())).unwrap_or(true));
+        .find(|h| h.to_lowercase().starts_with(&id.to_lowercase()));
     let Some(h) = chosen else { return (false, "no authentication results".into()) };
     let low = h.to_lowercase();
     if low.split(|c: char| c == ';' || c.is_whitespace()).any(|t| t == "dmarc=pass") {
@@ -677,15 +681,24 @@ pub fn poll_imap(api: &dyn Api, cfg: &MailConfig) -> Result<usize, String> {
     let listing = String::from_utf8_lossy(&curl(&base, Some("UID SEARCH UNSEEN"))?).to_string();
     let uids: Vec<String> = listing.lines().filter(|l| l.starts_with("* SEARCH"))
         .flat_map(|l| l.split_whitespace().skip(2).map(String::from).collect::<Vec<_>>()).collect();
+    Ok(ingest_each(api, cfg, &mailbox, &uids, |uid| curl(&format!("{base};UID={uid}"), None)))
+}
+
+/// Each message on its own: one that fails (fetching has already marked it read on the server) is reported as
+/// `mail.failed`, not lost silently, and the rest still come in (independent review L3). Returns how many came in.
+pub fn ingest_each(api: &dyn Api, cfg: &MailConfig, mailbox: &str, uids: &[String], fetch: impl Fn(&str) -> Result<Vec<u8>, String>) -> usize {
     let mut n = 0;
     for uid in uids {
-        let raw = curl(&format!("{base};UID={uid}"), None)?;
-        if !raw.is_empty() {
-            ingest(&raw, api, cfg)?;
-            n += 1;
+        let result = fetch(uid).and_then(|raw| if raw.is_empty() { Ok(None) } else { ingest(&raw, api, cfg).map(Some) });
+        match result {
+            Ok(Some(_)) => n += 1,
+            Ok(None) => {}
+            Err(e) => {
+                api.call("event", json!({"kind": "mail.failed", "data": {"uid": uid, "mailbox": mailbox, "error": e}}));
+            }
         }
     }
-    Ok(n)
+    n
 }
 
 #[cfg(test)]
@@ -1001,5 +1014,38 @@ mod tests {
             assert_eq!(form["category"], "other", "{text}");
             assert!(form.get("flagged_by_code").is_none(), "{text}");
         }
+    }
+
+    #[test]
+    fn without_our_servers_name_no_sender_is_verified() {
+        // Review M2 (issue #22): the sender can write an Authentication-Results header too. Without our own server's
+        // authserv-id there's no telling them apart, so nothing counts.
+        let raw = email(&["attacker.example; dmarc=pass"], None, Some("Pay the new account."), "", None);
+        assert!(!authenticated(&raw, "hollis-logistics.com", None).0);
+        assert!(!authenticated(&raw, "hollis-logistics.com", Some("")).0);
+        assert!(!authenticated(&raw, "hollis-logistics.com", Some("mx.linuxai.local")).0, "a header from someone else's server");
+        let ours = email(&["mx.linuxai.local; dmarc=pass"], None, Some("Hi."), "", None);
+        assert!(authenticated(&ours, "hollis-logistics.com", Some("mx.linuxai.local")).0);
+    }
+
+    #[test]
+    fn one_email_that_fails_is_reported_and_the_rest_still_come_in() {
+        // Review L3: fetching marks a message read on the server; if reading it failed, it was lost without a word and
+        // the rest of the poll was dropped.
+        let dir = std::env::temp_dir().join(format!("linuxai-mail-each-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let core: Arc<Core> = Arc::new(Core::new(Memory::in_memory(), Box::new(NoOrgans)));
+        let cfg = MailConfig { mail_dir: dir.join("mail"), authserv_id: Some("mx.linuxai.local".into()),
+            extract_cmd: fake_extractor(&dir, "each", json!({"category": "other", "summary": "A note."})) };
+        let good = email(&["mx.linuxai.local; dmarc=pass"], None, Some("Hello."), "", None);
+        let uids: Vec<String> = ["1", "2", "3"].iter().map(|s| s.to_string()).collect();
+        let n = ingest_each(&core, &cfg, "INBOX", &uids, |uid| if uid == "2" { Err("connection reset".into()) } else { Ok(good.clone()) });
+        assert_eq!(n, 2, "the others still came in");
+        let events = core.call("events", json!({"since": 0, "limit": 500}))["events"].clone();
+        let failed: Vec<&Value> = events.as_array().unwrap().iter().filter(|e| e["kind"] == "mail.failed").collect();
+        assert_eq!(failed.len(), 1, "{events}");
+        assert_eq!(failed[0]["data"]["uid"], "2");
+        assert!(crate::reach::message_for(failed[0]).unwrap().contains("couldn't be read"), "the human is told");
     }
 }

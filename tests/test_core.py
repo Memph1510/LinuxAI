@@ -475,7 +475,7 @@ def test_web_research_tools_and_source_ratings(env, live_core):
     tb.t_rate_source("rumors-truckers.example", "freight/negotiate", "blocked", "made-up rates", from_human=True)
     listed = tb.t_list_sources("freight/negotiate/hollis")
     assert listed.splitlines()[0].startswith("- dat.com: trusted")
-    assert "rumors-truckers.example: blocked" in listed and "by human" in listed
+    assert "rumors-truckers.example: blocked" in listed and "by the human, relayed by you" in listed
     search = next(t for t in tb.server_tools() if t["name"] == "web_search")
     assert search["blocked_domains"] == ["rumors-truckers.example"]
     cfg.web = False
@@ -702,7 +702,10 @@ def test_corrections_and_confirmations_build_the_senders_record(env, live_core, 
     old_id = next(f for f in first["facts"] if f.startswith("obj:load_offer/"))
     new_id = next(f for f in second["facts"] if f.startswith("obj:load_offer/"))
     assert second["corrected"] == [old_id]
-    assert tb.t_confirm_fact(new_id, "confirmed", "rate con matched") == "Recorded as confirmed."
+    # A verdict names what settled it (here the email that carried the correction), counts once, outside facts only.
+    assert "evidence" in tb.t_confirm_fact(new_id, "confirmed", "", "rate con matched")
+    assert tb.t_confirm_fact(new_id, "confirmed", second["message"], "rate con matched") == "Recorded as confirmed."
+    assert "already recorded" in tb.t_confirm_fact(new_id, "confirmed", second["message"], "again")
     person = live_core.request("find", spec={"type": "correspondent", "where": {"address": "dana@hollis-logistics.com"}})["found"][0]
     assert (person["messages"], person["corrections"], person["confirmed"]) == (2, 1, 1)
     plan = {"plan": "p", "taint": "outside", "assess": {"confidence": 0.9, "consequences": ["x"], "outcomes": ["y"]},
