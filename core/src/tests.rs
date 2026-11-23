@@ -637,7 +637,9 @@ fn resolving_a_blocker_needs_an_assessment_too() {
 fn old_history_becomes_daily_digests_and_nothing_in_progress_is_lost() {
     let (c, _) = core();
     let day = 86400.0;
-    let old = crate::memory::now() - 40.0 * day;
+    // Noon (UTC) of a day 40 days back: digests are per UTC day, and "now minus 40 days" near midnight spread these
+    // over two days (CI failed at 23:56).
+    let old = ((crate::memory::now() - 40.0 * day) / day).floor() * day + day / 2.0;
     for i in 0..50 { c.mem.add_event_at(old + i as f64, "power.unplugged", &json!({})); }
     c.mem.add_event_at(old + 100.0, "ai.tell", &json!({"text": "Battery is low"}));
     c.mem.add_event_at(old + 200.0, "task.failed", &json!({"title": "Book hotel", "error": "sold out"}));
