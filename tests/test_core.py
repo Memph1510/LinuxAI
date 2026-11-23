@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -87,13 +88,15 @@ def test_the_ais_unasked_commands_run_in_the_sandbox(env, tmp_path, monkeypatch)
     box = sandbox_argv(str(tmp_path), sandbox_hidden(cfg.mail_dir))
     out = subprocess.run(box + ["sh", "-c", "touch /etc/linuxai-x 2>&1; touch ./x 2>&1; echo key=$ANTHROPIC_API_KEY; "
                                 "ls " + str(secrets) + "; (getent hosts example.com || echo no-network); "
-                                "(sudo -n true >/dev/null 2>&1 && echo GOT-ROOT) || echo no-root"],
+                                "grep NoNewPrivs /proc/self/status; (sudo -n true >/dev/null 2>&1 && echo GOT-ROOT) || echo no-root"],
                          capture_output=True, text=True, timeout=60, check=False).stdout
     assert out.count("Read-only file system") == 2, out
     assert "key=\n" in out and "sk-test" not in out, out
     assert "core.sock" not in out, "LinuxAI's sockets are hidden"
     assert "no-network" in out, out
-    assert "no-root" in out and "GOT-ROOT" not in out, out
+    # No way to gain privileges (the kernel's flag); and so, for anyone but root, no sudo.
+    assert re.search(r"NoNewPrivs:\s+1", out), out
+    assert os.geteuid() == 0 or ("no-root" in out and "GOT-ROOT" not in out), out
     # The working folder is there to read, even under /tmp (which is otherwise a fresh scratch space).
     (tmp_path / "notes.txt").write_text("hello")
     seen = subprocess.run(box + ["cat", "notes.txt"], capture_output=True, text=True, timeout=60, check=False).stdout
