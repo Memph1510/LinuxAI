@@ -184,7 +184,7 @@ What's still different, read from the messages the AI sent the human (the benchm
   "restarts done" counts any restart as success, so it can't tell a good restart from a useless one. Measuring
   restarts needs a service a restart actually fixes (one that fails once, then starts).
 - **The same notice, three times**: cups failed three times in the day and the human got the same message each time
-  (nginx: twice). Nothing yet remembers "already told the owner about this, unchanged".
+  (nginx: twice). Fixed by the owner's choice ("fold that into the earlier message"): see "Repeats" below.
 - **More conversations than the stand-in**: the synthetic tasks carry no details ("Weekly fuel report") and the
   synthetic routine emails are one line ("rate $1,630"), so the real AI asked instead of guessing.
 - **Money was shown in cents to the human** ("320000 cents"): its plans put the raw `rate_cents` value in the question.
@@ -224,6 +224,18 @@ unrelated mail isn't taken as the answer, the $3,200 reply is matched and put to
 exchange's history is kept. The core test `a_solved_situation_becomes_a_habit_replayed_without_the_model_until_it_fails` checks the habit
 lifecycle.
 
+## Repeats
+
+A message to the human about a named situation (`service.failed:cups`, the same key habits use) goes out once. When
+the same situation comes back within `LINUXAI_FOLD_HOURS` (24) of the last message about it, the core folds the new
+message into the earlier one instead of adding another: the event says which message it folds into (`folds`), how
+often it has happened (`count`) and since when, and its text ends "(This has now happened 3 times since 9:14am.)".
+The Workspace replaces the earlier entry and moves it to the top, the terminal shows one "↻" line, and no new text
+message is sent. It covers the AI's own messages while it handles a situation and the messages of plans woken for
+one (including a habit replaying them). Messages about no particular situation are never folded. Tests:
+`a_repeat_of_a_situation_is_folded_into_the_message_already_sent` (core) and
+`test_a_repeat_failure_is_folded_into_the_message_already_sent` (AI layer).
+
 ## Settings
 
 | Setting | Default | |
@@ -231,6 +243,7 @@ lifecycle.
 | `LINUXAI_MIND` | `ladder` | `full` restores one fresh conversation per event |
 | `LINUXAI_MIND_BATCH` | `600` | the most seconds routine work waits to be batched |
 | `LINUXAI_HABIT_AFTER` | `1` | fixes that held before a solution is replayed without the model |
+| `LINUXAI_FOLD_HOURS` | `24` | a repeat of a situation within this many hours of the last message about it is folded into that message |
 | `LINUXAI_HABIT_HOLD` | `900` | seconds a situation must stay away after a fix for it to count (the benchmark sets 0: its hours pass in seconds) |
 | `LINUXAI_REHEARSAL` | off | `1`: actions are recorded, not performed (benchmarks, trying plans safely) |
 | `LINUXAI_RULE_MAX_PER_MINUTE` | `10` | the loop guard on rules |
@@ -241,8 +254,6 @@ lifecycle.
   anything reaches Claude. Measurable with this benchmark once added.
 - **Restarts that work**: give the VM benchmark a service that fails once and then starts, so a restart is the
   right call and can be counted; and count "diagnosed, didn't restart" separately.
-- **Don't repeat a notice**: when a situation the human was already told about recurs unchanged, say so once (or
-  fold it into the earlier message) instead of sending it again. How he wants repeats handled is his call.
 - **The full `--real` run** (all three strategies) if the owner wants the before/after measured.
 - **Effort sweep with the real model**: email extraction scored the same at low and medium effort (MAIL.md); the
   mind's routine work still needs the sweep.
