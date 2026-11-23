@@ -32,6 +32,12 @@ spec.loader.exec_module(tb)
 FAILING_UNITS = ("cups", "nginx")
 
 
+def status(out: str) -> str:
+    """The HTTP status a command printed on a line of its own (the shell can add lines after it)."""
+    codes = re.findall(r"^\s*(\d{3})\s*$", out, re.M)
+    return codes[-1] if codes else out.strip()[-60:]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("iso")
@@ -63,7 +69,7 @@ def main() -> int:
         con.read_until(r"login:", args.boot_timeout)
         print(f"booted in {time.time() - t0:.0f}s", flush=True)
         con.login()
-        con.run("export TERM=dumb PS1='# '; stty -echo cols 200", 30)
+        con.run("export TERM=dumb PS1='# '; unset REPORTTIME; stty -echo cols 200", 30)
         con.run("timeout 240 systemctl is-system-running --wait", 300)
         # The workload's failing services, for real: units that fail when started.
         for unit in FAILING_UNITS:
@@ -85,14 +91,14 @@ def main() -> int:
         # The AI layer the image ships (and its packages), as the image's own cortex launcher sets it.
         con.run("export PYTHONPATH=/opt/linuxai/lib", 30)
         reach = con.run("curl -s -o /dev/null -w '%{http_code}\\n' https://api.anthropic.com/v1/models", 60)
-        code = reach.strip()[-3:]
+        code = status(reach)
         # The benchmark's own client, with a dummy key: a 401 means it reached the API and trusted its certificate.
         probe = ("import anthropic\ntry:\n    anthropic.Anthropic(api_key=\"probe\", max_retries=0).models.list()\n    print(200)\n"
                  "except anthropic.APIStatusError as e:\n    print(e.status_code)\nexcept Exception as e:\n    print(type(e).__name__, e, getattr(e, \"__cause__\", None))\n")
         (tmp / "probe.py").write_text(probe)
         tb.copy_in(con, tmp / "probe.py", "/tmp/bench/probe.py")
         py = con.run("python3 /tmp/bench/probe.py 2>&1 | tail -8", 600)  # the first import compiles the SDK (slow without KVM)
-        py_code = py.strip()[-3:]
+        py_code = status(py)
         print(f"API reachable from the VM: curl HTTP {code}, python HTTP {py_code}", flush=True)
         if code not in ("200", "401") or py_code not in ("200", "401"):
             print(f"the VM can't reach the API; stopping before any spend. The client said:\n{py.strip()}")
