@@ -29,6 +29,7 @@ mod jobs;
 mod images;
 mod mail;
 mod memory;
+mod peer;
 mod models;
 mod playbooks;
 mod prompts;
@@ -80,35 +81,40 @@ fn is_root() -> bool {
         .unwrap_or(false)
 }
 
-fn group_id(name: &str) -> Option<u32> {
-    std::fs::read_to_string("/etc/group").ok()?.lines().find_map(|l| {
-        let f: Vec<&str> = l.split(':').collect();
-        (f.first() == Some(&name)).then(|| f.get(2)?.parse().ok()).flatten()
-    })
-}
+use peer::group_id;
 
 fn arg(args: &[String], flag: &str) -> Option<String> {
     args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
 }
 
 fn serve(core: Arc<core::Core>, stream: UnixStream) {
+    serve_with(core, stream, &peer::ai_uids())
+}
+
+/// `ai`: the AI's accounts (uids). A connection from one of them never speaks for the human.
+fn serve_with(core: Arc<core::Core>, stream: UnixStream, ai: &[u32]) {
     let mut writer = match stream.try_clone() {
         Ok(w) => w,
         Err(_) => return,
     };
+    // The AI's own account never speaks for the human, whatever a request says (review C1).
+    let from_ai = peer::peer_uid(&stream).map(|u| ai.contains(&u)).unwrap_or(false);
     let reader = BufReader::new(stream);
     for line in reader.lines() {
         let Ok(line) = line else { return };
         if line.trim().is_empty() {
             continue;
         }
-        let req: Value = match serde_json::from_str(&line) {
+        let mut req: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
                 let _ = writeln!(writer, "{}", json!({"ok": false, "error": format!("bad json: {e}")}));
                 continue;
             }
         };
+        if from_ai {
+            peer::as_ai(&mut req);
+        }
         if req["op"] == "follow" {
             // Stream every event from now on, one JSON object per line.
             let (tx, rx) = mpsc::channel();
@@ -161,7 +167,9 @@ fn daemon(args: &[String]) -> std::io::Result<()> {
     let listener = UnixListener::bind(&socket)?;
     {
         use std::os::unix::fs::PermissionsExt;
-        let group = arg(args, "--group").or_else(|| std::env::var("LINUXAI_GROUP").ok());
+        // The socket's group: everyone who may talk to the core (the human and the AI's own account on the image:
+        // `linuxai-core`). Files the core writes keep `--group` (the human's).
+        let group = arg(args, "--socket-group").or_else(|| arg(args, "--group")).or_else(|| std::env::var("LINUXAI_GROUP").ok());
         if let Some(gid) = group.as_deref().and_then(group_id) {
             let _ = std::os::unix::fs::chown(&socket, None, Some(gid));
             std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;

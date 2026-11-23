@@ -45,6 +45,87 @@ def test_not_read_only(cmd):
     assert not is_read_only(cmd)
 
 
+# Independent review C1 (issue #22): each of these passed as "read-only" and could write, run a program, or change the
+# system. The sandbox is the boundary (below); this list is the second layer.
+@pytest.mark.parametrize("cmd", [
+    "env sudo id", "awk 'BEGIN{system(\"sudo id\")}'", "cat <(sudo id)", "sed -n \"1e sudo id\" /etc/hostname",
+    "sed -n \"w /tmp/x\" f", "find / -fprint /tmp/x", "sort -o /etc/x /etc/y", "git diff --output=/home/linuxai/.bashrc",
+    "ip link set eth0 down", "nmcli connection delete home", "journalctl --vacuum-size=1K", "date -s 2020-01-01",
+    "ss -K dst 1.2.3.4", "sed 's/a/b/w out' f", "tree -o x", "uniq a b", "git branch new", "git remote add x y",
+    "hostnamectl set-hostname x", "rg --pre ./x foo", "fd -x rm", "dmesg -C", "sort -ofile x",
+])
+def test_the_reviews_read_only_bypasses_are_refused(cmd):
+    assert not is_read_only(cmd)
+
+
+@pytest.mark.parametrize("cmd", [
+    "sed -n /error/p file", "sed 's/foo/bar/' file", "date", "ss -tlnp", "git branch -a", "git remote -v",
+    "journalctl -b -p err", "ip route", "nmcli device status", "uniq -c file", "awk '{print $1}' file", "hostnamectl",
+])
+def test_diagnosis_still_runs_unasked(cmd):
+    assert is_read_only(cmd)
+
+
+def _sandbox_or_skip():
+    from linuxai.tools import sandbox_ready
+    ok, why = sandbox_ready()
+    if not ok:
+        pytest.skip(f"no working sandbox here: {why}")
+
+
+def test_the_ais_unasked_commands_run_in_the_sandbox(env, tmp_path, monkeypatch):
+    """Review C1: a command the AI runs without the human can't write, reach the network or the core, see LinuxAI's
+    secrets or the environment's keys, or gain privileges."""
+    _sandbox_or_skip()
+    from linuxai.tools import sandbox_argv, sandbox_hidden
+    cfg, _, tb, _ = env
+    secrets = tmp_path / "xdg"
+    secrets.mkdir()
+    (secrets / "core.sock").write_text("")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(secrets))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    box = sandbox_argv(str(tmp_path), sandbox_hidden(cfg.mail_dir))
+    out = subprocess.run(box + ["sh", "-c", "touch /etc/linuxai-x 2>&1; touch ./x 2>&1; echo key=$ANTHROPIC_API_KEY; "
+                                "ls " + str(secrets) + "; (getent hosts example.com || echo no-network); "
+                                "(sudo -n true 2>&1 || true) | head -1"],
+                         capture_output=True, text=True, timeout=60, check=False).stdout
+    assert out.count("Read-only file system") == 2, out
+    assert "key=\n" in out and "sk-test" not in out, out
+    assert "core.sock" not in out, "LinuxAI's sockets are hidden"
+    assert "no-network" in out, out
+    assert "sudo" not in out or "no new privileges" in out or "not found" in out or "effective uid" in out, out
+    # The working folder is there to read, even under /tmp (which is otherwise a fresh scratch space).
+    (tmp_path / "notes.txt").write_text("hello")
+    seen = subprocess.run(box + ["cat", "notes.txt"], capture_output=True, text=True, timeout=60, check=False).stdout
+    assert seen == "hello", seen
+
+    # Behind the scenes, every command goes through it (and says so).
+    tb.mind = True
+    tb.cwd = str(tmp_path)
+    r = tb.t_run_command("ls " + str(secrets), "check")
+    assert "core.sock" not in r and "exit code: 0" in r, r
+
+
+def test_behind_the_scenes_no_sandbox_means_no_command(env, monkeypatch):
+    from linuxai import tools as T
+    _, _, tb, _ = env
+    monkeypatch.setattr(T, "_sandbox_state", {"ok": False, "why": "bubblewrap (bwrap) isn't installed"})
+    tb.mind = True
+    assert "Refused" in tb.t_run_command("ls /", "look") and "sandbox" in tb.t_run_command("ls /", "look")
+
+
+def test_the_ai_never_reads_linuxais_keys(env, tmp_path, monkeypatch):
+    _, _, tb, _ = env
+    monkeypatch.setenv("HOME", str(tmp_path))
+    key = tmp_path / ".config" / "linuxai" / "env"
+    key.parent.mkdir(parents=True)
+    key.write_text("ANTHROPIC_API_KEY=sk-test-not-real\n")
+    for path in (str(key), "/proc/self/environ"):
+        name, args = "read_file", {"path": path}
+        result, is_error = tb.execute(name, args)
+        assert is_error and "sk-test" not in str(result), result
+
+
 def test_allow_prefixes():
     assert suggest_prefix("sudo pacman -Syu --noconfirm") == "sudo pacman"
     assert suggest_prefix("git pull origin main") == "git pull"
@@ -1255,7 +1336,7 @@ def test_tool_inputs_are_checked_before_anything_runs(env):
     """Inputs stream in; one cut off or malformed is refused with what's wrong, and nothing runs."""
     _, _, tb, _ = env
     ran = []
-    tb._spawn = lambda c, t: ran.append(c) or (0, "", tb.cwd)
+    tb._spawn = lambda c, t, confine=False: ran.append(c) or (0, "", tb.cwd)
     for args, want in [({"why": "x"}, "missing 'command'"), ({"command": 5, "why": "x"}, "expected string"),
                        ({"command": "ls", "why": "x", "timeout": "soon"}, "expected integer"),
                        ({"command": "ls", "why": "x", "timeout": True}, "expected integer"),

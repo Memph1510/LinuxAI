@@ -8,7 +8,9 @@ Wants=dbus.service
 Type=notify
 # Sending email (the send_email verb) happens in the core: LINUXAI_SMTP_* and LINUXAI_MAIL_FROM in mail.env.
 EnvironmentFile=-/etc/linuxai/mail.env
-ExecStart=/usr/local/bin/linuxai-core daemon --group linuxai --playbooks /home/linuxai/playbooks --prompts /home/linuxai/prompts
+# The AI's own account (linuxai-ai) can reach the socket but never speaks for the human: the core checks who connects.
+Environment=LINUXAI_AI_USER=linuxai-ai
+ExecStart=/usr/local/bin/linuxai-core daemon --group linuxai --socket-group linuxai-core --playbooks /home/linuxai/playbooks --prompts /home/linuxai/prompts
 Restart=always
 RestartSec=2
 RuntimeDirectory=linuxai

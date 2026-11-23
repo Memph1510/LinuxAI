@@ -34,7 +34,7 @@ READ_ONLY = {
     "sort", "uniq", "cut", "awk", "tr", "diff", "cmp", "md5sum", "sha256sum", "du", "df", "free",
     "uptime", "uname", "whoami", "id", "groups", "hostname", "hostnamectl", "timedatectl", "date",
     "ps", "pgrep", "lsblk", "blkid", "lsusb", "lspci", "lscpu", "lsmod", "lsof", "ss", "which",
-    "type", "whereis", "echo", "printf", "pwd", "env", "printenv", "journalctl", "dmesg", "tree",
+    "type", "whereis", "echo", "printf", "pwd", "printenv", "journalctl", "dmesg", "tree",
     "readlink", "realpath", "basename", "dirname", "nproc", "sensors", "true", "test", "[",
 }
 READ_ONLY_SUB = {
@@ -57,9 +57,60 @@ def _segments(command: str) -> list[str]:
     return [s.strip() for s in re.split(r"\|\|?|&&|;|\n", command) if s.strip()]
 
 
+# Read-only programs that still have a mode that writes, runs something, or changes the system (independent review C1,
+# issue #22). A command using one is not read-only. This list is a second layer: the AI's unasked commands also run
+# in a sandbox (sandbox_argv), which is the boundary.
+_WRITES = {
+    "find": {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"},
+    "sort": {"-o", "--output"},
+    "tree": {"-o"},
+    "journalctl": {"--vacuum-size", "--vacuum-time", "--vacuum-files", "--rotate", "--flush", "--sync",
+                   "--relinquish-var", "--smart-relinquish-var", "--setup-keys", "--update-catalog"},
+    "date": {"-s", "--set"},
+    "ss": {"-K", "--kill"},
+    "dmesg": {"-C", "-c", "--clear", "--read-clear", "-D", "-E", "-n", "--console-off", "--console-on", "--console-level"},
+    "rg": {"--pre"},
+    "fd": {"-x", "-X", "--exec", "--exec-batch"},
+    "git": {"--output"},
+    "ip": {"set", "add", "del", "delete", "change", "replace", "flush", "append", "prepend", "up", "down"},
+    "nmcli": {"delete", "down", "up", "modify", "add", "edit", "reload", "set", "disconnect", "connect", "on", "off",
+              "import", "export", "clone", "load", "rescan", "wifi", "radio", "networking", "hostname"},
+}
+# sed commands that run a program or write a file: e, w, W, r, R (alone, after an address, or as a s/// flag).
+_SED_EXEC = re.compile(r"(?:^|[;{}\s,0-9$/!])[ewWrR](?:\s|$|;|})")
+
+
+def _writes(head: str, words: list[str]) -> bool:
+    bad = _WRITES.get(head, set())
+    for w in words[1:]:
+        if w in bad or w.split("=")[0] in bad:
+            return True
+        # Short options run together or with their value attached ("-ofile", "-sK"): any one of them counts.
+        if w.startswith("-") and not w.startswith("--") and any(f"-{ch}" in bad for ch in w[1:]):
+            return True
+    if head == "awk" and any(k in " ".join(words[1:]) for k in ("system", "getline", "|", "print >", "printf >")):
+        return True
+    if head == "sed" and any(_SED_EXEC.search(w) for w in words[1:] if not w.startswith("-")):
+        return True
+    if head in ("hostnamectl", "timedatectl") and any(w.startswith("set-") or w in ("ntp-servers", "revert") for w in words[1:]):
+        return True
+    if head == "uniq" and len([w for w in words[1:] if not w.startswith("-")]) > 1:
+        return True  # uniq IN OUT writes OUT
+    if head == "git" and len(words) > 1:
+        sub, rest = words[1], words[2:]
+        if sub == "branch" and any(not w.startswith("-") or w in ("-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move",
+                                                                    "--copy", "-f", "--force", "-u", "--set-upstream-to",
+                                                                    "--unset-upstream", "--edit-description") for w in rest):
+            return True  # a name creates a branch
+        if sub == "remote" and any(w not in ("-v", "--verbose", "show", "get-url") and not (rest and rest[0] in ("show", "get-url"))
+                                   for w in rest):
+            return True
+    return False
+
+
 def is_read_only(command: str) -> bool:
     """Conservative check: every pipeline segment is a known read-only command, no writes."""
-    if re.search(r"`|\$\(", command):
+    if re.search(r"`|\$\(|<\(|>\(", command):
         return False
     if ">" in SAFE_REDIRECT.sub("", command):
         return False
@@ -75,9 +126,9 @@ def is_read_only(command: str) -> bool:
         head = os.path.basename(words[0])
         if head in ("sudo", "doas"):
             return False
-        if head == "find" and any(w in ("-delete", "-exec", "-execdir", "-ok") for w in words):
+        if _writes(head, words):
             return False
-        if head == "sed" and len(words) > 1 and not any(w.startswith("-i") for w in words):
+        if head == "sed" and len(words) > 1 and not any(w.startswith(("-i", "--in-place")) for w in words):
             continue
         if head in READ_ONLY:
             continue
@@ -87,6 +138,70 @@ def is_read_only(command: str) -> bool:
             continue
         return False
     return True
+
+
+# ---- the sandbox for the AI's own commands (independent review C1, issue #22) -----------------------------------
+# Every command the AI runs without the human approving it there and then runs here: the whole filesystem read-only,
+# no network, no LinuxAI sockets (so it can't speak to the core as anyone), LinuxAI's secrets hidden, a clean
+# environment, and no way to gain privileges (bubblewrap sets no-new-privs, so sudo can't work). Processes and the
+# system's state stay visible, so diagnosis works as before.
+SANDBOX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_sandbox_state: dict[str, Any] = {}
+
+
+def sandbox_hidden(mail_dir: Path | None = None) -> list[str]:
+    """What the AI's commands never see: LinuxAI's sockets, the session's sockets, LinuxAI's secrets, raw email."""
+    out = ["/run/linuxai", "/run/linuxai-organs", "/etc/linuxai", "/var/lib/linuxai/mail",
+           str(Path.home() / ".config" / "linuxai"), "/home/linuxai/.config/linuxai"]
+    if os.environ.get("XDG_RUNTIME_DIR"):
+        out.append(os.environ["XDG_RUNTIME_DIR"])
+    if mail_dir:
+        out.append(str(mail_dir))
+    return out
+
+
+def sandbox_argv(cwd: str, hide: list[str]) -> list[str] | None:
+    """The bubblewrap command line a command runs under, or None without bubblewrap."""
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        return None
+    args = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+            "--unshare-net", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session", "--clearenv",
+            "--setenv", "PATH", SANDBOX_PATH, "--setenv", "HOME", str(Path.home()), "--setenv", "TERM", "dumb",
+            "--setenv", "LANG", os.environ.get("LANG", "C.UTF-8")]
+    here = Path(cwd).is_dir()
+    # /tmp is a fresh, empty scratch space (the real one holds sockets, e.g. the X display, and a read-only mount
+    # doesn't stop connecting to a socket). A working folder inside it is shown, read-only. Hidden paths come after,
+    # so nothing shown here uncovers them.
+    if here and Path(cwd).resolve().is_relative_to("/tmp"):
+        args += ["--ro-bind", cwd, cwd]
+    for h in dict.fromkeys(hide):
+        p = Path(h)
+        try:
+            if p.is_dir():
+                args += ["--tmpfs", h]
+            elif p.exists():
+                args += ["--ro-bind", "/dev/null", h]
+        except OSError:
+            pass
+    if here:
+        args += ["--chdir", cwd]
+    return args + ["--"]
+
+
+def sandbox_ready() -> tuple[bool, str]:
+    """Whether the sandbox works on this machine (checked once): (ok, why not)."""
+    if "ok" not in _sandbox_state:
+        argv = sandbox_argv("/", [])
+        if argv is None:
+            _sandbox_state.update(ok=False, why="bubblewrap (bwrap) isn't installed")
+        else:
+            try:
+                r = subprocess.run(argv + ["true"], capture_output=True, text=True, timeout=20, check=False)
+                _sandbox_state.update(ok=r.returncode == 0, why=(r.stderr or "").strip()[:300])
+            except (OSError, subprocess.SubprocessError) as e:
+                _sandbox_state.update(ok=False, why=str(e))
+    return _sandbox_state["ok"], _sandbox_state["why"]
 
 
 def suggest_prefix(command: str) -> str:
@@ -706,7 +821,21 @@ class Toolbox:
         path = path if path.is_absolute() else Path(self.cwd) / path
         if self._is_raw_mail(path):
             raise _Invalid("that folder holds raw email, which the AI never reads; use the extracted facts (read_facts)")
+        if self._is_secret(path):
+            raise _Invalid("that holds LinuxAI's keys or passwords, which the AI never reads")
         return path
+
+    @staticmethod
+    def _is_secret(path: Path) -> bool:
+        """LinuxAI's keys and passwords, and any process's environment (where keys live once loaded)."""
+        try:
+            p = path.resolve()
+        except (OSError, ValueError):
+            return True
+        if p.parts[:2] == ("/", "proc") and p.name == "environ":
+            return True
+        roots = [Path("/etc/linuxai"), Path.home() / ".config" / "linuxai", Path("/home/linuxai/.config/linuxai")]
+        return any(p == r or p.is_relative_to(r) for r in roots)
 
     def _is_raw_mail(self, path: Path) -> bool:
         try:
@@ -735,32 +864,48 @@ class Toolbox:
         if self.mind and not is_read_only(command):
             return ("Working behind the scenes, run_command only runs read-only commands. To change anything, "
                     "submit_plan (use the `run` verb for ordinary programs); the core gets approval if needed.")
-        ui.out(f"\n{cyan_arrow()} {ui.bold(command)}")
+        allowed = matches_allow(command, self.memory.allow_prefixes())
+        auto = is_read_only(command) or allowed
+        # Run without the human approving it now: behind the scenes, or a read-only command in trusted/auto mode. Those
+        # run in the sandbox (review C1). The human's own grants (an allowed prefix, approving it now) run as before.
+        unasked = self.config.mode == "auto" or (self.config.mode == "trusted" and auto)
+        confine = self.mind or (unasked and is_read_only(command) and not allowed)
+        if confine and not sandbox_ready()[0]:
+            if self.mind:
+                return (f"Refused: behind the scenes, commands run only in the sandbox, and it isn't working here "
+                        f"({sandbox_ready()[1]}). Use the core's state (system_state) or submit_plan instead.")
+            confine, auto = False, allowed  # no sandbox: ask the human instead of running it unasked
+        ui.out(f"\n{cyan_arrow()} {ui.bold(command)}" + (ui.dim("   [sandbox]") if confine else ""))
         if why:
             ui.out(ui.dim(f"  {why}   [{self.cwd}]"))
-        auto = is_read_only(command) or matches_allow(command, self.memory.allow_prefixes())
         d = self._gate("command", auto, editable=command, prefix=suggest_prefix(command))
         if d.action != "run":
             self.memory.log_action("command", command, "declined:" + d.text)
             return self._declined(d)
-        if d.text:
-            command = d.text
+        if d.text:  # the human edited it: theirs now, run as they wrote it
+            command, confine = d.text, False
             ui.out(f"{cyan_arrow()} {ui.bold(command)}")
         if d.always:
             self.memory.add_allow(d.always)
             ui.out(ui.dim(f"  learned: commands starting with '{d.always}' now run without asking"))
         if is_read_only(command):
             self._seen_key = f"run:{self.cwd}:{command}"
-        code, output, cwd = self._spawn(command, int(timeout or self.config.command_timeout))
+        code, output, cwd = self._spawn(command, int(timeout or self.config.command_timeout), confine)
         self.memory.log_action("command", command, "edited" if d.text else "approved", code, output)
         moved = f"\n(cwd is now {cwd})" if cwd != self.cwd else ""
         self.cwd = cwd
         edited = f"(The human edited your command to: {command})\n" if d.text else ""
         return f"{edited}exit code: {code}{moved}\n{output or '(no output)'}"
 
-    def _spawn(self, command: str, timeout: int) -> tuple[int, str, str]:
+    def _spawn(self, command: str, timeout: int, confine: bool = False) -> tuple[int, str, str]:
         script = f"{command}\n__rc=$?; printf '\\n{CWD_MARK}%s' \"$PWD\"; exit $__rc"
-        proc = subprocess.Popen(["bash", "-c", script], cwd=self.cwd, stdout=subprocess.PIPE,
+        argv = ["bash", "-c", script]
+        if confine:
+            box = sandbox_argv(self.cwd, sandbox_hidden(self.config.mail_dir))
+            if box is None:
+                return -1, "Refused: the sandbox (bubblewrap) is gone.", self.cwd
+            argv = box + argv
+        proc = subprocess.Popen(argv, cwd=self.cwd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1)
         chunks: list[str] = []
 

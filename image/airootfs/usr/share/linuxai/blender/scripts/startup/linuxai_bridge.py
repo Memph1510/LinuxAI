@@ -80,6 +80,8 @@ class Server:
             self.sock.bind(path)
         finally:
             os.umask(old)
+        if os.path.dirname(path) == ORGANS_DIR:
+            os.chmod(path, 0o660)
         self.sock.listen(4)
         self.sock.setblocking(False)
 
@@ -108,7 +110,14 @@ class Server:
             os.unlink(self.path)
 
 
+# On LinuxAI the organs the AI shares with the human listen here (group linuxai-core), so the AI's own account
+# (linuxai-ai) can reach this Blender too.
+ORGANS_DIR = "/run/linuxai-organs"
+
+
 def socket_path() -> str:
+    if os.path.isdir(ORGANS_DIR):
+        return os.path.join(ORGANS_DIR, f"linuxai-blender-{os.getpid()}.sock")
     run = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/linuxai-{os.getuid()}"
     os.makedirs(run, mode=0o700, exist_ok=True)
     return os.path.join(run, f"linuxai-blender-{os.getpid()}.sock")
