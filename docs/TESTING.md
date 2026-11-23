@@ -12,6 +12,7 @@
 | **Static analysis** | Rust lints (clippy), Python lints (ruff). | `cargo clippy --all-targets`, `ruff check linuxai tests` | Before releases |
 | **User acceptance (the real AI)** | Scenarios from real use: the cache works live; the calendar fills from conversation; an email that tries to instruct the AI is refused and reported; a destructive change waits for the human, and "no" means nothing happens; the end of a long log is found. Each reports its token cost. | `python3 tests/uat.py` (needs `ANTHROPIC_API_KEY`; a few cents per scenario) | When the AI's prompts or tools change |
 | **Thinking efficiency** | Simulated days through the real core (rehearsal mode), mind and tools, comparing how the AI spends its thinking: requests, tokens, cost, situations handled by habit, and that the same work got done. No API key needed; `--real` uses the real model. See THINKING.md. | `python3 tests/thinking_bench.py [--days 3]`; `--real --strategies ladder` for the real model at about $1–2 a day | When the mind, prompts or rules change |
+| **Thinking efficiency in the image** | The real-model benchmark inside the booted image (QEMU): the shipped AI layer, real systemd, cups and nginx as units that really fail, the core in rehearsal mode. The key goes over the serial console, never displayed and never saved; the script stops before any spend if the API, the key or the console isn't right. `--check-only` runs all of that with no model calls. | `ANTHROPIC_API_KEY=... python3 image/vm-bench.py out/linuxai-*.iso [--ca extra.pem] [--check-only]` (about $2; `--ca` only on a network that re-terminates TLS) | When the mind, prompts or rules change |
 | **Token profile** | Exact tokens of the fixed prefix and of each tool. | `python3 tests/token_profile.py` (needs the key; free) | When prompts or tools change |
 | **Email code check** | The core's check for steering and payment-redirect wording, on 20 held-out emails (10 that should be flagged, 10 genuine look-alikes). Runs in CI (pytest). | `python3 tests/steering_holdout.py` | When the patterns change |
 | **Email extraction (the real AI)** | 20 realistic synthetic emails, every stated fact checked: categories, loads, money, rate confirmations and corrections, a self-contradiction, phishing, five injection attempts, and a genuine email that mentions AI. Reports accuracy and cost. See MAIL.md. | `python3 tests/extract_eval.py [--model …] [--effort …]` (needs the key; about 2 cents per email) | When the extractor's prompt, form or model changes |
@@ -58,6 +59,13 @@ doesn't pick it up. Pass it to a command explicitly, without printing it:
   workload never told the real model the owner's terms, so it couldn't decide replies ahead. With them seeded: 86
   requests, $1.66, nothing left unhandled, 2 of 2 replies decided ahead, the rate con filed by the core, 3 of 3 new
   loads reported. See THINKING.md.
+- **Real-model benchmark inside the image (2026-11-23):** 84 requests, $1.80, nothing left unhandled, 2 of 2 replies
+  decided ahead, rate con filed by the core, 3 of 3 new loads. Service restarts 0 of 5, correctly: the AI read the
+  units, saw stand-ins that run `/usr/bin/false`, didn't restart, and offered the real fix. Found: the same notice is
+  sent again each time a known failure recurs. Getting the VM to run it took fixes only to the harness: the VM's
+  API address and CA on this network, the image's packages path, zsh's line editor on the serial console, and a
+  random-number device (without one, key setup at boot sometimes stalled for 5 minutes and the login prompt never
+  came). See THINKING.md.
 - **Email on a small local model:** Qwen3 4B got 14/20 categories, 30/36 facts and 4/6 injection attempts with no
   false alarms, at 68 s per email on 4 CPU cores; Qwen3 8B 15/20, 30/36, 4/6; Gemma 3 12B 2/6 injections. With the
   core's code check, all catch 6/6 (the check alone: 8/10 on held-out emails, then 10/10, no false alarms). See MAIL.md. Its first run found the second
@@ -69,6 +77,8 @@ doesn't pick it up. Pass it to a command explicitly, without printing it:
   the same ISO booted in 289 s, like the others.
 - **Not run this session:** the soak test, the Craft end-to-end, the full three-strategy real benchmark (owner chose
   ladder only), real (non-synthetic) emails.
+- **Found, not fixed:** the image's AI layer is installed without bytecode (`pip --no-compile`), so its first start
+  after each boot compiles it: 2.5 minutes in the emulated VM (seconds on real hardware, likely).
 
 ## Earlier full run (2026-11-21)
 

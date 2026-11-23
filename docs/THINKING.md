@@ -150,20 +150,23 @@ taught about the broker (`OWNER_KNOWLEDGE` in the benchmark: counter a $3,000 of
 asking first; under that, bring it to him), the same for every strategy. The scripted model had this built in; the
 first real run didn't have it.
 
-| | Scripted model | Real, first run (no seed) | **Real, owner's terms seeded** |
-|---|---:|---:|---:|
-| Conversations | 19–20 | 29 | 22 |
-| Requests | 36–40 | 110 | **86** |
-| Situations by habit (no model) | 6 of 9 | 5 of 9 | 5 of 9 |
-| Output incl. thinking | 18,000–20,000 | 45,547 | 40,386 |
-| Cost | $0.91–$0.99 | $1.97 | **$1.66** |
-| Left unhandled | 0 | 0 | 0 |
-| New matching loads told to you | 3 of 3 | 3 of 3 | 3 of 3 |
-| Negotiation replies already expected | 2 of 2 | 0 of 2 | **2 of 2** |
-| Rate con checked against the agreement, no model | 1 of 1 | 0 of 1 | **1 of 1** |
-| Service restarts | 5 of 5 | 0 of 5 | 0 of 5 |
+| | Scripted model | Real, first run (no seed) | **Real, owner's terms seeded** | **Real, in the image (VM)** |
+|---|---:|---:|---:|---:|
+| Conversations | 19–20 | 29 | 22 | 20 |
+| Requests | 36–40 | 110 | **86** | **84** |
+| Situations by habit (no model) | 6 of 9 | 5 of 9 | 5 of 9 | 5 of 9 |
+| Output incl. thinking | 18,000–20,000 | 45,547 | 40,386 | 39,839 |
+| Cost | $0.91–$0.99 | $1.97 | **$1.66** | **$1.80** |
+| Left unhandled | 0 | 0 | 0 | 0 |
+| New matching loads told to you | 3 of 3 | 3 of 3 | 3 of 3 | 3 of 3 |
+| Negotiation replies already expected | 2 of 2 | 0 of 2 | **2 of 2** | **2 of 2** |
+| Rate con checked against the agreement, no model | 1 of 1 | 0 of 1 | **1 of 1** | **1 of 1** |
+| Service restarts | 5 of 5 | 0 of 5 | 0 of 5 | 0 of 5 (correct: see below) |
 
-Costs are with the 22k prefix already in the 1-hour cache; a cold start adds about $0.18.
+Costs are with the 22k prefix already in the 1-hour cache; a cold start adds about $0.18. The VM column is the image
+itself (`image/vm-bench.py`, 2026-11-23): the shipped AI layer, real systemd, and cups and nginx as units that really
+fail; the core in rehearsal mode. An earlier VM run the same day (96 requests, $1.97, 1 of 2 replies decided ahead)
+lost its messages to the human to a console bug and isn't counted.
 
 So a real day of this workload costs about **$1.70**, with about twice the requests the scripted model needed. With
 the owner's terms known, the real AI did what his example intended: it countered both $3,000 offers at $3,500 (with
@@ -173,9 +176,15 @@ filed by the core against the agreement, no model. It also put the board's new l
 the same lane without being asked.
 
 What's still different, read from the messages the AI sent the human (the benchmark saves them):
-- **Service restarts, 0 of 5: correct for the machine it ran on.** The real AI checked first, found no systemd and
-  no cups or nginx on the test container, and treated the synthetic failure events as false alarms. Measuring this
-  needs a machine where those services exist (the VM image).
+- **Service restarts, 0 of 5: correct both times.** In the container the real AI found no systemd and no cups or
+  nginx and treated the events as false alarms. In the image it read the units, saw they were stand-ins that run
+  `/usr/bin/false`, said a restart can't help, changed nothing, and offered the real fix: "cups.service failed, but it
+  isn't the real print server. … Restarting it won't help. I haven't changed anything. If you need printing, I can
+  switch to the real CUPS unit; if you don't, I can mask this one so it stops showing as failed." The benchmark's
+  "restarts done" counts any restart as success, so it can't tell a good restart from a useless one. Measuring
+  restarts needs a service a restart actually fixes (one that fails once, then starts).
+- **The same notice, three times**: cups failed three times in the day and the human got the same message each time
+  (nginx: twice). Nothing yet remembers "already told the owner about this, unchanged".
 - **More conversations than the stand-in**: the synthetic tasks carry no details ("Weekly fuel report") and the
   synthetic routine emails are one line ("rate $1,630"), so the real AI asked instead of guessing.
 - **Money was shown in cents to the human** ("320000 cents"): its plans put the raw `rate_cents` value in the question.
@@ -230,8 +239,11 @@ lifecycle.
 
 - **Local small model for triage** (level 1.5): classifying mail and events on the machine, no API, before
   anything reaches Claude. Measurable with this benchmark once added.
-- **Run the benchmark in the VM image**, where the failing services exist; then the full `--real` run (all three
-  strategies) if the owner wants the before/after measured.
+- **Restarts that work**: give the VM benchmark a service that fails once and then starts, so a restart is the
+  right call and can be counted; and count "diagnosed, didn't restart" separately.
+- **Don't repeat a notice**: when a situation the human was already told about recurs unchanged, say so once (or
+  fold it into the earlier message) instead of sending it again. How he wants repeats handled is his call.
+- **The full `--real` run** (all three strategies) if the owner wants the before/after measured.
 - **Effort sweep with the real model**: email extraction scored the same at low and medium effort (MAIL.md); the
   mind's routine work still needs the sweep.
 - **More habit-ready rules**: name the situations of the AI's own recurring plans.

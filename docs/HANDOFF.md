@@ -127,8 +127,10 @@ model is a scripted stand-in that follows its instructions): a simulated day cos
 about 13%** ($0.91–$0.99 vs $7.41 est. on Opus 5.5); 3 days $2.83 vs $22.29. Same work in every run. **These are
 directional**: an agent wrote the stand-in for both sides. **With the real model** (2026-11-22, ladder only): the
 same day took **86 requests and $1.66** once the benchmark gave it the owner's terms for the broker: all work
-handled, both negotiation replies handled by plans decided ahead, the rate con filed by the core. The failing
-services don't exist on the test container. See THINKING.md, "The real model".
+handled, both negotiation replies handled by plans decided ahead, the rate con filed by the core. **Inside the
+image** (2026-11-23, `image/vm-bench.py`, real systemd, cups and nginx really failing): 84 requests, $1.80, the same
+work done; it read the failing units, saw they were stand-ins a restart can't fix, changed nothing and offered the
+real fix. It sends the same notice again when a known failure recurs. See THINKING.md, "The real model".
 
 ## 5. History (merged PRs)
 
@@ -238,7 +240,13 @@ agreement stays unconfirmed until the human confirms it. Synthetic only; no live
   - Arch's Blender needs AVX: the VM uses `-cpu SandyBridge`; no Cycles denoiser in TCG; llvmpipe crashes on
     emulated AVX2; don't add softpipe (it starved Hyprland).
   - The serial shell is zsh: no multi-line heredocs (they wedge it), globs that match nothing fail (use `find`),
-    job notices garble typed commands (use subshells).
+    job notices garble typed commands (use subshells). Its line editor redraws a typed line even with `stty -echo`
+    (never type a secret with it on); with it off, output can share the prompt's line; `REPORTTIME` adds timing lines.
+  - Give the VM a random-number device (`-device virtio-rng-pci`): without one, the pacman keyring setup at boot
+    sometimes stalls 5+ minutes and the serial login prompt never comes.
+  - In this cloud environment even "direct" HTTPS is re-terminated by an egress gateway: a VM needs the host's API
+    address and the gateway's CA (`vm-bench.py --ca`). The image's AI layer is in `/opt/linuxai/lib`
+    (`PYTHONPATH`, as `cortex` sets it); its SDK uses `httpx2`, not `httpx`.
   - `pkill -f <pattern>` kills your own shell when the pattern is in its command line: use
     `kill $(pidof linuxai-core)`.
   - The benchmark compresses hours into seconds: it sets `LINUXAI_HABIT_HOLD=0` and lifts the rule throttle.

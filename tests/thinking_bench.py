@@ -34,7 +34,7 @@ from types import SimpleNamespace as NS
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-CORE_BIN = ROOT / "core" / "target" / "release" / "linuxai-core"
+CORE_BIN = Path(os.environ.get("LINUXAI_CORE_BIN") or ROOT / "core" / "target" / "release" / "linuxai-core")
 PRICE = {"in": 4.00, "out": 20.00, "read": 0.20}  # Claude Opus 5.5, $ per million; writes 1.25x (5 min) or 2x (1 h)
 THINKING = {"low": 150, "medium": 450, "high": 900, "xhigh": 1600, "max": 2500}
 

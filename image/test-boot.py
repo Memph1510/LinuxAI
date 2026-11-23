@@ -289,7 +289,8 @@ def main() -> int:
         "qemu-system-x86_64", "-accel", accel, "-cpu", "SandyBridge", "-m", "3072", "-smp", str(min(os.cpu_count() or 2, 4)),
         "-cdrom", args.iso, "-boot", "d", "-display", "none", "-vga", "std",
         "-serial", f"unix:{ser},server,nowait", "-monitor", f"unix:{mon},server,nowait",
-        "-nic", "user,model=virtio-net-pci"], stderr=subprocess.DEVNULL)
+        "-nic", "user,model=virtio-net-pci",
+        "-device", "virtio-rng-pci"], stderr=subprocess.DEVNULL)  # randomness for the VM: key setup at boot can stall without it
     failed = 0
     try:
         con = Serial(ser)
