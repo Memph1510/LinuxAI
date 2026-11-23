@@ -6,8 +6,8 @@
 Boots the ISO in QEMU (as image/test-boot.py does) and runs tests/thinking_bench.py --real in the booted OS, so the
 AI's own checks (systemctl, journal) see a real systemd machine. The workload's failing services exist there: cups and
 nginx are created as units that really fail. The benchmark's core runs in rehearsal mode, so the AI's restarts are
-recorded, not performed. The key reaches the VM over the serial console with echo off and is never written to a file
-or a log (leave SERIAL_LOG unset). It costs real API money (the ladder alone: about $2).
+recorded, not performed. The key reaches the VM over the serial console, read by the shell without display; it is
+never written to a file or a log (leave SERIAL_LOG unset). It costs real API money (the ladder alone: about $2).
 """
 
 from __future__ import annotations
@@ -38,12 +38,28 @@ def status(out: str) -> str:
     return codes[-1] if codes else out.strip()[-60:]
 
 
+def status_len(out: str) -> int:
+    """The number a command printed on the last line of its own."""
+    nums = re.findall(r"^\s*(\d+)\s*$", out, re.M)
+    return int(nums[-1]) if nums else -1
+
+
+def fetch(con, path: str) -> str:
+    """A file out of the VM: one base64 line, then a newline, so the end marker always follows on its own line."""
+    import base64
+    out = con.run(f"base64 -w0 {path}; echo", 300)
+    b64 = max(re.findall(r"[A-Za-z0-9+/=]{4,}", out), key=len, default="")
+    return base64.b64decode(b64).decode()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("iso")
     ap.add_argument("--strategies", default="ladder")
     ap.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "linuxai-vm-bench"))
     ap.add_argument("--boot-timeout", type=float, default=1500)
+    ap.add_argument("--check-only", action="store_true",
+                    help="boot, check the API and the key's path with whatever key is given, then stop: no model calls")
     ap.add_argument("--ca", help="extra CA certificates (PEM) the VM should trust, for a network that re-terminates TLS")
     args = ap.parse_args()
     key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -103,19 +119,30 @@ def main() -> int:
         if code not in ("200", "401") or py_code not in ("200", "401"):
             print(f"the VM can't reach the API; stopping before any spend. The client said:\n{py.strip()}")
             return 1
-        # The key: typed with echo off, kept only in this shell's environment.
-        con.send(f"export ANTHROPIC_API_KEY='{key}'\n")
+        # The key: read by the shell without display (zsh's line editor redraws an export line even with echo off),
+        # kept only in this shell's environment. Everything saved from the console is also scrubbed of it.
+        con.send("read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY\n")
         time.sleep(1)
+        con.send(key + "\n")
+        seen = con.run("echo ${#ANTHROPIC_API_KEY}", 60)  # everything the console printed since, up to a marker
+        shown = key in seen or key in con.buf
+        print(f"key set in the VM shell: {'yes' if status_len(seen) == len(key) else 'NO'}", flush=True)
+        print(f"key shown on the console: {'YES' if shown else 'no'}", flush=True)
+        if shown:
+            return 1
+        if args.check_only:  # the console path without spending: a stand-in file comes back intact
+            con.run("printf '[{\"kind\": \"ai.tell\", \"text\": \"check\"}]' > /tmp/bench/told.json", 30)
+            print(f"told.json comes back: {fetch(con, '/tmp/bench/told.json')!r}", flush=True)
+            con.run("unset ANTHROPIC_API_KEY", 30)
+            return 0
         report = con.run(f"cd /tmp/bench && LINUXAI_CORE_BIN=/usr/local/bin/linuxai-core python3 tests/thinking_bench.py --real"
                          f" --strategies {args.strategies} 2>&1 | tail -40", 7200)
-        if key in report:
-            report = report.replace(key, "<key>")
+        report = report.replace(key, "<key>")
         (out / "report.txt").write_text(report)
         print(report, flush=True)
-        told = re.search(r"(/tmp/linuxai-bench-ladder-\w+/told\.json)", report)
+        told = re.search(r"(/tmp/linuxai-bench-\w+-\w+/told\.json)", report)
         if told:
-            told_text = con.run(f"cat {told.group(1)}", 120)
-            (out / "told.json").write_text(told_text.replace(key, "<key>"))
+            (out / "told.json").write_text(fetch(con, told.group(1)).replace(key, "<key>"))
             print(f"messages to the human: {out / 'told.json'}", flush=True)
         con.run("unset ANTHROPIC_API_KEY", 30)
     finally:
