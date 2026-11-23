@@ -78,7 +78,8 @@ def main() -> int:
         "qemu-system-x86_64", "-accel", accel, "-cpu", "SandyBridge", "-m", "4096", "-smp", str(min(os.cpu_count() or 2, 4)),
         "-cdrom", args.iso, "-boot", "d", "-display", "none", "-vga", "std",
         "-serial", f"unix:{ser},server,nowait", "-monitor", f"unix:{mon},server,nowait",
-        "-nic", "user,model=virtio-net-pci"], stderr=subprocess.DEVNULL)
+        "-nic", "user,model=virtio-net-pci",
+        "-device", "virtio-rng-pci"], stderr=subprocess.DEVNULL)  # randomness for the VM: key setup at boot can stall without it
     try:
         con = tb.Serial(ser)
         t0 = time.time()
@@ -122,11 +123,14 @@ def main() -> int:
         # The key: zsh's line editor redraws a typed line even with echo off, so it is turned off first, and history
         # with it. The key lives only in this shell's environment; anything saved from the console is scrubbed of it.
         con.run("unset HISTFILE; setopt HIST_IGNORE_SPACE; unsetopt zle", 30)
+        con.run("stty -echo", 30)  # the line editor kept echo itself; without it, the terminal's own echo must be off
         con.send(f" export ANTHROPIC_API_KEY='{key}'\n")
         seen = con.run("echo ${#ANTHROPIC_API_KEY}", 60)  # everything the console printed since, up to a marker
         shown = key in seen or key in con.buf
         print(f"key set in the VM shell: {'yes' if status_len(seen) == len(key) else 'NO'}", flush=True)
         print(f"key shown on the console: {'YES' if shown else 'no'}", flush=True)
+        if args.check_only or shown:
+            print("console around the key line (key scrubbed):\n" + (seen + con.buf).replace(key, "<key>")[-600:], flush=True)
         if shown:
             return 1
         if args.check_only:  # the console path without spending: a stand-in file comes back intact
