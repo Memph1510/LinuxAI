@@ -46,8 +46,11 @@ impl BlenderConfig {
             engine: std::env::var("LINUXAI_BLENDER_ENGINE").map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/usr/share/linuxai/blender/linuxai_blender.py")),
             dir: std::env::var("LINUXAI_BLENDER_DIR").map(PathBuf::from).unwrap_or_else(|_| home.join("blender")),
-            runtime_dir: std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from(format!("/tmp/linuxai-{}", unsafe_uid()))),
+            // Where a running Blender's bridge listens: the shared organs folder on the image (so the AI's own
+            // account reaches the human's Blender), else the user's runtime directory.
+            runtime_dir: Some(PathBuf::from(crate::peer::ORGANS_DIR)).filter(|d| d.is_dir())
+                .or_else(|| std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from).ok())
+                .unwrap_or_else(|| PathBuf::from(format!("/tmp/linuxai-{}", unsafe_uid()))),
         }
     }
 }

@@ -72,7 +72,7 @@ wasn't checked, and honest uncertainty. Measured claims, not adjectives. They th
 | `core/src/tests.rs` (+ tests inside modules) | 106 Rust tests |
 | `linuxai/` | Python, model-facing: `agent.py` (session + prompts + context), `mind.py` (behind-the-scenes AI and the thinking ladder), `tools.py` (every tool the model sees), `cli.py` (`cortex`), `mail.py` (extractor schema) |
 | `tests/` | `test_core.py` (58 Python tests), `thinking_bench.py`, `soak.py`, `uat.py`, `token_profile.py` |
-| `image/` | The Arch ISO: `build.sh` (docker), `build-in-arch.sh`, `airootfs/` (services, Workspace page, Quickshell layer), `test-boot.py` (37 checks in QEMU) |
+| `image/` | The Arch ISO: `build.sh` (docker), `build-in-arch.sh`, `airootfs/` (services, Workspace page, Quickshell layer), `test-boot.py` (42 checks in QEMU) |
 | `docs/` | Design and status docs (list in §9) |
 | `library/` | Starter prompt library, image-backend adapters |
 
@@ -157,11 +157,13 @@ each merge). **The safety model is a set of settings, not a security boundary**:
 2026-11-21) showed the AI could get around approvals. Under the owner's operating model (§1) that's rated medium,
 not critical. What was fixed after the review (CHECKLIST, "Independent review"): an "always" covers only the literal value the
 human saw; only the core records that the human answered; plans can't write provenance or system records, and only
-recorded outside facts can be cited; the Workspace bridge serves only the Workspace page. **Deferred by the owner's
-decision (capability first)**: sandboxing "read-only" commands, a separate user for the AI, peer-authenticated
-"human" on the core socket, approvals on browser actions (review C1, H4, M1–M5; issues #16, #17). Revisit if a real
-problem shows up, or when connecting anything that can commit money or the business without a phone call (e.g. a
-load board that books loads directly).
+recorded outside facts can be cited; the Workspace bridge serves only the Workspace page. **C1, fixed 2026-11-23**
+(the owner asked for it before the laptop install): the AI has its own account (`linuxai-ai`, no sudo, no session),
+the core and organs check who connects (`SO_PEERCRED`), and every command the AI runs unasked runs in a bubblewrap
+sandbox (CHECKLIST, "Independent review"). **Still deferred by the owner's decision (capability first)**: approvals
+on browser actions, the core and mail running as root, and the review's other medium and low items (H4, M1–M5,
+L1–L3). Revisit if a real problem shows up, or when connecting anything that can commit money or the business
+without a phone call (e.g. a load board that books loads directly).
 
 **Unproven** (the biggest risks, in order):
 1. ~~The real Claude model has never run.~~ **Ran 2026-11-22** (issue #14): the request shape was accepted as
@@ -186,9 +188,9 @@ with the human's OK. Fuzz test (3,000 malformed plans) found nothing in the core
 **Crashes** (PR #13): locks recover after a panic; a panic fails only its own plan or request; you're texted about
 every crash, including the core restarting unexpectedly. **Dependency audits** run in CI.
 
-**Known limits that remain** (tracked as GitHub issues): single-user trust boundary (the AI's commands run as the
-user; in a session the human approves commands, behind the scenes only read-only commands run directly, and
-"read-only" is a heuristic); the live ISO has autologin and passwordless sudo (must change before install); mail
+**Known limits that remain** (tracked as GitHub issues): in an interactive `cortex` session the AI runs as the human
+(commands the human approves run as the human; unasked ones run in the sandbox); the live ISO has autologin and
+passwordless sudo for the human (must change before install); mail
 passwords' file permissions unverified; a background job's result is lost (reported) on restart; the benchmark
 varies 36–40 requests with thread timing; 111 Python style lint findings and ~10 Rust warnings outstanding (none
 correctness); `chrono`/`chrono-tz` marked unmaintained upstream.
@@ -236,8 +238,14 @@ agreement stays unconfirmed until the human confirms it. Synthetic only; no live
   `python3 tests/soak.py --minutes 5` · `python3 tests/thinking_bench.py [--days 3] [--only negotiation|board]`.
 - **Boot test** (≈1 h): start Docker if needed (`dockerd &`, then wait for `docker info`), build from a clean
   worktree of the exact commit: `EXTRA_CA=/root/.ccr/ca-bundle.crt ./image/build.sh`, then
-  `SERIAL_LOG=<file> python3 -u image/test-boot.py out/linuxai-*.iso` → expect 37 ✓ and `PASS`.
+  `SERIAL_LOG=<file> python3 -u image/test-boot.py out/linuxai-*.iso` → expect 42 ✓ and `PASS`.
 - **Gotchas learned the hard way**:
+  - The AI's sandbox (bubblewrap) gives it a fresh, empty `/tmp`: a read-only mount doesn't stop connecting to a
+    socket, and the real `/tmp` holds some (the X display). Hidden paths must come last in its arguments, or a
+    working folder bound after them uncovers them. The system D-Bus stays visible (systemctl status works); the AI's
+    account has no session, so polkit refuses it anything that changes the system.
+  - The organs the AI shares with the human listen in `/run/linuxai-organs`, not the human's `/run/user/1000`
+    (the AI's account can't reach that).
   - Arch's Blender needs AVX: the VM uses `-cpu SandyBridge`; no Cycles denoiser in TCG; llvmpipe crashes on
     emulated AVX2; don't add softpipe (it starved Hyprland).
   - The serial shell is zsh: no multi-line heredocs (they wedge it), globs that match nothing fail (use `find`),
@@ -278,6 +286,7 @@ agreement stays unconfirmed until the human confirms it. Synthetic only; no live
 | `LINUXAI_MIND_BATCH` | `600` | seconds routine work waits to be batched |
 | `LINUXAI_HABIT_AFTER` / `LINUXAI_HABIT_HOLD` | `1` / `900` | fixes that held before replay / seconds a situation must stay away |
 | `LINUXAI_FOLD_HOURS` | `24` | a repeat of a situation within this window folds into the earlier message |
+| `LINUXAI_AI_USER` | `linuxai-ai` | the AI's own account(s): a connection from one never speaks for the human |
 | `LINUXAI_REHEARSAL` | off | `1`: record actions, perform none (incl. sending email) |
 | `LINUXAI_RULE_MAX_PER_MINUTE` | `10` | the rule loop guard |
 | `LINUXAI_IMAP_*`, `LINUXAI_AUTHSERV_ID` | none | incoming mail (`/etc/linuxai/mail.env`) |

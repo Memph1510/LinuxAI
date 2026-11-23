@@ -1,0 +1,26 @@
+[Unit]
+Description=LinuxAI mind (the AI behind the scenes, under its own account)
+After=linuxai-core.service
+Wants=linuxai-core.service
+# The key the human gave cortex. systemd reads it as root; the AI's own account can't open the file.
+ConditionPathExists=/home/linuxai/.config/linuxai/env
+
+[Service]
+# Its own account (independent review C1): no sudo, no session, not the human. Its commands also run in a sandbox.
+User=linuxai-ai
+Group=linuxai-ai
+EnvironmentFile=/home/linuxai/.config/linuxai/env
+Environment=HOME=/var/lib/linuxai-ai
+StateDirectory=linuxai-ai
+StateDirectoryMode=0750
+UMask=0027
+WorkingDirectory=/var/lib/linuxai-ai
+ExecStart=/usr/local/bin/cortex mind
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

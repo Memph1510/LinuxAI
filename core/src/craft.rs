@@ -550,7 +550,7 @@ impl Organ {
 }
 
 pub fn default_socket() -> PathBuf {
-    std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join("linuxai-craft.sock")
+    crate::peer::organ_socket("LINUXAI_CRAFT_SOCKET", "linuxai-craft.sock")
 }
 
 fn serve(organ: Arc<Organ>, stream: UnixStream) {
@@ -576,7 +576,7 @@ pub fn run(socket: PathBuf, api: Option<Box<dyn Api + Send + Sync>>) -> std::io:
     });
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
-    let _ = std::fs::set_permissions(&socket, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+    crate::peer::share(&socket);
     eprintln!("linuxai craft: on {}", socket.display());
     for s in listener.incoming().flatten() {
         let o = organ.clone();

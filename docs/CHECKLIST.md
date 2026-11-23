@@ -132,8 +132,23 @@ adding no new questions for the human:
 | H3 | A plan could `store` a record with forged provenance ("sender verified") and cite it as an outside fact | `store` can't write provenance or system records; only records labelled outside by the core can be cited |
 | H5 | The Workspace's answer-as-human bridge could be put on a page someone names | It serves only the configured Workspace page |
 
-Deferred by the owner (capability first; fix blockers as met): C1 (sandbox for "read-only" commands, separate AI
-user, peer-authenticated socket), H4 (approvals on browser actions), M1–M5, L1–L4. Tracked in issue #22.
+C1, fixed 2026-11-23 at the owner's request (before the install on his laptop), as one boundary:
+
+| Part | Fix |
+|---|---|
+| The AI ran as the human (whose account has sudo) | It has its own account, `linuxai-ai` (`/etc/sysusers.d/linuxai.conf`): no sudo, no login session, not in the human's group. The background AI (`linuxai-mind.service`) is a system service under it; systemd reads its key from the human's file, which the AI's account can't open. |
+| The core believed `"source": "human"` from anyone on its socket | The core, browser and screen organs ask the kernel who connected (`SO_PEERCRED`, `core/src/peer.rs`). A request from the AI's account is the AI's, whatever it says or leaves out. |
+| "Read-only" commands could write, run programs, or get root | Every command the AI runs without the human approving it there and then runs in bubblewrap: the filesystem read-only, no network (name lookups included: the boot test caught systemd-resolved's socket), no LinuxAI sockets, LinuxAI's secrets hidden, a clean environment, no new privileges (so no sudo). Behind the scenes, no sandbox means no command. The read-only list also refuses each bypass the review reproduced (a second layer). |
+| Secrets readable by the AI | `read_file` refuses LinuxAI's keys and any process's environment; the sandbox hides them; the AI's account can't read the human's key file. |
+| Organs reachable only by the human's account | The organs the AI shares with the human (browser, screen, craft, a running Blender) listen in `/run/linuxai-organs` (setgid, group `linuxai-core`). |
+
+What stays as it was: the human's own account keeps passwordless sudo on the live image (LX-SEC-2, at install);
+the interactive `cortex` runs as the human (commands the human approves run as the human; unasked ones run in the
+sandbox); the background AI's notes are its own (`/var/lib/linuxai-ai`, readable by the human) rather than shared
+with the interactive session's.
+
+Still deferred by the owner (capability first; fix blockers as met): H4 (approvals on browser actions), M1–M5,
+L1–L3. Tracked in issue #22.
 
 ### Crashes and dependencies (2026-11-21, from "how are bugs, crashes and security handled?")
 

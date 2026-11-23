@@ -756,13 +756,19 @@ pub(crate) fn press(b: &Cdp, s: &str, key: &str) -> std::io::Result<()> {
 
 fn serve(organ: Arc<Organ>, stream: UnixStream) {
     let Ok(mut writer) = stream.try_clone() else { return };
+    let from_ai = crate::peer::is_ai(&stream); // the AI's account never acts as the human here either (review C1)
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
         if line.trim().is_empty() {
             continue;
         }
         let resp = match serde_json::from_str::<Value>(&line) {
-            Ok(req) => organ.handle(&req),
+            Ok(mut req) => {
+                if from_ai {
+                    crate::peer::as_ai(&mut req);
+                }
+                organ.handle(&req)
+            }
             Err(e) => err(format!("bad json: {e}")),
         };
         if writeln!(writer, "{resp}").is_err() {
@@ -772,8 +778,7 @@ fn serve(organ: Arc<Organ>, stream: UnixStream) {
 }
 
 pub fn default_socket() -> PathBuf {
-    let base = std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
-    base.join("linuxai-browser.sock")
+    crate::peer::organ_socket("LINUXAI_BROWSER_SOCKET", "linuxai-browser.sock")
 }
 
 pub fn default_profile() -> PathBuf {
@@ -802,6 +807,7 @@ pub fn run(socket: PathBuf, profile: PathBuf, headless: bool, core: Option<Clien
     }
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
+    crate::peer::share(&socket);
     eprintln!("linuxai browser: {bin} ({}), on {}", if headless { "headless" } else { "on screen" }, socket.display());
     for stream in listener.incoming().flatten() {
         let o = organ.clone();

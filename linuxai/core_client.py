@@ -17,18 +17,27 @@ def default_socket() -> str:
     return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "linuxai-core.sock")
 
 
+# The organs the AI shares with the human (browser, screen) listen here on the image, so the AI's own account
+# (linuxai-ai) can reach them; elsewhere, in the user's runtime directory.
+ORGANS_DIR = Path("/run/linuxai-organs")
+
+
+def _organ(file: str) -> str:
+    return str(ORGANS_DIR / file) if ORGANS_DIR.is_dir() else str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / file)
+
+
 def browser_socket() -> str:
     """Where the shared browser organ (linuxai-core browser) listens."""
     if os.environ.get("LINUXAI_BROWSER_SOCKET"):
         return os.environ["LINUXAI_BROWSER_SOCKET"]
-    return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "linuxai-browser.sock")
+    return _organ("linuxai-browser.sock")
 
 
 def compositor_socket() -> str:
     """Where the screen organ (linuxai-core compositor) listens, inside the Hyprland session."""
     if os.environ.get("LINUXAI_COMPOSITOR_SOCKET"):
         return os.environ["LINUXAI_COMPOSITOR_SOCKET"]
-    return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "linuxai-compositor.sock")
+    return _organ("linuxai-compositor.sock")
 
 
 class CoreError(Exception):

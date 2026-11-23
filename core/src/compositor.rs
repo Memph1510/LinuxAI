@@ -325,16 +325,24 @@ pub fn b64(data: &[u8]) -> String {
 }
 
 pub fn default_socket() -> PathBuf {
-    std::env::var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join("linuxai-compositor.sock")
+    crate::peer::organ_socket("LINUXAI_COMPOSITOR_SOCKET", "linuxai-compositor.sock")
 }
 
 fn serve(organ: Arc<Organ>, stream: UnixStream) {
     let Ok(mut w) = stream.try_clone() else { return };
+    let from_ai = crate::peer::is_ai(&stream); // the AI's account never acts as the human here either (review C1)
     for line in BufReader::new(stream).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
         }
-        let resp = serde_json::from_str::<Value>(&line).map(|r| organ.handle(&r)).unwrap_or_else(|e| err(format!("bad json: {e}")));
+        let resp = serde_json::from_str::<Value>(&line)
+            .map(|mut r| {
+                if from_ai {
+                    crate::peer::as_ai(&mut r);
+                }
+                organ.handle(&r)
+            })
+            .unwrap_or_else(|e| err(format!("bad json: {e}")));
         if writeln!(w, "{resp}").is_err() {
             return;
         }
@@ -349,6 +357,7 @@ pub fn run(socket: PathBuf, core: Option<Client>) -> std::io::Result<()> {
     organ.follow_power();
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
+    crate::peer::share(&socket);
     eprintln!("linuxai compositor: on {}", socket.display());
     for s in listener.incoming().flatten() {
         let o = organ.clone();

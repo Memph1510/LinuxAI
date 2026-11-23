@@ -281,7 +281,9 @@ UX principles that make "living inside the AI" bearable:
 > policies or sandboxing. Every action is shown live. Whether it waits for approval depends on the mode
 > (`ask` / `trusted` / `auto`), and Ctrl-C stops it. Trust grows from use: answering "always allow" teaches it which
 > commands to run on its own. The rest of this section is **deferred hardening**, a menu to pull from once the
-> capability is proven, not a precondition for building it.
+> capability is proven, not a precondition for building it. *Pulled so far (2026-11-23, independent review C1): the
+> background AI runs under its own account (`linuxai-ai`), the core checks who connects, and the AI's unasked
+> commands run in a bubblewrap sandbox (CHECKLIST, "Independent review").*
 
 The threat model has three adversaries: (1) **external content that injects instructions** (web pages, mail, files,
 repo READMEs), which is the main one; (2) **the model being wrong** (hallucinated paths, `rm` on the wrong

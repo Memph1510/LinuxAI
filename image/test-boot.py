@@ -64,8 +64,8 @@ CHECKS = [
      " linuxai-core ctl '{\"op\":\"invites\"}' | grep -c '\"Rate review\"';"
      " linuxai-core ctl '{\"op\":\"calendar\"}' | grep -c '\"Rate review\"'", r"^1\n0"),
     ("the shared browser reads a page (Chromium, headless)",
-     "for i in $(seq 60); do test -S /run/user/$(id -u linuxai)/linuxai-browser.sock && break; sleep 2; done;"
-     " sudo -u linuxai python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/user/$(id -u linuxai)/linuxai-browser.sock');"
+     "for i in $(seq 60); do test -S /run/linuxai-organs/linuxai-browser.sock && break; sleep 2; done;"
+     " sudo -u linuxai python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/linuxai-organs/linuxai-browser.sock');"
      "s.sendall(b'{\\\"op\\\":\\\"open\\\",\\\"url\\\":\\\"data:text/html,<p>Hello from LinuxAI</p>\\\"}\\\\n');print(s.makefile().readline())\" | grep -o 'Hello from LinuxAI' | head -1",
      r"^Hello from LinuxAI"),
     ("pictures: a precise edit runs locally (ImageMagick)",
@@ -98,7 +98,7 @@ CHECKS = [
      " pgrep -f quickshell >/dev/null && echo bar; pgrep -x foot >/dev/null && echo session", r"(?s)bar.*session|no-hyprland"),
     ("screen: the AI sees and steers windows (compositor organ, real Hyprland)",
      "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sudo -u linuxai python3 -c \"import socket,json\n"
-     "def q(r):\n s=socket.socket(socket.AF_UNIX);s.connect('/run/user/%d/linuxai-compositor.sock'%1000);s.sendall((json.dumps(r)+'\\\\n').encode());return json.loads(s.makefile().readline())\n"
+     "def q(r):\n s=socket.socket(socket.AF_UNIX);s.connect('/run/linuxai-organs/linuxai-compositor.sock');s.sendall((json.dumps(r)+'\\\\n').encode());return json.loads(s.makefile().readline())\n"
      "w=q({'op':'windows'});print('windows',len(w.get('windows',[])),w.get('error',''))\n"
      "print('focus',q({'op':'focus','app':'foot'}).get('ok'),q({'op':'focus','app':'foot'}).get('error',''))\n"
      "print('effects',q({'op':'effects','on':False}).get('ok'),q({'op':'effects','on':False}).get('error',''))\"",
@@ -113,13 +113,13 @@ CHECKS = [
      "sudo -u linuxai linuxai-core ctl '{\"op\":\"ping\"}' | grep -c '\"ok\": true'", r"^[1-9]"),
     ("screen: the Workspace is open and connected to the OS",
      "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; for i in $(seq 30); do"
-     " r=$(sudo -u linuxai python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/user/1000/linuxai-browser.sock');"
+     " r=$(sudo -u linuxai python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/linuxai-organs/linuxai-browser.sock');"
      "s.sendall(b'{\\\"op\\\":\\\"workspace_status\\\"}\\\\n');print(s.makefile().readline())\" 2>/dev/null);"
      " echo \"$r\" | grep -q '\"connected\":true' && break; sleep 2; done; echo \"$r\"",
      r'"connected":true.*"title":"LinuxAI Workspace"|"title":"LinuxAI Workspace".*"connected":true|no-hyprland'),
     ("screen: the Workspace is the main window; the AI's pages are out of sight",
      "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sleep 6; sudo -u linuxai python3 -c \"import socket,json\n"
-     "s=socket.socket(socket.AF_UNIX);s.connect('/run/user/1000/linuxai-compositor.sock');s.sendall(b'{\\\"op\\\":\\\"windows\\\"}\\\\n')\n"
+     "s=socket.socket(socket.AF_UNIX);s.connect('/run/linuxai-organs/linuxai-compositor.sock');s.sendall(b'{\\\"op\\\":\\\"windows\\\"}\\\\n')\n"
      "w=[x for x in json.loads(s.makefile().readline())['windows'] if str(x['workspace'])!='-98' and x['workspace']==1]\n"
      "ws=[x for x in w if x['title']=='LinuxAI Workspace'][0]\n"
      "others=[x for x in w if x is not ws]\n"
@@ -133,7 +133,7 @@ CHECKS = [
      ". /etc/profile.d/linuxai-blender.sh; ( sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 BLENDER_SYSTEM_SCRIPTS=$BLENDER_SYSTEM_SCRIPTS"
      " setsid timeout 170 blender -b --factory-startup --python-expr \"import linuxai_bridge as b, time; s=b.Server(b.socket_path());"
      " [(s.poll(), time.sleep(0.05)) for _ in range(3000)]\" </dev/null >/dev/null 2>&1 & );"
-     " for i in $(seq 60); do [ -n \"$(find /run/user/1000 -maxdepth 1 -name 'linuxai-blender-*.sock')\" ] && break; sleep 2; done;"
+     " for i in $(seq 60); do [ -n \"$(find /run/linuxai-organs -maxdepth 1 -name 'linuxai-blender-*.sock')\" ] && break; sleep 2; done;"
      " sudo -u linuxai env XDG_RUNTIME_DIR=/run/user/1000 linuxai-core blender do '{\"op\":\"live_view\"}'; pkill -x blender",
      r'"ok":true.*"selected"|"selected".*"ok":true', 300),
     ("a task's decision step waits on the human",
@@ -143,7 +143,7 @@ CHECKS = [
      "linuxai-core ctl '{\"op\":\"ping\"}' | grep -A3 '\"memory\"' | tr -d ' \\n'; echo", r'"memory":\{"healthy":true\}'),
     ("screen: at the end of the run, the Workspace is still the main window",
      "pgrep -x Hyprland >/dev/null || { echo no-hyprland; exit; }; sleep 6; sudo -u linuxai python3 -c \"import socket,json\n"
-     "s=socket.socket(socket.AF_UNIX);s.connect('/run/user/1000/linuxai-compositor.sock');s.sendall(b'{\\\"op\\\":\\\"windows\\\"}\\\\n')\n"
+     "s=socket.socket(socket.AF_UNIX);s.connect('/run/linuxai-organs/linuxai-compositor.sock');s.sendall(b'{\\\"op\\\":\\\"windows\\\"}\\\\n')\n"
      "w=[x for x in json.loads(s.makefile().readline())['windows'] if str(x['workspace'])!='-98' and x['workspace']==1]\n"
      "ws=[x for x in w if x['title']=='LinuxAI Workspace'][0]\n"
      "others=[x for x in w if x is not ws]\n"
@@ -172,6 +172,19 @@ LATE_CHECKS = [
     ("an agreement the AI proposes stays unconfirmed until the human confirms it",
      "python3 /tmp/vmcheck.py agreement /tmp/sink",
      r"proposed by the AI: proposed; AI confirming it: False, still proposed; the human confirms: True, now agreed"),
+    # Independent review C1 (issue #22): the AI's own account, the core checking who connects, the sandbox.
+    ("the AI has its own account: reaches the core, isn't the human, no sudo",
+     "python3 /tmp/aicheck.py account", r"exists True; reaches the core True; not the human's True; no sudo True"),
+    ("the AI's account can't answer for the human, whatever it claims",
+     "python3 /tmp/aicheck.py socket",
+     r"asked first True; still waiting True; no standing permission True; claiming to be the human still asks True"),
+    ("the AI's commands run in the sandbox: no sockets, no network, no privileges, read-only",
+     "python3 /tmp/aicheck.py sandbox",
+     r"works True; core and organ sockets hidden True; no network True; no name lookups True; no new privileges True; read-only True; still sees services True"),
+    ("the shared organs folder: the AI's account reaches the browser", "python3 /tmp/aicheck.py organs",
+     r"setgid True; .*the AI's account reaches the browser True"),
+    ("the background AI runs as its own account and can't read the key file", "python3 /tmp/aicheck.py mind",
+     r"runs as linuxai-ai; connected to the core True; its account can read the key file no", 240),
 ]
 
 
@@ -345,6 +358,7 @@ def main() -> int:
             print(f"  screenshot of the main screen: {shots / 'linuxai-tty1.png'}")
         copy_in(con, VMCHECK / "smtp_sink.py", "/tmp/smtp_sink.py")
         copy_in(con, VMCHECK / "mail_and_agreements.py", "/tmp/vmcheck.py")
+        copy_in(con, VMCHECK / "ai_account.py", "/tmp/aicheck.py")
         for name, cmd, expect, *limit in LATE_CHECKS:
             out = con.run(cmd, limit[0] if limit else 180)
             ok = re.search(expect, out, re.M) is not None

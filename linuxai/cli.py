@@ -402,9 +402,11 @@ def ensure_api_key() -> None:
     path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "linuxai" / "env"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(mode=0o600)
+    path.chmod(0o600)  # touch keeps an existing file's mode (review L4)
     path.write_text(f"ANTHROPIC_API_KEY={key}\n")
     os.environ["ANTHROPIC_API_KEY"] = key
-    subprocess.run(["systemctl", "--user", "restart", "linuxai-mind.service"], capture_output=True)
+    # The background AI runs as its own account (a system service), started once the key exists.
+    subprocess.run(["sudo", "-n", "systemctl", "restart", "linuxai-mind.service"], capture_output=True)
 
 
 USER_UNIT = """\
