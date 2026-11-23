@@ -38,6 +38,11 @@ def status(out: str) -> str:
     return codes[-1] if codes else out.strip()[-60:]
 
 
+def run(con, cmd: str, timeout: float) -> str:
+    """con.run with an empty line before the end marker: once zsh's line editor is off, output can share the prompt's line."""
+    return con.run(cmd + "; echo", timeout)
+
+
 def status_len(out: str) -> int:
     """The number a command printed on the last line of its own."""
     nums = re.findall(r"^\s*(\d+)\s*$", out, re.M)
@@ -47,7 +52,7 @@ def status_len(out: str) -> int:
 def fetch(con, path: str) -> str:
     """A file out of the VM: one base64 line, then a newline, so the end marker always follows on its own line."""
     import base64
-    out = con.run(f"base64 -w0 {path}; echo", 300)
+    out = run(con, f"base64 -w0 {path}", 300)
     b64 = max(re.findall(r"[A-Za-z0-9+/=]{4,}", out), key=len, default="")
     return base64.b64decode(b64).decode()
 
@@ -122,10 +127,10 @@ def main() -> int:
             return 1
         # The key: zsh's line editor redraws a typed line even with echo off, so it is turned off first, and history
         # with it. The key lives only in this shell's environment; anything saved from the console is scrubbed of it.
-        con.run("unset HISTFILE; setopt HIST_IGNORE_SPACE; unsetopt zle", 30)
-        con.run("stty -echo", 30)  # the line editor kept echo itself; without it, the terminal's own echo must be off
+        run(con, "unset HISTFILE; setopt HIST_IGNORE_SPACE; unsetopt zle", 30)
+        run(con, "stty -echo", 30)  # the line editor kept echo itself; without it, the terminal's own echo must be off
         con.send(f" export ANTHROPIC_API_KEY='{key}'\n")
-        seen = con.run("echo ${#ANTHROPIC_API_KEY}", 60)  # everything the console printed since, up to a marker
+        seen = run(con, "echo ${#ANTHROPIC_API_KEY}", 60)  # everything the console printed since, up to a marker
         shown = key in seen or key in con.buf
         print(f"key set in the VM shell: {'yes' if status_len(seen) == len(key) else 'NO'}", flush=True)
         print(f"key shown on the console: {'YES' if shown else 'no'}", flush=True)
@@ -134,11 +139,11 @@ def main() -> int:
         if shown:
             return 1
         if args.check_only:  # the console path without spending: a stand-in file comes back intact
-            con.run("printf '[{\"kind\": \"ai.tell\", \"text\": \"check\"}]' > /tmp/bench/told.json", 30)
+            run(con, "printf '[{\"kind\": \"ai.tell\", \"text\": \"check\"}]' > /tmp/bench/told.json", 30)
             print(f"told.json comes back: {fetch(con, '/tmp/bench/told.json')!r}", flush=True)
-            con.run("unset ANTHROPIC_API_KEY", 30)
+            run(con, "unset ANTHROPIC_API_KEY", 30)
             return 0
-        report = con.run(f"cd /tmp/bench && LINUXAI_CORE_BIN=/usr/local/bin/linuxai-core python3 tests/thinking_bench.py --real"
+        report = run(con, f"cd /tmp/bench && LINUXAI_CORE_BIN=/usr/local/bin/linuxai-core python3 tests/thinking_bench.py --real"
                          f" --strategies {args.strategies} 2>&1 | tail -40", 7200)
         report = report.replace(key, "<key>")
         (out / "report.txt").write_text(report)
@@ -147,7 +152,7 @@ def main() -> int:
         if told:
             (out / "told.json").write_text(fetch(con, told.group(1)).replace(key, "<key>"))
             print(f"messages to the human: {out / 'told.json'}", flush=True)
-        con.run("unset ANTHROPIC_API_KEY", 30)
+        run(con, "unset ANTHROPIC_API_KEY", 30)
     finally:
         qemu.terminate()
     return 0
