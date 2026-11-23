@@ -119,11 +119,10 @@ def main() -> int:
         if code not in ("200", "401") or py_code not in ("200", "401"):
             print(f"the VM can't reach the API; stopping before any spend. The client said:\n{py.strip()}")
             return 1
-        # The key: read by the shell without display (zsh's line editor redraws an export line even with echo off),
-        # kept only in this shell's environment. Everything saved from the console is also scrubbed of it.
-        con.send("read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY\n")
-        time.sleep(1)
-        con.send(key + "\n")
+        # The key: zsh's line editor redraws a typed line even with echo off, so it is turned off first, and history
+        # with it. The key lives only in this shell's environment; anything saved from the console is scrubbed of it.
+        con.run("unset HISTFILE; setopt HIST_IGNORE_SPACE; unsetopt zle", 30)
+        con.send(f" export ANTHROPIC_API_KEY='{key}'\n")
         seen = con.run("echo ${#ANTHROPIC_API_KEY}", 60)  # everything the console printed since, up to a marker
         shown = key in seen or key in con.buf
         print(f"key set in the VM shell: {'yes' if status_len(seen) == len(key) else 'NO'}", flush=True)
