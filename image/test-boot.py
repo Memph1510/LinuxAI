@@ -183,6 +183,8 @@ LATE_CHECKS = [
      r"works True; core and organ sockets hidden True; no network True; no name lookups True; no new privileges True; read-only True; still sees services True"),
     ("the shared organs folder: the AI's account reaches the browser", "python3 /tmp/aicheck.py organs",
      r"setgid True; .*the AI's account reaches the browser True"),
+    ("the core and mail run as their own accounts; approved actions still run as root (through systemd)",
+     "python3 /tmp/aicheck.py core", r"core runs as linuxai-core; mail runs as linuxai-mail; an approved action still runs as root True"),
     ("the background AI runs as its own account and can't read the key file", "python3 /tmp/aicheck.py mind",
      r"runs as linuxai-ai; connected to the core True; its account can read the key file no", 240),
 ]

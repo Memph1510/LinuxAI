@@ -53,13 +53,65 @@ fn cmd(prog: &str, args: &[&str], timeout: Duration) -> Result<(i32, String), St
     Ok((out.status.code().unwrap_or(-1), text.trim().to_string()))
 }
 
-fn ok_cmd(prog: &str, args: &[&str]) -> Result<Value, String> {
-    let (code, out) = cmd(prog, args, Duration::from_secs(60))?;
+// ---- what needs root (independent review M4) -----------------------------------------------
+// On the image the core runs as its own account (linuxai-core), never root. An action that needs root (an approved
+// plan's program, a service, a power setting) runs as a transient systemd unit, which polkit allows that account
+// (/etc/polkit-1/rules.d/50-linuxai-core.rules): one narrow path, each action its own unit in the journal. Run as
+// root (development, tests), the core does it directly.
+
+fn is_root() -> bool {
+    // SAFETY: geteuid has no preconditions.
+    unsafe { libc::geteuid() == 0 }
+}
+
+/// Through systemd only as the core's own account (the image), for which polkit allows it. Anywhere else (a
+/// developer's machine, CI) the core does what it can as whoever runs it, as before.
+fn via_systemd() -> bool {
+    // SAFETY: geteuid has no preconditions.
+    !is_root() && crate::peer::user_id(crate::peer::CORE_USER) == Some(unsafe { libc::geteuid() })
+}
+
+/// The command line that runs `prog args` as root: through systemd-run as the core's own account, else itself.
+fn root_argv(prog: &str, args: &[&str], timeout: Duration) -> (String, Vec<String>) {
+    if !via_systemd() {
+        return (prog.to_string(), args.iter().map(|a| a.to_string()).collect());
+    }
+    let mut v: Vec<String> = ["--uid=0", "--pipe", "--wait", "--quiet", "--collect", "--service-type=exec"].iter().map(|s| s.to_string()).collect();
+    v.push(format!("--property=RuntimeMaxSec={}", timeout.as_secs().max(1)));
+    v.push("--".into());
+    v.push(prog.to_string());
+    v.extend(args.iter().map(|a| a.to_string()));
+    ("systemd-run".to_string(), v)
+}
+
+/// `cmd`, as root.
+fn root_cmd(prog: &str, args: &[&str], timeout: Duration) -> Result<(i32, String), String> {
+    if !which(prog) {
+        return Err(format!("{prog} is not installed"));
+    }
+    let (p, a) = root_argv(prog, args, timeout);
+    let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+    cmd(&p, &refs, timeout + Duration::from_secs(5))
+}
+
+/// `ok_cmd`, as root.
+fn root_ok(prog: &str, args: &[&str]) -> Result<Value, String> {
+    let (code, out) = root_cmd(prog, args, Duration::from_secs(60))?;
     if code == 0 {
         Ok(json!({"ok": true, "output": out}))
     } else {
         Err(format!("{prog} exited {code}: {out}"))
     }
+}
+
+/// Write a system file (sysfs, /proc/sys) as root.
+fn root_write(path: &Path, value: &str) -> Result<(), String> {
+    if !via_systemd() {
+        return fs::write(path, value).map_err(|e| format!("{}: {e}", path.display()));
+    }
+    let p = path.display().to_string();
+    let (code, out) = root_cmd("sh", &["-c", "printf '%s' \"$1\" > \"$2\"", "sh", value, &p], Duration::from_secs(30))?;
+    if code == 0 { Ok(()) } else { Err(format!("{p}: {out}")) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -260,7 +312,7 @@ fn write_governor(gov: &str) -> Result<Value, String> {
         for e in dir.flatten() {
             let p = e.path().join("cpufreq/scaling_governor");
             if p.exists() {
-                fs::write(&p, gov).map_err(|e| format!("{}: {e}", p.display()))?;
+                root_write(&p, gov)?;
                 n += 1;
             }
         }
@@ -286,7 +338,7 @@ fn scx_policy(policy: &str) -> Option<(&'static str, &'static str)> {
 fn set(what: &str, to: &str) -> Result<Value, String> {
     match what {
         "power.profile" => {
-            let via_daemon = if which("powerprofilesctl") { ok_cmd("powerprofilesctl", &["set", to]) } else {
+            let via_daemon = if which("powerprofilesctl") { root_ok("powerprofilesctl", &["set", to]) } else {
                 Err("power-profiles-daemon is not installed".into())
             };
             via_daemon.or_else(|e| {
@@ -305,12 +357,12 @@ fn set(what: &str, to: &str) -> Result<Value, String> {
                 return Err("this kernel has no sched_ext support".into());
             }
             if to == "off" || to == "default" {
-                return ok_cmd("scxctl", &["stop"]);
+                return root_ok("scxctl", &["stop"]);
             }
             let (sched, mode) = scx_policy(to).ok_or_else(|| format!("unknown cpu policy '{to}'"))?;
             let running = read("/sys/kernel/sched_ext/state").map(|s| s == "enabled").unwrap_or(false);
             let verb = if running { "switch" } else { "start" };
-            ok_cmd("scxctl", &[verb, "--sched", sched.trim_start_matches("scx_"), "--mode", mode])
+            root_ok("scxctl", &[verb, "--sched", sched.trim_start_matches("scx_"), "--mode", mode])
         }
         "screen.brightness" => {
             let pct: f64 = to.trim_end_matches('%').parse().map_err(|_| "brightness must be 0-100")?;
@@ -320,7 +372,7 @@ fn set(what: &str, to: &str) -> Result<Value, String> {
                 let max: f64 = read(e.path().join("max_brightness")).and_then(|m| m.parse().ok()).unwrap_or(0.0);
                 if max > 0.0 {
                     let v = ((pct.clamp(1.0, 100.0) / 100.0) * max).round() as u64;
-                    fs::write(e.path().join("brightness"), v.to_string()).map_err(|e| e.to_string())?;
+                    root_write(&e.path().join("brightness"), &v.to_string())?;
                     n += 1;
                 }
             }
@@ -332,7 +384,7 @@ fn set(what: &str, to: &str) -> Result<Value, String> {
                 return Err("invalid sysctl key".into());
             }
             let path = format!("/proc/sys/{}", key.replace('.', "/"));
-            fs::write(&path, to).map_err(|e| format!("{path}: {e}"))?;
+            root_write(Path::new(&path), to)?;
             Ok(json!({"ok": true, "sysctl": key, "value": to}))
         }
         other => Err(format!("don't know how to set '{other}'")),
@@ -362,9 +414,9 @@ impl Organs for LinuxHost {
                     return Err("limit needs at least one of cpu_weight, memory_high, memory_max, io_weight".into());
                 }
                 let refs: Vec<&str> = props.iter().map(String::as_str).collect();
-                ok_cmd("systemctl", &refs)
+                root_ok("systemctl", &refs)
             }
-            "start" | "stop" | "restart" => ok_cmd("systemctl", &[verb, &s(args, "unit")]),
+            "start" | "stop" | "restart" => root_ok("systemctl", &[verb, &s(args, "unit")]),
             "run" => {
                 let program = s(args, "program");
                 let list: Vec<String> = args
@@ -374,8 +426,25 @@ impl Organs for LinuxHost {
                     .unwrap_or_default();
                 let refs: Vec<&str> = list.iter().map(String::as_str).collect();
                 let timeout = args.get("timeout").and_then(Value::as_u64).unwrap_or(300);
-                let (code, output) = cmd(&program, &refs, Duration::from_secs(timeout))?;
+                let (code, output) = root_cmd(&program, &refs, Duration::from_secs(timeout))?;
                 Ok(json!({"code": code, "output": output}))
+            }
+            // A browser action the human approved (or trusts on this site): the core carries it out, naming the site,
+            // and the browser checks the page is still that site (review H4).
+            "browse" => {
+                let mut req = args.clone();
+                let op = s(args, "op");
+                req["approved_origin"] = json!(s(args, "site"));
+                if let Some(m) = req.as_object_mut() {
+                    m.remove("site");
+                    m.remove("op");
+                }
+                let c = crate::client::Client::new(crate::browser::default_socket());
+                let r = c.request(&op, req).map_err(|e| format!("the browser isn't reachable: {e}"))?;
+                if r["ok"] == false {
+                    return Err(r["error"].as_str().unwrap_or("the browser refused").to_string());
+                }
+                Ok(r)
             }
             other => Err(format!("the host has no verb '{other}'")),
         }

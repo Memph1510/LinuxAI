@@ -57,6 +57,14 @@ pub const VERBS: &[VerbSpec] = &[
               an invoice) are checked against it by the core: a match is filed without you, only a difference is \
               brought up. reference: what the documents will cite (\"HL-3100\"); terms: {rate_cents: 320000, ...} \
               using the same field names as email claims." },
+    VerbSpec { name: "browse", organ: "browser",
+        args: &[("site", true), ("op", true), ("tab", false), ("url", false), ("ref", false), ("target", false), ("selector", false),
+                ("text", false), ("enter", false), ("key", false)],
+        effect: Effect::External, target: "site", explain: "{op} on {site}",
+        doc: "Act on a web page where it reaches the site: click, type or a key in your own tab, or open an address that \
+              carries data (a query or fragment) while working on outside information. The first time per site needs \
+              the human's OK; if they say always, the browser tool acts on that site directly after. site: the page's \
+              origin (\"https://dat.com\"); op: click | type | key | go | open; the rest as in the browser tool." },
     VerbSpec { name: "send_email", organ: "mail",
         args: &[("to", true), ("subject", true), ("text", true), ("in_reply_to", false)],
         effect: Effect::External, target: "to", explain: "email {to}: \"{subject}\"\n{text}",

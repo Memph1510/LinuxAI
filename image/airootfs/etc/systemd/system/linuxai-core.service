@@ -1,21 +1,32 @@
 [Unit]
 Description=LinuxAI core (the system's mind-body interface)
 Documentation=https://github.com/memph1510/linuxai
-After=local-fs.target dbus.service
+After=local-fs.target dbus.service polkit.service
 Wants=dbus.service
 
 [Service]
 Type=notify
-# Sending email (the send_email verb) happens in the core: LINUXAI_SMTP_* and LINUXAI_MAIL_FROM in mail.env.
+# Its own account, never root (independent review M4). What needs root goes through systemd-run, which polkit allows
+# this account only (/etc/polkit-1/rules.d/50-linuxai-core.rules).
+User=linuxai-core
+Group=linuxai-core
+SupplementaryGroups=linuxai systemd-journal
+# Sending email (the send_email verb) happens in the core: LINUXAI_SMTP_* and LINUXAI_MAIL_FROM in mail.env (systemd
+# reads it; the file stays root's).
 EnvironmentFile=-/etc/linuxai/mail.env
 # The AI's own account (linuxai-ai) can reach the socket but never speaks for the human: the core checks who connects.
 Environment=LINUXAI_AI_USER=linuxai-ai
-ExecStart=/usr/local/bin/linuxai-core daemon --group linuxai --socket-group linuxai-core --playbooks /home/linuxai/playbooks --prompts /home/linuxai/prompts
+ExecStart=/usr/local/bin/linuxai-core daemon --socket /run/linuxai/core.sock --db /var/lib/linuxai/core.db --group linuxai --socket-group linuxai-core --playbooks /home/linuxai/playbooks --prompts /home/linuxai/prompts
 Restart=always
 RestartSec=2
 RuntimeDirectory=linuxai
 RuntimeDirectoryMode=0755
 StateDirectory=linuxai
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/linuxai/playbooks
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

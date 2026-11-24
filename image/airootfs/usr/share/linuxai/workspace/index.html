@@ -274,7 +274,7 @@ const words = {
   "task.done": (d) => `Done: ${d.title || ""}`, "task.failed": (d) => `Blocked: ${d.title || ""}`, "ai.tell": (d) => d.text || "",
   "browser.handoff": (d) => `Handed you a page: ${d.note || d.title || ""}`, "browser.showing": (d) => `Showing you: ${d.note || d.url || ""}`,
   "voice.heard": (d) => `You said: ${d.text || ""}`, "power.unplugged": () => "Unplugged: saving power", "power.plugged": () => "Plugged in",
-  "service.failed": (d) => `A service failed: ${d.unit || ""}`, "you.answered": (d) => `You answered: ${d.text || ""}`, "models.changed": (d) => `Model for ${d.job}: ${d.now}`,
+  "service.failed": (d) => `A service failed: ${d.unit || ""}`, "mail.failed": (d) => `An email couldn't be read: ${d.error || ""}`, "you.answered": (d) => `You answered: ${d.text || ""}`, "models.changed": (d) => `Model for ${d.job}: ${d.now}`,
 };
 function addActivity(ev) {
   const f = words[ev.kind];

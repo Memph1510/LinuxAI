@@ -74,6 +74,79 @@ pub fn as_ai(req: &mut Value) {
 /// as its service recreates that).
 pub const ORGANS_DIR: &str = "/run/linuxai-organs";
 
+/// The mail organ's account (its own on the image, `linuxai-mail`), besides root and the core's own account.
+pub const MAIL_USER: &str = "linuxai-mail";
+
+/// May a connection from this account emit an event of this kind (independent review L1)? Waiting plans take events
+/// as real, so a message from outside (`message.*`, `mail.*`, `invite.*`) may come only from the mail organ (root,
+/// the core's own account, or `linuxai-mail`), and the AI's own account emits none at all: what it does goes through
+/// plans, which the core records itself. In-process callers (no peer) are the core's own.
+pub fn may_emit(kind: &str, peer: Option<u32>, ai: &[u32]) -> Result<(), String> {
+    let Some(uid) = peer else { return Ok(()) };
+    if ai.contains(&uid) {
+        return Err(format!("the AI's own account can't emit '{kind}' events: act through a plan"));
+    }
+    let outside = ["message.", "mail.", "invite."].iter().any(|p| kind.starts_with(p));
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    if outside && uid != 0 && uid != me && user_id(MAIL_USER) != Some(uid) {
+        return Err(format!("only the mail organ reports '{kind}' events"));
+    }
+    Ok(())
+}
+
+/// The core's own organs: in-process callers (no peer), root, the core's own account, and the mail organ. Only they
+/// write system records and provenance (independent review M3, H3 at the socket).
+pub fn is_organ(peer: Option<u32>) -> bool {
+    let Some(uid) = peer else { return true };
+    // SAFETY: geteuid has no preconditions.
+    uid == 0 || uid == unsafe { libc::geteuid() } || user_id(MAIL_USER) == Some(uid)
+}
+
+/// Records only the core and its organs write (`store` refuses them too), and the fields that say where a record came
+/// from or what the human said. Everyone else (the AI, from any account) stores ordinary records and outside facts.
+pub const SYSTEM_TYPES: &[&str] = &["agreement", "habit", "job", "thread", "message", "sent_message", "system", "correspondent"];
+pub const PROVENANCE: &[&str] = &["source", "trust", "superseded_by", "corrects", "confirmed_by_human", "reliability", "checks", "by"];
+
+/// May this requester write these fields on a record of this type (`existing`: the record being changed, if any)?
+/// A new outside fact may be labelled as outside (the AI recording where something came from), never as verified,
+/// the human's, or the core's own; once stored, an outside fact is kept as it came (a verdict goes through
+/// `fact_verdict`).
+pub fn may_write(peer: Option<u32>, typ: &str, fields: &Value, existing: Option<&Value>) -> Result<(), String> {
+    if is_organ(peer) {
+        return Ok(());
+    }
+    if SYSTEM_TYPES.contains(&typ) {
+        return Err(format!("'{typ}' records are kept by the core itself"));
+    }
+    if existing.map(|o| o["trust"] == "outside").unwrap_or(false) {
+        return Err("an outside fact is kept as it came; record whether it proved accurate with fact_verdict".into());
+    }
+    let new = existing.is_none();
+    let Some(f) = fields.as_object() else { return Ok(()) };
+    for (k, v) in f {
+        let outside_label = new && match k.as_str() {
+            "trust" => v == "outside",
+            "source" => v.get("authenticated").map(|a| a.is_null() || a == false).unwrap_or(true) && v.get("by") != Some(&json!("human")),
+            "by" => v == "ai",
+            _ => false,
+        };
+        if PROVENANCE.contains(&k.as_str()) && !outside_label {
+            return Err(format!("'{k}' says where a record came from or what the human said: only the core records it"));
+        }
+    }
+    Ok(())
+}
+
+/// The core's own account: root, or `linuxai-core` when it runs as its own user. Only the core may carry out a browser
+/// action the human approved (independent review H4).
+pub const CORE_USER: &str = "linuxai-core";
+
+pub fn is_core(peer: Option<u32>) -> bool {
+    let Some(uid) = peer else { return true };
+    uid == 0 || user_id(CORE_USER) == Some(uid)
+}
+
 /// Where an organ listens: its environment variable, else [`ORGANS_DIR`] when it exists, else the user's runtime
 /// directory.
 pub fn organ_socket(env: &str, file: &str) -> PathBuf {

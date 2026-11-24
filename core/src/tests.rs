@@ -637,7 +637,9 @@ fn resolving_a_blocker_needs_an_assessment_too() {
 fn old_history_becomes_daily_digests_and_nothing_in_progress_is_lost() {
     let (c, _) = core();
     let day = 86400.0;
-    let old = crate::memory::now() - 40.0 * day;
+    // Noon (UTC) of a day 40 days back: digests are per UTC day, and "now minus 40 days" near midnight spread these
+    // over two days (CI failed at 23:56).
+    let old = ((crate::memory::now() - 40.0 * day) / day).floor() * day + day / 2.0;
     for i in 0..50 { c.mem.add_event_at(old + i as f64, "power.unplugged", &json!({})); }
     c.mem.add_event_at(old + 100.0, "ai.tell", &json!({"text": "Battery is low"}));
     c.mem.add_event_at(old + 200.0, "task.failed", &json!({"title": "Book hotel", "error": "sold out"}));
@@ -1560,4 +1562,129 @@ fn the_ais_own_account_can_never_answer_for_the_human() {
     let r = talk(false, json!({"op": "answer", "source": "human", "plan_id": id, "text": "yes, always"}));
     assert_eq!(r["result"]["status"], "done", "{r}");
     assert_eq!(calls(&fake), vec!["set power.profile power-saver"]);
+}
+
+#[test]
+fn after_a_restart_a_different_step_never_inherits_an_earlier_result() {
+    // Review M5 (issue #22): the journal's key is the step's position. If a plan takes another path after a restart,
+    // that position can hold a different action, which must not reuse the recorded result ("sent", say).
+    let (c, fake) = core();
+    let plan = json!({"plan": "p", "assess": {"confidence": 0.95, "consequences": ["changes a machine setting"],
+                      "outcomes": [{"if": "it misbehaves", "then": "set it back"}]},
+                      "steps": [{"do": "set", "what": "power.profile", "to": "power-saver"}]});
+    // A first run shows which journal key the step gets.
+    let id = c.submit(&plan, "ai")["result"]["plan_id"].as_str().unwrap().to_string();
+    c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "yes"}));
+    let pos = (0..50).find(|n| c.mem.journal_status(&format!("{id}:{n}")).is_some()).expect("the step was journaled");
+    assert_eq!(calls(&fake).len(), 1);
+
+    // The same plan again, paused for approval; meanwhile its journal shows another action done at that position.
+    let id2 = c.submit(&plan, "ai")["result"]["plan_id"].as_str().unwrap().to_string();
+    let other = json!({"to": "dana@example.com", "subject": "x"});
+    let j = c.mem.journal_begin(&id2, &format!("{id2}:{pos}"), "send_email", &other, "send an email");
+    c.mem.journal_end(j, "done", "{\"id\": \"m1\"}");
+    let r = c.handle(&json!({"op": "answer", "source": "human", "plan_id": id2, "text": "yes"}));
+    assert_eq!(r["result"]["status"], "failed", "it stops instead of taking the email's result: {r}");
+    assert!(r["result"]["error"].as_str().unwrap_or("").contains("now 'set' where 'send_email' was recorded"), "{r}");
+    assert_eq!(calls(&fake).len(), 1, "and doesn't act blind");
+}
+
+#[test]
+fn the_ai_never_overwrites_what_the_human_agreed() {
+    // Review L2 (issue #22): an AI `agree` on a reference the human had agreed replaced their terms (100 became 999).
+    let (c, _fake) = core();
+    let agree = |terms: Value| json!({"plan": "agree", "steps": [{"do": "agree", "reference": "HL-7", "terms": terms}]});
+    assert_eq!(c.submit(&agree(json!({"rate_cents": 100})), "human")["result"]["status"], "done");
+    let r = c.submit(&json!({"plan": "agree", "assess": {"confidence": 0.9, "consequences": ["a record"], "outcomes": ["noted"]},
+                             "steps": [{"do": "agree", "reference": "HL-7", "terms": {"rate_cents": 999}}]}), "ai");
+    assert_eq!(r["result"]["status"], "done", "{r}");
+    let a = c.mem.object(&crate::agreements::id("HL-7")).unwrap();
+    assert_eq!(a["terms"]["rate_cents"], 100, "the human's terms stand: {a}");
+    assert_eq!(a["status"], "agreed");
+    assert_eq!(a["proposed_change"]["terms"]["rate_cents"], 999, "the AI's reading is kept beside it: {a}");
+    // The human confirming the change adopts it and clears the proposal.
+    let r = c.handle(&json!({"op": "agreement_confirm", "source": "human", "reference": "HL-7", "terms": {"rate_cents": 999}}));
+    assert_eq!(r["ok"], true, "{r}");
+    let a = c.mem.object(&crate::agreements::id("HL-7")).unwrap();
+    assert_eq!(a["terms"]["rate_cents"], 999);
+    assert!(a["proposed_change"].is_null(), "{a}");
+}
+
+#[test]
+fn only_the_mail_organ_reports_mail_and_the_ai_reports_nothing() {
+    // Review L1 (issue #22): any socket client could emit `message.received` (or `job.finished`), which waiting plans
+    // take as real. Now the kernel says who connected.
+    use std::io::{BufRead, BufReader, Write};
+    let (c, _fake) = core();
+    // SAFETY: getuid has no preconditions.
+    let me = unsafe { libc::getuid() };
+    let talk = |ai: bool, req: Value| -> Value {
+        let (server, mut client) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (c2, ai_uids) = (c.clone(), if ai { vec![me] } else { vec![] });
+        let t = std::thread::spawn(move || crate::serve_with(c2, server, &ai_uids));
+        writeln!(client, "{req}").unwrap();
+        let mut line = String::new();
+        BufReader::new(client.try_clone().unwrap()).read_line(&mut line).unwrap();
+        drop(client);
+        t.join().unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+    let msg = json!({"op": "event", "kind": "message.received", "data": {"from": "dana@hollis-logistics.com"}});
+    assert_eq!(talk(true, msg.clone())["ok"], false, "the AI's account can't fake an email");
+    assert_eq!(talk(true, json!({"op": "event", "kind": "job.finished", "data": {}}))["ok"], false, "or a finished job");
+    // Claiming to be someone else in the request changes nothing: the kernel's answer replaces it.
+    let mut forged = msg.clone();
+    forged["_peer_uid"] = json!(0);
+    forged["_peer_ai"] = json!(false);
+    assert_eq!(talk(true, forged)["ok"], false);
+    // The core's own account (here: this test) is the mail organ in development; other events still flow.
+    assert_eq!(talk(false, msg)["ok"], true);
+    assert_eq!(talk(false, json!({"op": "event", "kind": "voice.heard", "data": {"text": "hi"}}))["ok"], true);
+}
+
+#[test]
+fn only_the_core_writes_system_records_and_where_a_fact_came_from() {
+    // Review M3 (and H3 at the socket): a requester other than the core's organs could store an "agreement", mark a
+    // fact "sender verified", rate a source as the human, or change a fact's verdict and the sender's track record.
+    let (c, _fake) = core();
+    let someone = json!(424242); // a peer that isn't the core's own (the AI, or a session)
+    let put = |typ: &str, fields: Value| c.handle(&json!({"op": "object_put", "type": typ, "fields": fields, "_peer_uid": someone}));
+    assert_eq!(put("agreement", json!({"reference": "HL-1", "status": "agreed", "confirmed_by_human": true}))["ok"], false);
+    assert_eq!(put("correspondent", json!({"address": "dana@hollis-logistics.com", "confirmed": 99}))["ok"], false);
+    assert_eq!(put("load", json!({"rate_cents": 900000, "source": {"from": "dana@hollis-logistics.com", "authenticated": true}}))["ok"], false,
+               "no forged 'sender verified'");
+    assert_eq!(put("source", json!({"domain": "dat.com", "credibility": "trusted", "by": "human"}))["ok"], false, "not as the human");
+    // What the AI may store: ordinary records, and outside facts labelled as outside.
+    assert_eq!(put("source", json!({"domain": "dat.com", "credibility": "trusted", "by": "ai", "relayed_from_human": true}))["ok"], true);
+    let fact = put("lane_rate", json!({"rate": 2.4, "trust": "outside", "source": {"kind": "web", "from": "dat.com", "authenticated": null}}));
+    assert_eq!(fact["ok"], true, "{fact}");
+    let fid = fact["id"].as_str().unwrap().to_string();
+    // An outside fact stays as it came; a verdict needs evidence that exists, and counts once.
+    let patch = c.handle(&json!({"op": "object_patch", "id": fid, "fields": {"rate": 9.9}, "_peer_uid": someone}));
+    assert_eq!(patch["ok"], false, "{patch}");
+    assert_eq!(c.handle(&json!({"op": "fact_verdict", "id": fid, "verdict": "confirmed"}))["ok"], false, "evidence required");
+    let ev = put("note", json!({"text": "rate con matched"}))["id"].as_str().unwrap().to_string();
+    assert_eq!(c.handle(&json!({"op": "fact_verdict", "id": fid, "verdict": "confirmed", "evidence": ev}))["ok"], true);
+    assert_eq!(c.handle(&json!({"op": "fact_verdict", "id": fid, "verdict": "contradicted", "evidence": ev}))["ok"], false, "once");
+    assert_eq!(c.handle(&json!({"op": "fact_verdict", "id": ev, "verdict": "confirmed", "evidence": ev}))["ok"], false, "only outside facts");
+    // The core's own organs (the mail organ, in-process) still write what they must.
+    assert_eq!(c.handle(&json!({"op": "object_put", "type": "message", "fields": {"trust": "outside", "source": {"authenticated": true}}}))["ok"], true);
+}
+
+#[test]
+fn acting_on_a_web_page_goes_through_the_humans_trust_per_site() {
+    // Review H4 (issue #22): the browser was an outside channel with no effect level. Now `browse` is an External verb:
+    // the first time per site the human is asked; "always" covers that site, not others.
+    let (c, fake) = core();
+    let assess = json!({"confidence": 0.9, "consequences": ["a search is sent to dat.com"], "outcomes": [{"if": "it fails", "then": "tell the human"}]});
+    let plan = |site: &str| json!({"plan": "search loads", "assess": assess, "steps": [{"do": "browse", "site": site, "op": "click", "tab": "T1", "target": "Search"}]});
+    let r = c.submit(&plan("https://dat.com"), "ai");
+    assert_eq!(r["result"]["status"], "waiting:answer", "{r}");
+    assert!(r["result"]["wait"]["question"].as_str().unwrap().contains("click on https://dat.com"), "{r}");
+    let id = r["result"]["plan_id"].as_str().unwrap().to_string();
+    assert_eq!(c.handle(&json!({"op": "answer", "source": "human", "plan_id": id, "text": "yes, always"}))["result"]["status"], "done");
+    assert!(calls(&fake).iter().any(|x| x.starts_with("browse")), "{:?}", calls(&fake));
+    assert!(c.mem.mandates().contains(&("browse".to_string(), "https://dat.com".to_string())), "the site is trusted now");
+    assert_eq!(c.submit(&plan("https://dat.com"), "ai")["result"]["status"], "done");
+    assert_eq!(c.submit(&plan("https://evil.example"), "ai")["result"]["status"], "waiting:answer", "another site still asks");
 }

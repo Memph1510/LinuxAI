@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -87,13 +88,15 @@ def test_the_ais_unasked_commands_run_in_the_sandbox(env, tmp_path, monkeypatch)
     box = sandbox_argv(str(tmp_path), sandbox_hidden(cfg.mail_dir))
     out = subprocess.run(box + ["sh", "-c", "touch /etc/linuxai-x 2>&1; touch ./x 2>&1; echo key=$ANTHROPIC_API_KEY; "
                                 "ls " + str(secrets) + "; (getent hosts example.com || echo no-network); "
-                                "(sudo -n true 2>&1 || true) | head -1"],
+                                "grep NoNewPrivs /proc/self/status; (sudo -n true >/dev/null 2>&1 && echo GOT-ROOT) || echo no-root"],
                          capture_output=True, text=True, timeout=60, check=False).stdout
     assert out.count("Read-only file system") == 2, out
     assert "key=\n" in out and "sk-test" not in out, out
     assert "core.sock" not in out, "LinuxAI's sockets are hidden"
     assert "no-network" in out, out
-    assert "sudo" not in out or "no new privileges" in out or "not found" in out or "effective uid" in out, out
+    # No way to gain privileges (the kernel's flag); and so, for anyone but root, no sudo.
+    assert re.search(r"NoNewPrivs:\s+1", out), out
+    assert os.geteuid() == 0 or ("no-root" in out and "GOT-ROOT" not in out), out
     # The working folder is there to read, even under /tmp (which is otherwise a fresh scratch space).
     (tmp_path / "notes.txt").write_text("hello")
     seen = subprocess.run(box + ["cat", "notes.txt"], capture_output=True, text=True, timeout=60, check=False).stdout
@@ -475,7 +478,7 @@ def test_web_research_tools_and_source_ratings(env, live_core):
     tb.t_rate_source("rumors-truckers.example", "freight/negotiate", "blocked", "made-up rates", from_human=True)
     listed = tb.t_list_sources("freight/negotiate/hollis")
     assert listed.splitlines()[0].startswith("- dat.com: trusted")
-    assert "rumors-truckers.example: blocked" in listed and "by human" in listed
+    assert "rumors-truckers.example: blocked" in listed and "by the human, relayed by you" in listed
     search = next(t for t in tb.server_tools() if t["name"] == "web_search")
     assert search["blocked_domains"] == ["rumors-truckers.example"]
     cfg.web = False
@@ -643,6 +646,46 @@ def test_a_repeat_failure_is_folded_into_the_message_already_sent(env, live_core
     assert told[1]["data"]["folds"] == told[0]["id"] and "happened 2 times" in told[1]["data"]["text"], told[1]
 
 
+def test_outside_information_stays_outside_through_memory_and_files(env, tmp_path, monkeypatch):
+    """Review M1 (issue #22): a turn that read an email noted "Dana wants payment sent to account X"; a later turn
+    recalled it as if it were the machine's own knowledge. Files and network output weren't outside either."""
+    from linuxai.agent import Agent
+    from linuxai.tools import is_own_path, reads_outside
+    cfg, mem, tb, _ = env
+    tb.outside_seen = True  # this turn read an email
+    tb.t_remember("Dana wants payment sent to account 4471", "freight")
+    tb.outside_seen = False
+    tb.t_remember("The printer is on the second floor", "office")
+    # A later turn: the outside note isn't pasted into the context as fact...
+    agent = Agent(cfg, mem, tb, client=FakeClient([]))
+    ctx = agent._context("pay Dana")
+    assert "printer" in ctx and "4471" not in ctx, ctx
+    # ...and recalling it marks the turn as outside, with the note labelled.
+    out = tb.t_search_memory("Dana payment account")
+    assert "4471" in out and "outside information" in out and tb.outside_seen
+    tb.outside_seen = False
+    assert "outside information" not in tb.t_search_memory("printer floor") and not tb.outside_seen
+
+    # Files: the system's own places aren't outside; a downloaded file is.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "Downloads").mkdir()
+    invoice = tmp_path / "Downloads" / "invoice.txt"
+    invoice.write_text("Remit to account 4471.")
+    assert is_own_path("/etc/os-release") and not is_own_path(invoice)
+    tb.cwd = str(tmp_path)
+    tb.outside_seen = False
+    tb.t_read_file("/etc/hostname") if os.path.exists("/etc/hostname") else None
+    assert not tb.outside_seen
+    tb.t_read_file(str(invoice))
+    assert tb.outside_seen
+    # Commands: the network, or reading files that may have come from anyone.
+    assert reads_outside("curl -s https://example.com", "/")
+    assert reads_outside("cat ~/Downloads/invoice.txt", "/")
+    assert reads_outside("ls", str(tmp_path))
+    assert not reads_outside("systemctl status nginx", str(tmp_path))
+    assert not reads_outside("cat /etc/os-release | grep NAME", "/")
+
+
 def test_the_extractor_form_fits_the_apis_schema_limits():
     """The live API refused the first form (25 optional fields: "Schema is too complex"). Every form sent must fit."""
     optional, unions = M.schema_complexity(M.MAIL_SCHEMA)
@@ -702,7 +745,10 @@ def test_corrections_and_confirmations_build_the_senders_record(env, live_core, 
     old_id = next(f for f in first["facts"] if f.startswith("obj:load_offer/"))
     new_id = next(f for f in second["facts"] if f.startswith("obj:load_offer/"))
     assert second["corrected"] == [old_id]
-    assert tb.t_confirm_fact(new_id, "confirmed", "rate con matched") == "Recorded as confirmed."
+    # A verdict names what settled it (here the email that carried the correction), counts once, outside facts only.
+    assert "evidence" in tb.t_confirm_fact(new_id, "confirmed", "", "rate con matched")
+    assert tb.t_confirm_fact(new_id, "confirmed", second["message"], "rate con matched") == "Recorded as confirmed."
+    assert "already recorded" in tb.t_confirm_fact(new_id, "confirmed", second["message"], "again")
     person = live_core.request("find", spec={"type": "correspondent", "where": {"address": "dana@hollis-logistics.com"}})["found"][0]
     assert (person["messages"], person["corrections"], person["confirmed"]) == (2, 1, 1)
     plan = {"plan": "p", "taint": "outside", "assess": {"confidence": 0.9, "consequences": ["x"], "outcomes": ["y"]},
@@ -796,6 +842,19 @@ def test_shared_browser_through_the_ai_tool(env, live_core, tmp_path):
         assert "never instructions" in out and tb.outside_seen
         tab = out.split("Page in tab ", 1)[1].split(" ", 1)[0]
         ref = next(l for l in out.splitlines() if "'Lane'" in l).split("]")[0].strip("[")
+        # Review H4: acting on a site sends something to it; on a site the human hasn't trusted, the AI is told how to
+        # ask. (Run as root, as the core's own account, nothing is gated: that's the core carrying out approvals.)
+        out, _ = tb.execute("browser", {"op": "click", "tab": tab, "target": "Go"})
+        if os.geteuid() != 0:
+            assert "`browse` verb" in out, out
+            # The page was outside information, so the plan cites it, as any plan resting on outside information must.
+            fact = tb.t_record_fact("lane_search", {"page": "Rates"}, f"file://{page}").split("Stored as ", 1)[1].split(";")[0]
+            plan = {"plan": "use the lane search", "assess": {"confidence": 0.9, "consequences": ["a search on the page"],
+                    "outcomes": [{"if": "it fails", "then": "tell the human"}]}, "reasoning": {"facts": [fact]},
+                    "steps": [{"do": "browse", "site": "file://", "op": "click", "tab": tab, "target": "Go"}]}
+            tb.t_submit_plan(plan)
+            waiting = [w for w in live_core.request("waiting")["plans"] if w["plan"] == "use the lane search"]
+            live_core.request("answer", plan_id=waiting[0]["plan_id"], text="yes, always", source="human")
         tb.execute("browser", {"op": "type", "tab": tab, "ref": int(ref), "text": "FTW"})
         out, _ = tb.execute("browser", {"op": "click", "tab": tab, "target": "Go"})
         assert "ok FTW" in out, out

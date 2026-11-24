@@ -59,7 +59,8 @@ pub fn confirm(mem: &Memory, reference: &str, terms: Option<&Value>) -> Value {
     if mem.object(&aid).is_none() {
         return json!({"ok": false, "error": format!("no agreement on {reference}")});
     }
-    let mut patch = json!({"confirmed_by_human": true, "status": "agreed", "confirmed": crate::memory::now()});
+    // The human's word settles it, including any change the AI proposed meanwhile.
+    let mut patch = json!({"confirmed_by_human": true, "status": "agreed", "confirmed": crate::memory::now(), "proposed_change": null});
     if let Some(t) = terms.filter(|t| t.is_object()) {
         patch["terms"] = t.clone();
     }

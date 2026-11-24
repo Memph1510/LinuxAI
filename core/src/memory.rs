@@ -168,14 +168,14 @@ impl Memory {
         ));
     }
 
-    /// Status of a previously started step with this idempotency key, if any.
-    pub fn journal_status(&self, key: &str) -> Option<(String, String)> {
+    /// A previously started step with this idempotency key, if any: (status, result, verb, args as written).
+    pub fn journal_status(&self, key: &str) -> Option<(String, String, String, String)> {
         let db = self.c();
         db
             .query_row(
-                "SELECT status, result FROM journal WHERE step_key=?1 ORDER BY id DESC LIMIT 1",
+                "SELECT status, result, verb, args FROM journal WHERE step_key=?1 ORDER BY id DESC LIMIT 1",
                 params![key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default(), r.get(2)?, r.get(3)?)),
             )
             .optional()
             .ok()

@@ -72,7 +72,7 @@ wasn't checked, and honest uncertainty. Measured claims, not adjectives. They th
 | `core/src/tests.rs` (+ tests inside modules) | 106 Rust tests |
 | `linuxai/` | Python, model-facing: `agent.py` (session + prompts + context), `mind.py` (behind-the-scenes AI and the thinking ladder), `tools.py` (every tool the model sees), `cli.py` (`cortex`), `mail.py` (extractor schema) |
 | `tests/` | `test_core.py` (58 Python tests), `thinking_bench.py`, `soak.py`, `uat.py`, `token_profile.py` |
-| `image/` | The Arch ISO: `build.sh` (docker), `build-in-arch.sh`, `airootfs/` (services, Workspace page, Quickshell layer), `test-boot.py` (42 checks in QEMU) |
+| `image/` | The Arch ISO: `build.sh` (docker), `build-in-arch.sh`, `airootfs/` (services, Workspace page, Quickshell layer), `test-boot.py` (43 checks in QEMU) |
 | `docs/` | Design and status docs (list in §9) |
 | `library/` | Starter prompt library, image-backend adapters |
 
@@ -160,10 +160,12 @@ human saw; only the core records that the human answered; plans can't write prov
 recorded outside facts can be cited; the Workspace bridge serves only the Workspace page. **C1, fixed 2026-11-23**
 (the owner asked for it before the laptop install): the AI has its own account (`linuxai-ai`, no sudo, no session),
 the core and organs check who connects (`SO_PEERCRED`), and every command the AI runs unasked runs in a bubblewrap
-sandbox (CHECKLIST, "Independent review"). **Still deferred by the owner's decision (capability first)**: approvals
-on browser actions, the core and mail running as root, and the review's other medium and low items (H4, M1–M5,
-L1–L3). Revisit if a real problem shows up, or when connecting anything that can commit money or the business
-without a phone call (e.g. a load board that books loads directly).
+sandbox (CHECKLIST, "Independent review"). **The rest of the review, fixed the same day** (H4, M1–M5, L1–L3): browser
+actions that reach a site go through the human's trust per site (`browse` verb), outside information keeps its
+label through memory and files, mail isn't "verified" without our server's name, only the core writes system
+records and provenance, the core and mail never run as root (systemd does what needs root, for the core's account
+only), the journal never hands one step another's result, the AI's account emits no events, the human's agreements
+aren't overwritten, and a failed email is reported. Every review item is now fixed.
 
 **Unproven** (the biggest risks, in order):
 1. ~~The real Claude model has never run.~~ **Ran 2026-11-22** (issue #14): the request shape was accepted as
@@ -238,7 +240,7 @@ agreement stays unconfirmed until the human confirms it. Synthetic only; no live
   `python3 tests/soak.py --minutes 5` · `python3 tests/thinking_bench.py [--days 3] [--only negotiation|board]`.
 - **Boot test** (≈1 h): start Docker if needed (`dockerd &`, then wait for `docker info`), build from a clean
   worktree of the exact commit: `EXTRA_CA=/root/.ccr/ca-bundle.crt ./image/build.sh`, then
-  `SERIAL_LOG=<file> python3 -u image/test-boot.py out/linuxai-*.iso` → expect 42 ✓ and `PASS`.
+  `SERIAL_LOG=<file> python3 -u image/test-boot.py out/linuxai-*.iso` → expect 43 ✓ and `PASS`.
 - **Gotchas learned the hard way**:
   - The AI's sandbox (bubblewrap) gives it a fresh, empty `/tmp`: a read-only mount doesn't stop connecting to a
     socket, and the real `/tmp` holds some (the X display). Hidden paths must come last in its arguments, or a
@@ -287,9 +289,10 @@ agreement stays unconfirmed until the human confirms it. Synthetic only; no live
 | `LINUXAI_HABIT_AFTER` / `LINUXAI_HABIT_HOLD` | `1` / `900` | fixes that held before replay / seconds a situation must stay away |
 | `LINUXAI_FOLD_HOURS` | `24` | a repeat of a situation within this window folds into the earlier message |
 | `LINUXAI_AI_USER` | `linuxai-ai` | the AI's own account(s): a connection from one never speaks for the human |
+| `LINUXAI_AUTHSERV_ID` | none | your mail server's name in its Authentication-Results headers; required by `linuxai-mail` (else no sender is verified) |
 | `LINUXAI_REHEARSAL` | off | `1`: record actions, perform none (incl. sending email) |
 | `LINUXAI_RULE_MAX_PER_MINUTE` | `10` | the rule loop guard |
-| `LINUXAI_IMAP_*`, `LINUXAI_AUTHSERV_ID` | none | incoming mail (`/etc/linuxai/mail.env`) |
+| `LINUXAI_IMAP_*` | none | incoming mail (`/etc/linuxai/mail.env`) |
 | `LINUXAI_SMTP_URL/_USER/_PASSWORD`, `LINUXAI_MAIL_FROM` | none | outgoing mail (same file; the core reads it) |
 | `LINUXAI_KEEP_*` | see CHECKLIST | history retention |
 | `LINUXAI_EXTRACT_MODEL` | same as thinking | which model reads email; `local:qwen3-4b` reads it on this machine (MAIL.md) |

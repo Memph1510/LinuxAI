@@ -1306,6 +1306,22 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
             // (the AI's reading of an email, say) it's proposed: documents are still compared with it, but a match
             // isn't filed on its strength until the human confirms it.
             let by_human = exec.source == "human" || exec.human_answered;
+            // An agreement the human made is never overwritten by the AI's reading (independent review L2): different
+            // terms are kept beside it as a proposed change, for the human to confirm.
+            if !by_human {
+                if let Some(prev) = ctx.mem.object(&id).filter(|o| o["status"] == "agreed" && o["confirmed_by_human"] == true) {
+                    let terms = a.get("terms").cloned().unwrap_or(json!({}));
+                    if prev["terms"] == terms {
+                        return Ok(json!(id));
+                    }
+                    ctx.mem.patch_object(&id, &json!({"proposed_change": {"terms": terms, "by_plan": exec.name, "at": now()}}));
+                    ctx.bus.emit(ctx.mem, "agreement.change_proposed", json!({"id": id, "reference": reference, "terms": terms}));
+                    ctx.bus.emit(ctx.mem, "ai.tell", json!({"plan": exec.name, "plan_id": exec.id, "text": format!(
+                        "On {reference} you agreed to {}. I read it now as {}. I've kept yours; the change counts only if you confirm it.",
+                        human("terms", &prev["terms"]), human("terms", &terms))}));
+                    return Ok(json!(id));
+                }
+            }
             let status = if by_human { "agreed" } else { "proposed" };
             let fields = json!({"reference": reference, "terms": a.get("terms").cloned().unwrap_or(json!({})), "with": a.get("with"),
                 "about": a.get("about"), "thread": a.get("thread"), "status": status, "confirmed_by_human": by_human,
@@ -1347,9 +1363,15 @@ fn do_verb(exec: &mut Exec, m: &Map<String, Value>, ctx: &Ctx) -> Result<Value, 
         }
         _ => {}
     }
-    // Idempotency: a step that already completed (e.g. before a crash) is not repeated.
+    // Idempotency: a step that already completed (e.g. before a crash) is not repeated. The key is the step's position,
+    // so it must still be the same action: if the plan took another path after a restart, position N may now be a
+    // different verb or arguments, and the earlier result isn't this one's (independent review M5). Then stop.
     let key = format!("{}:{}", exec.id, exec.counter);
-    if let Some((status, result)) = ctx.mem.journal_status(&key) {
+    if let Some((status, result, was_verb, was_args)) = ctx.mem.journal_status(&key) {
+        if was_verb != verb || serde_json::from_str::<Value>(&was_args).ok().as_ref() != Some(&args) {
+            return Err(format!("after a restart, this step is now '{verb}' where '{was_verb}' was recorded ({status}); \
+                                not reusing that result or acting blind, so the plan stops here"));
+        }
         match status.as_str() {
             "done" => return Ok(serde_json::from_str(&result).unwrap_or(Value::Null)),
             "started" if spec.effect >= Effect::External => {

@@ -92,14 +92,20 @@ class Memory:
         self.db = sqlite3.connect(config.db_path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        # Where a note or solution came from (independent review M1): "outside" when the turn that wrote it had seen
+        # outside information. Older databases get the column.
+        for table in ("notes", "solutions"):
+            cols = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            if "trust" not in cols:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN trust TEXT NOT NULL DEFAULT ''")
         self.db.commit()
 
     # --- solutions -------------------------------------------------------
     def add_solution(self, title: str, problem: str, solution: str,
-                     commands: list[str] | None = None, tags: str = "") -> int:
+                     commands: list[str] | None = None, tags: str = "", outside: bool = False) -> int:
         cur = self.db.execute(
-            "INSERT INTO solutions(title, problem, solution, commands, tags, created) VALUES (?,?,?,?,?,?)",
-            (title, problem, solution, json.dumps(commands or []), tags, time.time()),
+            "INSERT INTO solutions(title, problem, solution, commands, tags, created, trust) VALUES (?,?,?,?,?,?,?)",
+            (title, problem, solution, json.dumps(commands or []), tags, time.time(), "outside" if outside else ""),
         )
         self.db.commit()
         sid = int(cur.lastrowid)
@@ -134,9 +140,9 @@ class Memory:
         return self.db.execute("SELECT * FROM solutions ORDER BY id DESC").fetchall()
 
     # --- notes -----------------------------------------------------------
-    def add_note(self, fact: str, category: str = "general") -> int:
-        cur = self.db.execute("INSERT INTO notes(category, fact, created) VALUES (?,?,?)",
-                              (category, fact, time.time()))
+    def add_note(self, fact: str, category: str = "general", outside: bool = False) -> int:
+        cur = self.db.execute("INSERT INTO notes(category, fact, created, trust) VALUES (?,?,?,?)",
+                              (category, fact, time.time(), "outside" if outside else ""))
         self.db.commit()
         self._write_notes_md()
         return int(cur.lastrowid)
