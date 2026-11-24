@@ -53,8 +53,8 @@ pub(crate) fn default_socket() -> PathBuf {
     if let Ok(p) = std::env::var("LINUXAI_CORE_SOCKET") {
         return p.into();
     }
-    // The system core (on the OS) listens here; anyone in the linuxai group may use it.
-    if is_root() || std::path::Path::new("/run/linuxai/core.sock").exists() {
+    // The system core (on the OS) listens here; anyone in its socket group may use it.
+    if system_core() || std::path::Path::new("/run/linuxai/core.sock").exists() {
         "/run/linuxai/core.sock".into()
     } else {
         let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
@@ -66,12 +66,18 @@ fn default_db() -> PathBuf {
     if let Ok(p) = std::env::var("LINUXAI_CORE_DB") {
         return p.into();
     }
-    if is_root() {
+    if system_core() {
         "/var/lib/linuxai/core.db".into()
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         PathBuf::from(home).join(".local/share/linuxai/core.db")
     }
+}
+
+/// The system's core: run as root, or as its own account (`linuxai-core`, the image since review M4).
+fn system_core() -> bool {
+    // SAFETY: geteuid has no preconditions.
+    is_root() || peer::user_id(peer::CORE_USER) == Some(unsafe { libc::geteuid() })
 }
 
 fn is_root() -> bool {
